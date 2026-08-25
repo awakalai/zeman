@@ -645,6 +645,117 @@ try {
     });
   });
 
+  // ── 14 ──────────────────────────────────────────────────────────────────────
+  //
+  // The indirect trade, in the owner's words: ZEMAN buys currency from a seller, and the money
+  // does not come to ZEMAN — it goes straight to a partner, who holds it. The seller pays through
+  // WeChat or Alipay and uploads the screenshot. What the reviewer needs out of that pile is four
+  // things per receipt — who was paid, when, through which wallet, and whether a fee was taken —
+  // organised rather than listed. Then the batch goes to the administrator, who makes it a
+  // transaction and records which partner is holding the money. And those details must reach that
+  // partner, because they are the one who has to agree the amount.
+  //
+  // This is the newest part of the system and the part the owner called the most important, and
+  // until now nothing walked it end to end. The pieces each had checks; the sentence above had
+  // none.
+  scenario(14, "an indirect batch is organised, becomes a transaction, and reaches the partner holding the money", () => {
+    step("the seller sends four receipts across both wallets, two of them fee-free", () => {
+      be("customer");
+      batch("f14");
+      receipt("f14-r1", "f14", { amount: 1000, fee: 10, net: 990, receiver: "ئەحمەد", ref: "F14R1", date: "2026-08-02" });
+      receipt("f14-r2", "f14", { amount: 2000, fee: 0,  net: 2000, receiver: "ئەحمەد", ref: "F14R2", date: "2026-08-02" });
+      receipt("f14-r3", "f14", { amount: 1500, fee: 15, net: 1485, receiver: "سارا",   ref: "F14R3", date: "2026-08-03" });
+      receipt("f14-r4", "f14", { amount:  500, fee: 0,  net:  500, receiver: "سارا",   ref: "F14R4", date: "2026-08-03" });
+      be("admin");
+      // The wallet is on the receipt itself, as the uploader's screenshot states it. Both
+      // spellings of each are used on purpose: the Chinese names are what the screenshots
+      // actually say, and a reviewer must not see them as two more wallets.
+      psql(`update public.receipts set platform='wechat'  where id in ('f14-r1','f14-r2')`);
+      psql(`update public.receipts set platform='支付宝'   where id = 'f14-r3'`);
+      psql(`update public.receipts set platform='Alipay'  where id = 'f14-r4'`);
+      eq(psql("select count(*) from public.receipts where batch_id='f14'").trim(), 4, "receipts stored");
+    });
+
+    step("the batch becomes a purchase, and the money is placed with a partner", () => {
+      psql(`insert into public.txs(id,type,cur_id,amount,rate,against_id,total,status,date)
+            values ('f14-tx','buy','cny',5000,0.138889,'usd',694.44,'completed',now())`);
+      psql(`insert into public.receipt_batch_transactions(batch_id,transaction_id,partner_id,
+              item_count,amount,currency,created_by)
+            values ('f14','f14-tx','par',4,5000,'CNY','adm')`);
+      eq(psql("select count(*) from public.receipt_batch_transactions where batch_id='f14'").trim(),
+         1, "the batch is linked to one transaction");
+    });
+
+    step("the detail names the partner holding it, and says the trade was indirect", () => {
+      const d = j("public.sarraf_partner_batch_detail('f14')");
+      eq(d.partner_id, "par", "the partner holding the money");
+      eq(d.is_indirect, true, "an indirect trade");
+      eq(d.rows.length, 4, "one row per receipt");
+    });
+
+    step("the two spellings of each wallet are one wallet", () => {
+      const d = j("public.sarraf_partner_batch_detail('f14')");
+      const platforms = d.by_platform.map((p) => p.platform).sort();
+      eq(platforms.join(","), "alipay,wechat", "the wallets, normalised");
+      const wechat = d.by_platform.find((p) => p.platform === "wechat");
+      const alipay = d.by_platform.find((p) => p.platform === "alipay");
+      eq(wechat.n, 2, "receipts through WeChat");
+      eq(alipay.n, 2, "receipts through Alipay — 支付宝 and Alipay are the same wallet");
+    });
+
+    step("the receivers are grouped, not merely listed", () => {
+      const d = j("public.sarraf_partner_batch_detail('f14')");
+      const byName = Object.fromEntries(d.by_receiver.map((r) => [r.receiver, r]));
+      eq(byName["ئەحمەد"].n, 2, "receipts to ئەحمەد");
+      eq(byName["سارا"].n, 2, "receipts to سارا");
+    });
+
+    step("with fee and without fee are counted apart, and both totals are stated", () => {
+      const d = j("public.sarraf_partner_batch_detail('f14')");
+      const cny = d.totals.find((t) => t.currency === "CNY");
+      if (!cny) throw new Error(`no CNY total in ${JSON.stringify(d.totals)}`);
+      eq(cny.n, 4, "receipts counted");
+      eq(cny.with_fee_count, 2, "receipts that carried a fee");
+      // A zero fee is an answer, not a silence. Two of these say the fee was nothing, and that
+      // is a different statement from a receipt where nobody looked.
+      eq(cny.without_fee_count, 2, "receipts that carried none");
+      // §A asks for the figure both ways: what was sent, and what arrived after the fee.
+      eq(Number(cny.with_fee), 5000, "the total before fees");
+      eq(Number(cny.without_fee), 4975, "the total after fees");
+      eq(Number(cny.fee), 25, "the fees themselves");
+    });
+
+    step("the partner holding the money can read the detail", () => {
+      be("partner");
+      const d = j("public.sarraf_partner_batch_detail('f14')");
+      eq(d.rows.length, 4, "the partner sees the receipts behind what they are holding");
+      be("admin");
+    });
+
+    step("somebody else's partner cannot", () => {
+      be("other");
+      if (!refused("select public.sarraf_partner_batch_detail('f14')")) {
+        throw new Error("a stranger read the detail of a batch they hold nothing for");
+      }
+      be("admin");
+    });
+
+    step("the partner's holdings list the batch, its receipts and its amount", () => {
+      const h = j("public.sarraf_partner_holdings('par')");
+      eq(h.partner_id, "par", "the partner asked about");
+      const held = (h.batches || []).find((b) => b.batch_id === "f14");
+      if (!held) {
+        throw new Error(`the batch is not among what the partner is holding: `
+          + JSON.stringify(h.batches).slice(0, 200));
+      }
+      eq(held.item_count, 4, "receipts behind what is held");
+      eq(Number(held.amount), 5000, "the amount held");
+      const cny = (h.by_currency || []).find((c) => c.currency === "CNY");
+      if (!cny) throw new Error("the holding is not stated in the currency it is held in");
+      eq(Number(cny.amount), 5000, "held in CNY");
+    });
+  });
+
   // ── the report ──────────────────────────────────────────────────────────────
   const failed = scenarios.filter((s) => !s.ok);
   for (const s of scenarios) {
