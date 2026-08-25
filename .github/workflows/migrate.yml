@@ -87,9 +87,31 @@ jobs:
           ref=$(printf '%s' "$host" | sed -nE 's#^db\.([a-z0-9]+)\.supabase\.co$#\1#p')
           [ -n "$ref" ] || ref=$(printf '%s' "$user" | sed -nE 's#^postgres\.([a-z0-9]+)$#\1#p')
 
+          # What was read out of the secret, so a mistyped secret is visible rather than inferred.
+          # The password is never among these: it has been masked above and is not printed here.
+          echo "host=$host  port=$port  user=$user  project=${ref:-<not found>}  password=${#pass} characters"
+
+          # The reason a connection was refused is the whole answer, and the first version of this
+          # threw it away into /dev/null. A pooler that has never heard of this project says
+          # 'Tenant or user not found'; the one that hosts it says 'password authentication failed'
+          # — the same failure to a caller who only checks the exit code, and completely different
+          # facts. So every rejection is kept, and the distinct ones are printed at the end.
+          errfile=$(mktemp)
+          : > "$errfile"
+
           try() {
-            PGPASSWORD="$pass" PGCONNECT_TIMEOUT=8 \
-              psql -h "$1" -p "$2" -U "$3" -d postgres -tAc "select 1" >/dev/null 2>&1
+            local out
+            out=$(PGPASSWORD="$pass" PGCONNECT_TIMEOUT=8 \
+              psql -h "$1" -p "$2" -U "$3" -d postgres -tAc "select 1" 2>&1 >/dev/null)
+            local rc=$?
+            if [ $rc -ne 0 ]; then
+              # One line, without the host in it, so that seventeen identical refusals collapse
+              # into one line saying seventeen regions never heard of this project.
+              printf '%s\n' "$out" \
+                | sed -e 's/^psql: error: //' -e "s/${1}/<host>/g" \
+                | head -2 >> "$errfile"
+            fi
+            return $rc
           }
 
           save() {
@@ -116,15 +138,28 @@ jobs:
                         ca-central-1 sa-east-1; do
             for prefix in aws-0 aws-1; do
               h="${prefix}-${region}.pooler.supabase.com"
+              # The region that hosts the project is the one that answers with anything other than
+              # 'Tenant or user not found' — including a wrong password, which is worth saying out
+              # loud rather than hiding behind another sixteen refusals.
               if try "$h" 5432 "postgres.${ref}"; then
                 echo "Connected through ${prefix}-${region}."
                 save "$h" 5432 "postgres.${ref}"
                 exit 0
               fi
+              if tail -2 "$errfile" | grep -qi 'password authentication failed'; then
+                echo "::error::${prefix}-${region} is the right region — this project is there — but the password was refused. Reset it in Supabase → Project Settings → Database → Reset database password, then update the SUPABASE_DB_URL secret with the new one."
+                exit 1
+              fi
             done
           done
 
-          echo "::error::No route opened. Every pooler region refused the connection, which means the password is wrong rather than the address — reset it in Supabase → Project Settings → Database, then update the SUPABASE_DB_URL secret."
+          echo "### Why every attempt failed" >> "$GITHUB_STEP_SUMMARY"
+          sort "$errfile" | uniq -c | sort -rn | head -12 | while read -r n line; do
+            echo "- ${n}× ${line}" >> "$GITHUB_STEP_SUMMARY"
+            echo "  ${n}× ${line}"
+          done
+
+          echo "::error::No route opened. The reasons are in the step summary — 'Tenant or user not found' everywhere means the project reference ${ref} is not one Supabase recognises, so the connection string in the secret belongs to a different project or was copied incompletely."
           exit 1
 
       - name: Check the connection
