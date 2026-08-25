@@ -1475,17 +1475,33 @@ try {
   mustFail("a negative ratio is refused by the database",
     "update public.currencies set rate = -1 where id='cny'");
 
-  check("saving a ratio records it, and history keeps the old one", () => {
+  // A rate belongs to the business that set it, not to the installation. This check used to read
+  // currencies.rate straight back, which was true of the old command and was the bug: the number
+  // it asserted on was shared, so one business saving a ratio moved every other business's
+  // valuation with it. What is asserted now is what the caller sees, and that the installation's
+  // own figure — the default a new business inherits — was left alone.
+  check("saving a ratio records it for the business that saved it", () => {
+    const installationBefore = psql("select rate from public.currencies where id='cny'").trim();
+
     psql(`select public.sarraf_save_rates(
             '[{"id":"cny","rate":7.05}]'::jsonb,
             '[{"id":"rh-1","cur_id":"cny","rate":7.05,"changed_by":"u-a"}]'::jsonb,
             'cmd-rate-1','ratio change','1 USD = 7.05 CNY')`);
-    const now = psql("select rate from public.currencies where id='cny'").trim();
-    if (Number(now) !== 7.05) throw new Error(`currency not updated: ${now}`);
+
+    const mine = psql("select rate from public.sarraf_currencies() where id='cny'").trim();
+    if (Number(mine) !== 7.05) throw new Error(`the saver does not see their own rate: ${mine}`);
+
+    const installationAfter = psql("select rate from public.currencies where id='cny'").trim();
+    if (installationAfter !== installationBefore) {
+      throw new Error(`one business's save moved the installation default from `
+        + `${installationBefore} to ${installationAfter}`);
+    }
+
     const hist = psql("select rate from public.rate_history where id='rh-1'").trim();
     if (Number(hist) !== 7.05) throw new Error("history did not record the ratio");
-    // Restore, so the checks above stay reproducible in any order.
-    psql("update public.currencies set rate = 7.2 where id='cny'");
+
+    // Restore, so the checks around this one stay reproducible in any order.
+    psql("delete from public.tenant_rates where cur_id='cny'");
   });
 
   mustFail("a zero ratio is refused by the command too",
