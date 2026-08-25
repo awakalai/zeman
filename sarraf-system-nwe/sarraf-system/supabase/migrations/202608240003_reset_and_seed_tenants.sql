@@ -74,6 +74,13 @@ begin
   --
   -- `truncate ... cascade` follows the foreign keys itself, so nothing here has to know which
   -- child comes before which parent — the ordering that a hand-written list also gets wrong.
+  --
+  -- tenant_rates used to be excluded here and truncated by name on the line below, and that one
+  -- named table was enough to break this on the live database: it is created two migrations
+  -- later, so in file order it does not exist yet. Every test missed it, because a test database
+  -- is empty and empty takes the early return above — the clearing path had never once run in
+  -- the order a real database runs it. Discovery has no such problem: a table that does not exist
+  -- is simply not found, and one added next month is found without anybody remembering to add it.
   declare
     v_tables text;
   begin
@@ -85,12 +92,11 @@ begin
        and t.table_type = 'BASE TABLE'
      where c.table_schema = 'public'
        and c.column_name = 'tenant_id'
-       and c.table_name not in ('app_users', 'tenant_rates');
+       and c.table_name <> 'app_users';
 
     if v_tables is not null then
       execute format('truncate table %s cascade', v_tables);
     end if;
-    truncate table public.tenant_rates cascade;
   end;
 
   -- Accounts are not deleted, and the reason is worth writing down, because an earlier draft of
