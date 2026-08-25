@@ -57,12 +57,24 @@ begin
 end
 $member_auth$;
 
--- Ownership can only be given to a role the current user belongs to.
+-- Ownership can only be given to a role the current user can SET ROLE to, and that is not the
+-- same as being able to administer it. PostgreSQL 16 separated the two: creating a role grants
+-- the creator ADMIN OPTION but not SET, and pg_has_role(..., 'member') answers true on the
+-- strength of the admin option alone. So the guarded version of this skipped the grant it needed
+-- and the first ALTER FUNCTION stopped with `must be able to SET ROLE "sarraf_definer"` — on the
+-- live database only, because the postgres role in this container is a superuser and a superuser
+-- can SET ROLE to anything without being granted it.
+--
+-- Granted unconditionally, therefore, and with SET spelled out. The clause is PostgreSQL 16 and
+-- later; on an older server the statement is a syntax error rather than a wrong outcome, and the
+-- plain grant it falls back to carries SET on those versions anyway.
 do $member$
 begin
-  if not pg_has_role(current_user, 'sarraf_definer', 'member') then
+  begin
+    execute format('grant sarraf_definer to %I with set true', current_user);
+  exception when syntax_error or feature_not_supported then
     execute format('grant sarraf_definer to %I', current_user);
-  end if;
+  end;
 end
 $member$;
 
