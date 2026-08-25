@@ -1,17 +1,22 @@
--- Can one business read another's rows?
+-- Can one buyer's staff reach another buyer's rows, and what would close it?
 --
--- Read-only. The workflow that runs this opens the transaction with `set transaction read only`,
--- so the server refuses any write here rather than trusting that none was written.
+-- Read-only. The workflow opens the transaction with `set transaction read only`, so the server
+-- refuses any write here rather than trusting that none was written.
 --
--- Row-level security is what keeps two businesses apart, and SECURITY DEFINER functions do not
--- obey it. That is the whole point of them — they read tables the caller has no rights on — and
--- it is also the one hole through which one buyer's data can reach another's screen. A function
--- that takes an id and returns what it finds, without asking whose business that id belongs to,
--- is a leak whatever the policies say.
+-- The last run found 128 SECURITY DEFINER functions that read business tables without mentioning
+-- a tenant. sarraf_partner_batch_detail is typical: it looks a batch up by id and returns it, and
+-- the id is supplied by the caller. Row-level security would have stopped that, and SECURITY
+-- DEFINER is precisely what steps around row-level security.
 --
--- So this asks the installed functions themselves, not the repository: which of them are
--- SECURITY DEFINER, which read a table that belongs to a business, and which of those never
--- mention a tenant at all.
+-- Editing 128 function bodies by hand is not a fix, it is 128 chances to get one wrong. There is
+-- a single switch that would close all of them at once — `alter table ... force row level
+-- security` makes policies apply to the table's owner too, and therefore inside a SECURITY
+-- DEFINER function owned by that role.
+--
+-- It works only if the owning role cannot bypass row-level security outright. A superuser, or any
+-- role with BYPASSRLS, ignores policies no matter what FORCE says. So that is the question this
+-- asks, and the answer decides whether the fix is one line per table or a change of ownership
+-- first.
 
 \pset format aligned
 \pset border 2
@@ -19,126 +24,67 @@
 \pset pager off
 
 \echo ''
-\echo '════════ 1. SECURITY DEFINER functions that read business data without checking whose ════════'
+\echo '════════ 1. Who owns the functions, and can that role ignore row-level security? ════════'
 \echo ''
 
-with tenanted as (
-  select table_name from information_schema.columns
-   where table_schema = 'public' and column_name = 'tenant_id'
-),
-fns as (
-  select p.proname,
-         pg_get_function_identity_arguments(p.oid) as args,
-         p.prosecdef,
-         pg_get_functiondef(p.oid) as body
-    from pg_proc p
-    join pg_namespace n on n.oid = p.pronamespace
-   where n.nspname = 'public'
-     and p.proname like 'sarraf%'
-     and p.prokind = 'f'
-)
-select f.proname,
-       (select count(*) from tenanted t
-         where f.body ~ ('\m' || t.table_name || '\M')) as business_tables_read,
-       case
-         when f.body ~* 'sarraf_tenant_visible|sarraf_sees_all_tenants' then 'checks tenant'
-         when f.body ~* 'tenant_id' then 'mentions tenant_id'
-         else 'NO TENANT CHECK'
-       end as verdict
-  from fns f
- where f.prosecdef
-   and exists (select 1 from tenanted t where f.body ~ ('\m' || t.table_name || '\M'))
- order by verdict desc, f.proname;
+select r.rolname,
+       r.rolsuper   as is_superuser,
+       r.rolbypassrls as bypasses_rls,
+       count(p.oid) as sarraf_functions_owned
+  from pg_proc p
+  join pg_namespace n on n.oid = p.pronamespace and n.nspname = 'public'
+  join pg_roles r on r.oid = p.proowner
+ where p.proname like 'sarraf%' and p.prosecdef
+ group by r.rolname, r.rolsuper, r.rolbypassrls
+ order by 4 desc;
 
 \echo ''
-\echo '════════ 2. Business tables missing row-level security, or missing the tenant policy ════════'
+\echo '════════ 2. The role the application actually connects as ════════'
 \echo ''
 
-select c.relname as table_name,
-       case when c.relrowsecurity then 'on' else 'RLS IS OFF' end as rls,
-       coalesce((select string_agg(pol.polname, ', ' order by pol.polname)
-                   from pg_policy pol
-                  where pol.polrelid = c.oid and pol.polpermissive = false), 'NO RESTRICTIVE POLICY')
-         as restrictive_policies
+select rolname, rolsuper as is_superuser, rolbypassrls as bypasses_rls
+  from pg_roles
+ where rolname in ('authenticated', 'anon', 'service_role', 'postgres', 'supabase_admin',
+                   'authenticator', current_user)
+ order by rolname;
+
+\echo ''
+\echo '════════ 3. Which business tables already force RLS on their owner ════════'
+\echo ''
+
+select count(*) filter (where c.relrowsecurity) as rls_enabled,
+       count(*) filter (where c.relforcerowsecurity) as rls_forced,
+       count(*) as business_tables
   from pg_class c
   join pg_namespace n on n.oid = c.relnamespace and n.nspname = 'public'
  where c.relkind = 'r'
    and exists (select 1 from information_schema.columns col
                 where col.table_schema = 'public' and col.table_name = c.relname
-                  and col.column_name = 'tenant_id')
-   and (not c.relrowsecurity
-        or not exists (select 1 from pg_policy pol
-                        where pol.polrelid = c.oid and pol.polpermissive = false))
- order by c.relname;
+                  and col.column_name = 'tenant_id');
 
 \echo ''
-\echo '════════ 3. Rows that belong to no business ════════'
+\echo '════════ 4. The two tables with no restrictive policy — what do they have instead? ════════'
 \echo ''
 
-do $orphans$
-declare t record; n bigint; total bigint := 0;
-begin
-  for t in select table_name from information_schema.columns
-            where table_schema = 'public' and column_name = 'tenant_id'
-              and table_name <> 'app_users'
-            order by table_name
-  loop
-    execute format('select count(*) from public.%I where tenant_id is null', t.table_name) into n;
-    if n > 0 then
-      raise notice 'orphaned: % — % row(s) belong to no business', t.table_name, n;
-      total := total + n;
-    end if;
-  end loop;
-  if total = 0 then
-    raise notice 'no orphaned rows: every row of business data belongs to a business';
-  end if;
-end
-$orphans$;
+select c.relname as table_name,
+       pol.polname,
+       case pol.polpermissive when true then 'permissive (ORed — widens)' else 'restrictive (ANDed)' end as kind,
+       pg_get_expr(pol.polqual, pol.polrelid) as using_expression
+  from pg_class c
+  join pg_namespace n on n.oid = c.relnamespace and n.nspname = 'public'
+  left join pg_policy pol on pol.polrelid = c.oid
+ where c.relname in ('app_users', 'tenant_rates')
+ order by c.relname, pol.polname;
 
 \echo ''
-\echo '════════ 4. Accounts, businesses, and how much data is in there ════════'
+\echo '════════ 5. A sample of what a SECURITY DEFINER function does with a caller-supplied id ════════'
 \echo ''
 
-do $report$
-declare
-  t text; n bigint; r record; has_level boolean;
-begin
-  if to_regclass('public.app_users') is null then
-    raise notice 'app_users — table does not exist';
-  else
-    select exists (select 1 from information_schema.columns
-                    where table_schema = 'public' and table_name = 'app_users'
-                      and column_name = 'admin_level') into has_level;
-    for r in execute format(
-      'select %s as rank, coalesce(tenant_id, ''<no business>'') as biz,
-              count(*) as n, count(*) filter (where deleted) as gone
-         from public.app_users group by 1, 2 order by 1, 2',
-      case when has_level then 'coalesce(admin_level, role)' else 'role' end)
-    loop
-      raise notice 'account: % — % — % (% deactivated)', r.rank, r.biz, r.n, r.gone;
-    end loop;
-  end if;
-
-  if to_regclass('public.tenants') is null then
-    raise notice 'tenants — table does not exist, so multi-tenancy has not been applied';
-  else
-    n := 0;
-    for r in select id, name, active from public.tenants order by id loop
-      raise notice 'business: % — % — %', r.id, r.name,
-        case when r.active then 'active' else 'suspended' end;
-      n := n + 1;
-    end loop;
-    if n = 0 then raise notice 'businesses: none — the reset and seed has not run'; end if;
-  end if;
-
-  foreach t in array array['receipts','receipt_batches','txs','ledger','system_event_log',
-                           'journal_entries','debts','vouchers','partners','currencies'] loop
-    if to_regclass('public.' || t) is null then
-      raise notice 'rows in % — table does not exist', t;
-    else
-      execute format('select count(*) from public.%I', t) into n;
-      raise notice 'rows in %: %', t, n;
-    end if;
-  end loop;
-end
-$report$;
+select p.proname, pg_get_function_identity_arguments(p.oid) as args
+  from pg_proc p
+  join pg_namespace n on n.oid = p.pronamespace and n.nspname = 'public'
+ where p.prosecdef
+   and p.proname in ('sarraf_partner_batch_detail', 'sarraf_void_transaction',
+                     'sarraf_batch_summary', 'sarraf_receipt_both_sides',
+                     'sarraf_settle_debt', 'sarraf_write_off_debt')
+ order by p.proname;
