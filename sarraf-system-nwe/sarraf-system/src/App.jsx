@@ -1728,6 +1728,19 @@ export default function App() {
   const [accessEpoch, setAccessEpoch] = useState(0);
   const [accessError, setAccessError] = useState("");
   const [page, setPage] = useState("dash");
+  // The manager does not land on an exchange's dashboard. They maintain this installation and
+  // sell it; they are not a party to anybody's trades, and the first screen they see should be
+  // the businesses running on it rather than a set of totals belonging to one of them.
+  //
+  // Only from the default, and only once: a manager who has navigated somewhere stays there.
+  const managerLandingDone = useRef(false);
+  useEffect(() => {
+    if (managerLandingDone.current) return;
+    if (profile?.role === "admin" && profile?.adminLevel === "manager" && page === "dash") {
+      managerLandingDone.current = true;
+      setPage("manager-console");
+    }
+  }, [profile?.role, profile?.adminLevel, page]);
   const [viewAs, setViewAs] = useState(null);
   const [detailId, setDetailId] = useState(null);
   const [editTx, setEditTx] = useState(null);
@@ -3311,7 +3324,37 @@ export default function App() {
     ? navSectionLabel("سەرنج", "Attention", "تنبيه")
     : navSectionLabel("بەستراو", "Online", "متصل");
 
-  const NAV_GROUPS = [
+  // The manager's own navigation, which is not the exchange's with two extra entries on it.
+  //
+  // They asked for this in as many words — their dashboard and every section of it different —
+  // and the reason is not presentation. A manager belongs to no business. "New transaction",
+  // "Transactions", "Reports" and the dashboard totals all mean *one business's*, and there is
+  // no such business for the person who sold the software. Offering them is offering an action
+  // with no correct answer.
+  //
+  // What a manager does have is the installation: which businesses run on it, who is in them,
+  // whether the schema is sound, and the default rates a new business inherits until it sets
+  // its own. Every id here already exists; what changes is that these are the whole of their
+  // world rather than a drawer inside somebody else's.
+  const MANAGER_NAV_GROUPS = [
+    {
+      label: navSectionLabel("دامەزراندن", "Installation", "التثبيت"),
+      items: [
+        ["manager-console", navSectionLabel("سەرخێڵەکان", "Businesses", "الأعمال"), Building2],
+        ["manager-center", navSectionLabel("ئەکاونت و پلەکان", "Accounts & ranks", "الحسابات والرتب"), KeyRound],
+      ],
+    },
+    {
+      label: navSectionLabel("تەندروستی", "Health", "الصحة"),
+      items: [
+        ["integrity", navSectionLabel("یەکپارچەیی", "Integrity", "السلامة"), ShieldAlert],
+        ["audit", navSectionLabel("تۆماری گۆڕانکاری", "Change log", "سجل التغييرات"), History],
+        ["backup", navSectionLabel("پاراستنی داتا", "Data protection", "حماية البيانات"), Database],
+      ],
+    },
+  ];
+
+  const NAV_GROUPS = isSystemManager ? MANAGER_NAV_GROUPS : [
     {
       label: navSectionLabel("سەرەکی", "Overview", "نظرة عامة"),
       items: [
