@@ -130,6 +130,47 @@ try {
       "reading the other business's batch summary");
   });
 
+  // ── the rate, which is not a row anybody would notice going wrong ───────────
+  //
+  // Every total on a screen is computed from it. One business setting the number the other
+  // values its inventory by is not a leak of data, it is a leak into every figure they read.
+  check("one business setting its rate does not move the other's", () => {
+    const before = asUser(B_UID,
+      "select rate::text from public.sarraf_currencies() where id = 'cny'");
+
+    asUser(A_UID, `select public.sarraf_save_rates(
+      '[{"id":"cny","rate":"9.99","buy_rate":"9.90","sell_rate":"10.10"}]'::jsonb,
+      '[]'::jsonb, 'iso-rate-1', 'save_rates', 'isolation check')`);
+
+    const mine = asUser(A_UID,
+      "select rate::text from public.sarraf_currencies() where id = 'cny'");
+    if (Number(mine) !== 9.99) throw new Error(`the business that saved sees ${mine}, not 9.99`);
+
+    const after = asUser(B_UID,
+      "select rate::text from public.sarraf_currencies() where id = 'cny'");
+    if (after !== before) {
+      throw new Error(`the other business's rate moved from ${before} to ${after}`);
+    }
+  });
+
+  check("a business that has set no rate of its own still gets one", () => {
+    const own = asUser(B_UID,
+      "select own_rate::text from public.sarraf_currencies() where id = 'cny'");
+    if (own !== "false") throw new Error(`expected the fallback to be flagged, got own_rate=${own}`);
+    const rate = asUser(B_UID,
+      "select coalesce(rate::text,'<none>') from public.sarraf_currencies() where id = 'cny'");
+    if (rate === "<none>") throw new Error("a business with no rate of its own was left without one");
+  });
+
+  check("the spread is the business's own, and a save that omits it leaves it alone", () => {
+    asUser(A_UID, `select public.sarraf_save_rates(
+      '[{"id":"cny","rate":"8.50"}]'::jsonb,
+      '[]'::jsonb, 'iso-rate-2', 'save_rates', 'isolation check')`);
+    const buy = asUser(A_UID,
+      "select buy_rate::text from public.sarraf_currencies() where id = 'cny'");
+    if (Number(buy) !== 9.90) throw new Error(`the spread was overwritten: buy_rate is ${buy}, not 9.90`);
+  });
+
   // ── and the manager, who is meant to see everything ─────────────────────────
   check("the manager still sees both businesses", () => {
     const mgr = psql(`select coalesce(auth_id::text,'') from public.app_users

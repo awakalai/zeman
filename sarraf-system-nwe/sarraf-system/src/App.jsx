@@ -1895,7 +1895,11 @@ export default function App() {
       const adminMode = activeProfile?.role === "admin";
       const noQuery = Promise.resolve({ data: [], error: null });
       const [c, u, l, t, a, ac, rh, apr, ape, tv, ctrl, rm, rt] = await Promise.all([
-        fetchAllRows("currencies", { orders: [{ column: "code", ascending: true }] }),
+        // Not the currencies table. That row's rate belongs to the installation, and reading it
+        // directly is what made one business's rate the other's: every figure on this screen is
+        // computed from this number. sarraf_currencies returns the same catalogue with this
+        // business's own rates where it has set any, and the installation's where it has not.
+        supabase.rpc("sarraf_currencies"),
         fetchAllRows("app_users", { orders: [{ column: "created_at", ascending: true }, { column: "id", ascending: true }] }),
         fetchAllRows("ledger", { orders: [{ column: "date", ascending: true }, { column: "id", ascending: true }] }),
         fetchAllRows("txs", { orders: [{ column: "date", ascending: true }, { column: "id", ascending: true }] }),
