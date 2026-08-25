@@ -1,0 +1,116 @@
+# Applying migrations to the live database, from here rather than by hand.
+#
+# The owner should not have to paste SQL into a dashboard on a phone. This runs it for them, and
+# it can be started from the Actions tab or by anybody working on the repository — including an
+# assistant that has GitHub access but, by network policy, no route to the database at all.
+#
+# What it needs, once: a repository secret named SUPABASE_DB_URL holding the connection string
+# from Supabase → Project Settings → Database → Connection string → URI, with the password in it.
+# GitHub encrypts it, never prints it, and masks it if a command ever tries to echo it.
+
+name: Apply database migrations
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type APPLY to run the migrations against the live database'
+        required: true
+        default: ''
+      dry_run:
+        description: 'Only list what would run, change nothing'
+        type: boolean
+        default: false
+
+concurrency:
+  # Two runs applying migrations at once is how a database ends up half-migrated.
+  group: apply-migrations
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refuse unless the word was typed
+        if: ${{ inputs.confirm != 'APPLY' }}
+        run: |
+          echo "::error::Type APPLY in the confirm box. This writes to the live database."
+          exit 1
+
+      - uses: actions/checkout@v4
+
+      - name: Install the PostgreSQL client
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends postgresql-client
+
+      - name: Check the connection
+        env:
+          PGURL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          if [ -z "$PGURL" ]; then
+            echo "::error::The SUPABASE_DB_URL secret is not set. Repository → Settings → Secrets and variables → Actions → New repository secret."
+            exit 1
+          fi
+          psql "$PGURL" -tAc "select 'connected to ' || current_database() || ' as ' || current_user"
+
+      # Which migrations the database has already had. The table is created on first use, so a
+      # database that has never been migrated this way simply reports none.
+      - name: Read what has already been applied
+        env:
+          PGURL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          psql "$PGURL" -v ON_ERROR_STOP=1 -q <<'SQL'
+          create table if not exists public.schema_migrations (
+            version text primary key,
+            applied_at timestamptz not null default statement_timestamp(),
+            checksum text
+          );
+          SQL
+          psql "$PGURL" -tAc "select version from public.schema_migrations order by version" > applied.txt
+          echo "Already applied: $(wc -l < applied.txt)"
+
+      - name: Apply, in order, stopping at the first failure
+        env:
+          PGURL: ${{ secrets.SUPABASE_DB_URL }}
+          DRY: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          cd sarraf-system-nwe/sarraf-system/supabase/migrations
+          applied=$GITHUB_WORKSPACE/applied.txt
+          ran=0
+          for f in $(ls *.sql | sort); do
+            version="${f%%_*}"
+            if grep -qxF "$version" "$applied"; then
+              echo "  skip   $f"
+              continue
+            fi
+            if [ "$DRY" = "true" ]; then
+              echo "  would run  $f"
+              continue
+            fi
+            echo "::group::$f"
+            # Each migration in one transaction of its own: a failure leaves that file undone
+            # rather than half-done, and the ones before it stay applied.
+            sum=$(sha256sum "$f" | cut -d' ' -f1)
+            psql "$PGURL" -v ON_ERROR_STOP=1 -q -f "$f"
+            psql "$PGURL" -v ON_ERROR_STOP=1 -q \
+              -c "insert into public.schema_migrations(version, checksum) values ('$version', '$sum') on conflict (version) do nothing"
+            echo "::endgroup::"
+            ran=$((ran + 1))
+          done
+          echo "Applied $ran migration(s)."
+
+      - name: Say what the database looks like now
+        if: ${{ !inputs.dry_run }}
+        env:
+          PGURL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          echo "### Businesses" >> $GITHUB_STEP_SUMMARY
+          psql "$PGURL" -tAc "select id || ' — ' || name from public.tenants order by id" >> $GITHUB_STEP_SUMMARY || true
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Accounts" >> $GITHUB_STEP_SUMMARY
+          psql "$PGURL" -tAc "select coalesce(admin_level, role) || ' — ' || name || ' — ' || coalesce(tenant_id, 'no business') from public.app_users where not deleted order by 1" >> $GITHUB_STEP_SUMMARY || true
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Anything wrong" >> $GITHUB_STEP_SUMMARY
+          psql "$PGURL" -tAc "select coalesce(string_agg(table_name || ' — ' || state, E'\n'), 'nothing') from public.sarraf_schema_tables()" >> $GITHUB_STEP_SUMMARY || true
