@@ -21,6 +21,10 @@ on:
         description: 'Only list what would run, change nothing'
         type: boolean
         default: false
+      run_only:
+        description: 'Comma-separated versions to run; every other migration is recorded as already applied without being run. Leave empty to run everything outstanding.'
+        required: false
+        default: ''
 
 concurrency:
   # Two runs applying migrations at once is how a database ends up half-migrated.
@@ -213,18 +217,45 @@ jobs:
           psql -h "$DBHOST" -p "$DBPORT" -U "$DBUSER" -d postgres -tAc "select version from public.schema_migrations order by version" > applied.txt
           echo "Already applied: $(wc -l < applied.txt)"
 
+      # run_only exists because this database was migrated by hand for a fortnight before there
+      # was a workflow, and nothing recorded which files had been applied. The ledger says none;
+      # the database says nearly all. Re-running them is not harmless — six add table constraints,
+      # and PostgreSQL has no `add constraint if not exists`.
+      #
+      # So the outstanding ones are named, and everything else is written into the ledger as
+      # already applied without being run. After one such run the ledger tells the truth and this
+      # input is never needed again.
       - name: Apply, in order, stopping at the first failure
         env:
           DRY: ${{ inputs.dry_run }}
+          RUN_ONLY: ${{ inputs.run_only }}
         run: |
           set -euo pipefail
           cd sarraf-system-nwe/sarraf-system/supabase/migrations
           applied=$GITHUB_WORKSPACE/applied.txt
           ran=0
+          marked=0
+
+          wanted() {
+            case ",${RUN_ONLY// /}," in *",$1,"*) return 0 ;; *) return 1 ;; esac
+          }
+
           for f in $(ls *.sql | sort); do
             version="${f%%_*}"
             if grep -qxF "$version" "$applied"; then
               echo "  skip   $f"
+              continue
+            fi
+            if [ -n "$RUN_ONLY" ] && ! wanted "$version"; then
+              if [ "$DRY" = "true" ]; then
+                echo "  would mark applied (not run)  $f"
+              else
+                sum=$(sha256sum "$f" | cut -d' ' -f1)
+                psql -h "$DBHOST" -p "$DBPORT" -U "$DBUSER" -d postgres -v ON_ERROR_STOP=1 -q \
+                  -c "insert into public.schema_migrations(version, checksum) values ('$version', '$sum') on conflict (version) do nothing"
+                echo "  marked applied, not run  $f"
+                marked=$((marked + 1))
+              fi
               continue
             fi
             if [ "$DRY" = "true" ]; then
@@ -241,7 +272,7 @@ jobs:
             echo "::endgroup::"
             ran=$((ran + 1))
           done
-          echo "Applied $ran migration(s)."
+          echo "Applied $ran migration(s); recorded $marked as already applied without running."
 
       - name: Say what the database looks like now
         if: ${{ !inputs.dry_run }}
