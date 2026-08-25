@@ -1,0 +1,78 @@
+# Reading the database, without writing to it.
+#
+# Two months of this project were spent guessing what the live database contained, because there
+# was no way to look. Every wrong guess became a migration that failed on something nobody could
+# see. This is the eye: it runs supabase/INSPECT.sql inside a read-only transaction and prints the
+# answer, and it cannot change anything even if the query tried to.
+#
+# Edit supabase/INSPECT.sql, merge, run this. The answer comes back in the run summary.
+
+name: Inspect the database
+
+on:
+  workflow_dispatch:
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the PostgreSQL client
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends postgresql-client
+
+      # The same route the migration workflow found: no URI is built, because a password
+      # containing '@' cannot survive being put in one.
+      - name: Connect
+        env:
+          SECRET: ${{ secrets.SUPABASE_DB_URL }}
+          PLAIN_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+        run: |
+          set -uo pipefail
+          body=${SECRET#postgresql://}
+          body=${body#postgres://}
+          userinfo=${body%@*}
+          hostpart=${body##*@}
+          user=${userinfo%%:*}
+          pass=${userinfo#*:}
+          case "$pass" in
+            *%[0-9A-Fa-f][0-9A-Fa-f]*)
+              esc=$(printf '%s' "$pass" \
+                | sed -e 's/\\/\\\\/g' -e 's/%\([0-9A-Fa-f][0-9A-Fa-f]\)/\\x\1/g')
+              pass=$(printf '%b' "$esc")
+              ;;
+          esac
+          [ -n "$PLAIN_PASSWORD" ] && pass=$PLAIN_PASSWORD
+          echo "::add-mask::$pass"
+
+          host=${hostpart%%:*}
+          ref=$(printf '%s' "$host" | sed -nE 's#^db\.([a-z0-9]+)\.supabase\.co$#\1#p')
+          [ -n "$ref" ] || ref=$(printf '%s' "$user" | sed -nE 's#^postgres\.([a-z0-9]+)$#\1#p')
+
+          h="aws-0-ap-southeast-2.pooler.supabase.com"
+          if ! PGPASSWORD="$pass" PGCONNECT_TIMEOUT=8 \
+               psql -h "$h" -p 5432 -U "postgres.${ref}" -d postgres -tAc "select 1" >/dev/null 2>&1; then
+            echo "::error::Could not connect. Run the migration workflow — it reports why in words."
+            exit 1
+          fi
+          { echo "DBHOST=$h"; echo "DBPORT=5432"; echo "DBUSER=postgres.${ref}"; echo "PGPASSWORD=$pass"; } >> "$GITHUB_ENV"
+
+      # `set transaction read only` is what makes this safe rather than merely intended to be
+      # safe: any insert, update, delete or DDL in the file is refused by the server, not by a
+      # promise made here.
+      - name: Read
+        run: |
+          set -euo pipefail
+          {
+            echo '```'
+            # 2>&1 because most of the report arrives as notices: the sections that ask about
+            # tables which may not exist have to check first, and a plpgsql check reports through
+            # RAISE NOTICE. Losing stderr would lose the half of the answer that matters most.
+            PGOPTIONS='--client-min-messages=notice' \
+            psql -h "$DBHOST" -p "$DBPORT" -U "$DBUSER" -d postgres -v ON_ERROR_STOP=1 -q \
+              --single-transaction -c "set transaction read only" \
+              -f sarraf-system-nwe/sarraf-system/supabase/INSPECT.sql 2>&1
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
