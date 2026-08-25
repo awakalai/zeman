@@ -2997,6 +2997,73 @@ try {
     if (!refused) throw new Error("a business owner read every account in the installation");
   });
 
+  // ── the one operation that destroys data, actually run ─────────────────────
+  //
+  // On a fresh database the reset takes its early return and the clearing never executes, so
+  // until this case existed it had run nowhere — which is how a delete against an append-only
+  // table survived long enough to reach the owner. This runs it last, on a database full of
+  // everything every case above created.
+
+  check("the reset clears the installation and keeps the manager", () => {
+    asAdmin();
+    const before = Number(psql("select count(*) from public.txs").trim());
+    if (!(before > 0)) throw new Error("nothing to clear, so nothing would be proved");
+
+    // The businesses have to go first: the reset does nothing while any exists, which is what
+    // stops a second run from emptying a system that has since gone live.
+    // Putting the database back to how it looks before any business exists, so the reset takes
+    // the clearing path rather than its early return. One transaction with the guards lifted,
+    // because several of these tables refuse an update as firmly as they refuse a delete — which
+    // is the property being tested a few lines below.
+    const tenanted = psql(`select string_agg(table_name, ',' order by table_name)
+      from information_schema.columns
+      where table_schema='public' and column_name='tenant_id' and table_name<>'app_users'`).trim();
+    psql(`begin;
+      set local session_replication_role = replica;
+      delete from public.tenant_rates;
+      delete from public.control_settings;
+      delete from public.receipt_control_policy;
+      ${tenanted.split(",").map((t) => `update public.${t} set tenant_id = null;`).join("\n      ")}
+      update public.app_users set tenant_id = null;
+      delete from public.tenants;
+      commit;`);
+
+    const out = JSON.parse(psql("select public.sarraf_reset_installation()::text"));
+    if (out.done !== true || out.cleared !== true) throw new Error(JSON.stringify(out));
+
+    for (const table of ["txs", "receipts", "journal_entries", "debts", "ledger", "vouchers"]) {
+      const left = psql(`select count(*) from public.${table}`).trim();
+      if (left !== "0") throw new Error(`${table} still holds ${left} rows`);
+    }
+    const admins = psql(`select coalesce(string_agg(admin_level, ','), '')
+                         from public.app_users where not deleted`).trim();
+    if (admins !== "manager") throw new Error(`the accounts left are ${admins || "none"}`);
+    const tenants = psql("select coalesce(string_agg(id, ',' order by id), '') from public.tenants").trim();
+    if (tenants !== "t-kurdistan,t-sarkhel") throw new Error(`the businesses are ${tenants}`);
+  });
+
+  // The append-only guards are right, and this is the one act allowed to go past them: a system
+  // that has not started has no history worth keeping, and a fortnight of testing is not the
+  // founding record of a real business. What matters is that the guards are back afterwards.
+  check("the append-only guards are back in force after the reset", () => {
+    psql(`insert into public.system_event_log(entity_table,entity_id,action,actor_id)
+          values ('txs','probe','INSERT','mgr')`);
+    let refused = false;
+    try { psql("delete from public.system_event_log"); } catch { refused = true; }
+    if (!refused) throw new Error("the change log can be tidied again");
+
+    psql(`insert into public.ledger(id,type,owner,cur_id,amount,note,date)
+          values ('led-probe','deposit','self','usd',1,'probe',now())`);
+    let ledgerRefused = false;
+    try { psql("delete from public.ledger where id='led-probe'"); } catch { ledgerRefused = true; }
+    if (!ledgerRefused) throw new Error("the ledger can be deleted from again");
+  });
+
+  check("a second reset cannot empty a system that has since gone live", () => {
+    const out = JSON.parse(psql("select public.sarraf_reset_installation()::text"));
+    if (out.done !== false) throw new Error(JSON.stringify(out));
+  });
+
   let failed = 0;
   for (const [ok, name] of checks) { console.log(`${ok ? "PASS" : "FAIL"}  ${name}`); if (!ok) failed++; }
   console.log(failed
