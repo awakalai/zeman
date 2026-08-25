@@ -1,22 +1,14 @@
--- Can one buyer's staff reach another buyer's rows, and what would close it?
+-- Did the isolation fix actually land, and does it hold on the live database?
 --
 -- Read-only. The workflow opens the transaction with `set transaction read only`, so the server
 -- refuses any write here rather than trusting that none was written.
 --
--- The last run found 128 SECURITY DEFINER functions that read business tables without mentioning
--- a tenant. sarraf_partner_batch_detail is typical: it looks a batch up by id and returns it, and
--- the id is supplied by the caller. Row-level security would have stopped that, and SECURITY
--- DEFINER is precisely what steps around row-level security.
+-- The gate that proves one business cannot reach another runs against a disposable PostgreSQL
+-- built from the migration history. That is the right place to prove behaviour, and it is not
+-- the same as this database — twice already a migration passed every local gate and failed here,
+-- because the postgres role in the test container is a superuser and the one on Supabase is not.
 --
--- Editing 128 function bodies by hand is not a fix, it is 128 chances to get one wrong. There is
--- a single switch that would close all of them at once — `alter table ... force row level
--- security` makes policies apply to the table's owner too, and therefore inside a SECURITY
--- DEFINER function owned by that role.
---
--- It works only if the owning role cannot bypass row-level security outright. A superuser, or any
--- role with BYPASSRLS, ignores policies no matter what FORCE says. So that is the question this
--- asks, and the answer decides whether the fix is one line per table or a change of ownership
--- first.
+-- So the same questions, asked of the real thing.
 
 \pset format aligned
 \pset border 2
@@ -24,13 +16,16 @@
 \pset pager off
 
 \echo ''
-\echo '════════ 1. Who owns the functions, and can that role ignore row-level security? ════════'
+\echo '════════ 1. Can the functions still bypass row-level security? ════════'
 \echo ''
 
-select r.rolname,
-       r.rolsuper   as is_superuser,
+select r.rolname as owner,
+       r.rolsuper as is_superuser,
        r.rolbypassrls as bypasses_rls,
-       count(p.oid) as sarraf_functions_owned
+       count(p.oid) as security_definer_functions,
+       case when r.rolsuper or r.rolbypassrls
+            then 'CAN STILL BYPASS — the fix has not taken'
+            else 'bound by policy' end as verdict
   from pg_proc p
   join pg_namespace n on n.oid = p.pronamespace and n.nspname = 'public'
   join pg_roles r on r.oid = p.proowner
@@ -39,22 +34,29 @@ select r.rolname,
  order by 4 desc;
 
 \echo ''
-\echo '════════ 2. The role the application actually connects as ════════'
+\echo '════════ 2. The role itself ════════'
 \echo ''
 
-select rolname, rolsuper as is_superuser, rolbypassrls as bypasses_rls
-  from pg_roles
- where rolname in ('authenticated', 'anon', 'service_role', 'postgres', 'supabase_admin',
-                   'authenticator', current_user)
- order by rolname;
+select r.rolname, r.rolcanlogin as can_log_in, r.rolbypassrls as bypasses_rls,
+       r.rolinherit as inherits,
+       has_schema_privilege(r.oid, 'public', 'CREATE') as can_create_in_public,
+       coalesce((select string_agg(m.rolname, ', ')
+                   from pg_auth_members am join pg_roles m on m.oid = am.roleid
+                  where am.member = r.oid), '—') as member_of
+  from pg_roles r
+ where r.rolname = 'sarraf_definer';
 
 \echo ''
-\echo '════════ 3. Which business tables already force RLS on their owner ════════'
+\echo '════════ 3. Business tables: forced, and carrying both kinds of policy ════════'
 \echo ''
 
-select count(*) filter (where c.relrowsecurity) as rls_enabled,
-       count(*) filter (where c.relforcerowsecurity) as rls_forced,
-       count(*) as business_tables
+select count(*) as business_tables,
+       count(*) filter (where c.relrowsecurity) as rls_on,
+       count(*) filter (where c.relforcerowsecurity) as forced,
+       count(*) filter (where exists (
+         select 1 from pg_policy p where p.polrelid = c.oid and not p.polpermissive)) as has_restrictive,
+       count(*) filter (where exists (
+         select 1 from pg_policy p where p.polrelid = c.oid and p.polname = c.relname || '_definer')) as has_definer_policy
   from pg_class c
   join pg_namespace n on n.oid = c.relnamespace and n.nspname = 'public'
  where c.relkind = 'r'
@@ -63,28 +65,50 @@ select count(*) filter (where c.relrowsecurity) as rls_enabled,
                   and col.column_name = 'tenant_id');
 
 \echo ''
-\echo '════════ 4. The two tables with no restrictive policy — what do they have instead? ════════'
+\echo '════════ 4. Anything left behind ════════'
 \echo ''
 
 select c.relname as table_name,
-       pol.polname,
-       case pol.polpermissive when true then 'permissive (ORed — widens)' else 'restrictive (ANDed)' end as kind,
-       pg_get_expr(pol.polqual, pol.polrelid) as using_expression
+       case when not c.relforcerowsecurity then 'not forced' else '' end ||
+       case when not exists (select 1 from pg_policy p
+                              where p.polrelid = c.oid and not p.polpermissive)
+            then ' no restrictive policy' else '' end ||
+       case when not exists (select 1 from pg_policy p
+                              where p.polrelid = c.oid and p.polname = c.relname || '_definer')
+            then ' no definer policy' else '' end as missing
   from pg_class c
   join pg_namespace n on n.oid = c.relnamespace and n.nspname = 'public'
-  left join pg_policy pol on pol.polrelid = c.oid
- where c.relname in ('app_users', 'tenant_rates')
- order by c.relname, pol.polname;
+ where c.relkind = 'r'
+   and exists (select 1 from information_schema.columns col
+                where col.table_schema = 'public' and col.table_name = c.relname
+                  and col.column_name = 'tenant_id')
+   and (not c.relforcerowsecurity
+        or not exists (select 1 from pg_policy p where p.polrelid = c.oid and not p.polpermissive)
+        or not exists (select 1 from pg_policy p where p.polrelid = c.oid and p.polname = c.relname || '_definer'))
+ order by c.relname;
 
 \echo ''
-\echo '════════ 5. A sample of what a SECURITY DEFINER function does with a caller-supplied id ════════'
+\echo '════════ 5. Businesses, accounts, and what is in there ════════'
 \echo ''
 
-select p.proname, pg_get_function_identity_arguments(p.oid) as args
-  from pg_proc p
-  join pg_namespace n on n.oid = p.pronamespace and n.nspname = 'public'
- where p.prosecdef
-   and p.proname in ('sarraf_partner_batch_detail', 'sarraf_void_transaction',
-                     'sarraf_batch_summary', 'sarraf_receipt_both_sides',
-                     'sarraf_settle_debt', 'sarraf_write_off_debt')
- order by p.proname;
+do $report$
+declare r record; n bigint; t text;
+begin
+  for r in select coalesce(admin_level, role) as rank,
+                  coalesce(tenant_id, '<no business>') as biz, count(*) as n
+             from public.app_users where not deleted group by 1,2 order by 1,2
+  loop
+    raise notice 'account: % — % — %', r.rank, r.biz, r.n;
+  end loop;
+
+  for r in select id, name, active from public.tenants order by id loop
+    raise notice 'business: % — % — %', r.id, r.name,
+      case when r.active then 'active' else 'suspended' end;
+  end loop;
+
+  foreach t in array array['receipts','receipt_batches','txs','ledger','currencies'] loop
+    execute format('select count(*) from public.%I', t) into n;
+    raise notice 'rows in %: %', t, n;
+  end loop;
+end
+$report$;
