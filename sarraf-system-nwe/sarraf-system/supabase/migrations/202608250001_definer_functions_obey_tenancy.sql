@@ -127,6 +127,15 @@ alter default privileges in schema public
 --
 -- And sarraf_reset_installation, which sets session_replication_role to lift those guards while
 -- it clears an installation. That setting needs privileges this role deliberately does not have.
+-- Handing a function over requires the role receiving it to be able to create in the schema the
+-- function lives in — ownership is judged as though the new owner were making it there. USAGE is
+-- not enough, and `permission denied for schema public` is what the live database said.
+--
+-- It is granted for the handover and taken back immediately after. Ownership does not need it
+-- afterwards, and a role that owns 131 SECURITY DEFINER functions should not also be able to
+-- create objects for the rest of the installation's life.
+grant create on schema public to sarraf_definer;
+
 do $move$
 declare
   f record;
@@ -150,6 +159,8 @@ begin
   raise notice '% function(s) can no longer bypass row-level security', moved;
 end
 $move$;
+
+revoke create on schema public from sarraf_definer;
 
 -- ── and now the policies actually bind ──────────────────────────────────────
 --
