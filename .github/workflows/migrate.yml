@@ -51,45 +51,73 @@ jobs:
       # and look up.
       #
       # And a URI cannot carry a password containing '@' unless it is percent-encoded, which is a
-      # trap nothing warns about: libpq reads everything after the last '@' as the host, so
-      # `Bradpitt@9959@2005` silently becomes part of the server name.
+      # trap nothing warns about: libpq reads everything after the last '@' as the host, so a
+      # password like `word@9959@2005` silently becomes part of the server name.
       #
       # So no URI is built at all. The reference and password are taken out of the secret once,
       # by hand, and every connection after that is made with PGPASSWORD and separate flags —
       # where a password is a password whatever characters are in it.
+      #
+      # Better still: set SUPABASE_DB_PASSWORD to the password on its own, nothing around it.
+      # Then there is no string to parse, nothing to encode, and no character that can be
+      # mistaken for punctuation. It is used in preference to anything found in the URL.
       - name: Find a route to the database
         env:
           SECRET: ${{ secrets.SUPABASE_DB_URL }}
+          PLAIN_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
         run: |
           set -uo pipefail
-          if [ -z "$SECRET" ]; then
-            echo "::error::The SUPABASE_DB_URL secret is not set. Repository → Settings → Secrets and variables → Actions → New repository secret."
+          if [ -z "$SECRET" ] && [ -z "$PLAIN_PASSWORD" ]; then
+            echo "::error::Neither SUPABASE_DB_PASSWORD nor SUPABASE_DB_URL is set. The simpler of the two is SUPABASE_DB_PASSWORD: Repository → Settings → Secrets and variables → Actions → New repository secret, name SUPABASE_DB_PASSWORD, value the database password on its own."
             exit 1
           fi
 
           # Everything between the first ':' after the scheme and the last '@' is the password,
-          # however many '@' it contains. Percent-encoding is undone, so an encoded secret and a
-          # raw one both arrive here as the password the user actually typed.
+          # however many '@' it contains.
           body=${SECRET#postgresql://}
           body=${body#postgres://}
           userinfo=${body%@*}
           hostpart=${body##*@}
           user=${userinfo%%:*}
           pass=${userinfo#*:}
-          pass=$(printf '%b' "${pass//%/\\x}")
-          echo "::add-mask::$pass"
+
+          # Percent-decoding, but only of what is actually percent-encoded: '%' followed by two
+          # hex digits. The first version decoded every '%' and interpreted backslashes as well,
+          # which quietly rewrites a password that legitimately contains either — a corruption
+          # that arrives looking exactly like a wrong password.
+          case "$pass" in
+            *%[0-9A-Fa-f][0-9A-Fa-f]*)
+              esc=$(printf '%s' "$pass" \
+                | sed -e 's/\\/\\\\/g' -e 's/%\([0-9A-Fa-f][0-9A-Fa-f]\)/\\x\1/g')
+              pass=$(printf '%b' "$esc")
+              ;;
+          esac
 
           host=${hostpart%%:*}
           rest=${hostpart#*:}
           port=${rest%%/*}
           case "$port" in ''|*[!0-9]*) port=5432 ;; esac
 
+          # A password given on its own is trusted over one dug out of a URL: it cannot have been
+          # damaged by the digging.
+          source="the URL"
+          if [ -n "$PLAIN_PASSWORD" ]; then
+            pass=$PLAIN_PASSWORD
+            source="SUPABASE_DB_PASSWORD"
+          fi
+          echo "::add-mask::$pass"
+
           ref=$(printf '%s' "$host" | sed -nE 's#^db\.([a-z0-9]+)\.supabase\.co$#\1#p')
           [ -n "$ref" ] || ref=$(printf '%s' "$user" | sed -nE 's#^postgres\.([a-z0-9]+)$#\1#p')
+          [ -n "$ref" ] || ref=$PROJECT_REF
 
           # What was read out of the secret, so a mistyped secret is visible rather than inferred.
-          # The password is never among these: it has been masked above and is not printed here.
-          echo "host=$host  port=$port  user=$user  project=${ref:-<not found>}  password=${#pass} characters"
+          # The password itself is never printed — only whether one arrived, and from where. Its
+          # length is not printed either: the masker replaces short numbers that happen to occur
+          # inside a secret, so the figure could not be relied upon anyway.
+          echo "project=${ref:-<not found>}  user=${user:-<none>}  port=$port"
+          echo "password: $([ -n "$pass" ] && echo "present, from $source" || echo 'MISSING')"
 
           # The reason a connection was refused is the whole answer, and the first version of this
           # threw it away into /dev/null. A pooler that has never heard of this project says
@@ -120,21 +148,27 @@ jobs:
             } >> "$GITHUB_ENV"
           }
 
-          if try "$host" "$port" "$user"; then
+          # Only worth trying if the secret actually named a host. With SUPABASE_DB_PASSWORD alone
+          # there is nothing here to try, and the pooler below is the whole route.
+          if [ -n "$host" ] && [ "$host" != "$SECRET" ] && try "$host" "$port" "$user"; then
             echo "Connected to $host as $user."
             save "$host" "$port" "$user"
             exit 0
           fi
 
           if [ -z "$ref" ]; then
-            echo "::error::Could not connect, and the project reference is not in the connection string, so the pooler cannot be worked out. Copy the Session pooler string from Supabase → Project Settings → Database → Connection string."
+            echo "::error::Could not connect, and nothing says which Supabase project this is. Either set SUPABASE_DB_URL to the connection string, or add a repository variable SUPABASE_PROJECT_REF holding the project reference from the Supabase project URL."
             exit 1
           fi
 
-          echo "Direct host unreachable — trying the pooler."
-          for region in eu-central-1 eu-central-2 eu-west-1 eu-west-2 eu-west-3 eu-north-1 \
+          # ap-southeast-2 first because that is where this project was found to be — a run on
+          # 25 August walked seventeen regions and this was the one that answered. Leaving the
+          # rest in place costs nothing on a hit and still finds the project if it ever moves.
+          echo "Trying the pooler."
+          for region in ap-southeast-2 \
+                        eu-central-1 eu-central-2 eu-west-1 eu-west-2 eu-west-3 eu-north-1 \
                         us-east-1 us-east-2 us-west-1 us-west-2 \
-                        ap-south-1 ap-southeast-1 ap-southeast-2 ap-northeast-1 ap-northeast-2 \
+                        ap-south-1 ap-southeast-1 ap-northeast-1 ap-northeast-2 \
                         ca-central-1 sa-east-1; do
             for prefix in aws-0 aws-1; do
               h="${prefix}-${region}.pooler.supabase.com"
@@ -147,7 +181,7 @@ jobs:
                 exit 0
               fi
               if tail -2 "$errfile" | grep -qi 'password authentication failed'; then
-                echo "::error::${prefix}-${region} is the right region — this project is there — but the password was refused. Reset it in Supabase → Project Settings → Database → Reset database password, then update the SUPABASE_DB_URL secret with the new one."
+                echo "::error::${prefix}-${region} is the right region and the project is there — the address was never the problem. The password was refused (it came from ${source}). Reset it: Supabase → Project Settings → Database → Reset database password, then put the new password on its own into the SUPABASE_DB_PASSWORD secret — no URL around it, nothing to escape."
                 exit 1
               fi
             done
