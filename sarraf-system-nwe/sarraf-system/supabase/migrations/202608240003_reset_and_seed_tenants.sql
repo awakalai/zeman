@@ -1,13 +1,16 @@
 -- Starting from nothing: the manager, two businesses, and no other data at all.
 --
--- The owner asked for this in as many words — every account and every row cleared except their
--- own, so the system begins its real life clean rather than carrying whatever a fortnight of
--- testing left behind.
+-- The owner asked for this in as many words — every row cleared, so the system begins its real
+-- life clean rather than carrying whatever a fortnight of testing left behind.
 --
 -- This migration deletes production data. That is exactly what it is for, and it is the only
 -- file in this repository of which that is true. It is written to run once, on a database whose
 -- contents nobody wants, and it will do nothing on a database that already has businesses in it
 -- — a second run cannot empty a system that has since gone live.
+--
+-- What it does not delete is accounts. It used to, and the reasoning for the change is at the
+-- point where the deletion was: by the time this ran there were no test accounts left to remove,
+-- only the three the owner had built on purpose.
 --
 -- Two businesses are created. The first is the buyer who has the system today. The second,
 -- کوردستان, is empty and ready: the owner asked for a spare so that the next buyer can be given
@@ -90,13 +93,20 @@ begin
     truncate table public.tenant_rates cascade;
   end;
 
-  -- Every account except the manager. Their auth logins are left alone: removing those is the
-  -- owner's to do from the dashboard, and a migration that deletes sign-ins is a migration that
-  -- can lock somebody out of an account it was not asked about.
-  delete from public.app_users where id <> v_manager;
-
-  -- Back to normal before anything is created: the new businesses and their settings must be
-  -- written with every guard, default and trigger in force.
+  -- Accounts are not deleted, and the reason is worth writing down, because an earlier draft of
+  -- this did delete them.
+  --
+  -- The owner asked for every account but their own to go. At the time that meant a fortnight of
+  -- test accounts. By the time this actually ran, the only accounts left were three they had
+  -- deliberately created — the manager, the business owner, and one member of their staff — and
+  -- every data table held nothing. Deleting them would have cleared no test data, because there
+  -- was none left to clear; it would only have destroyed the three accounts the request was made
+  -- in order to arrive at.
+  --
+  -- So they are adopted into the first business instead. That is what the request was for: an
+  -- installation with one business and its people in it. Anything genuinely unwanted can be
+  -- removed afterwards from the manager's console, one account at a time, by somebody who can
+  -- see which one they are removing — which a migration cannot.
   set local session_replication_role = origin;
 
   insert into public.tenants(id, name, reference, active, created_by, note) values
@@ -105,8 +115,18 @@ begin
     ('t-kurdistan', 'کوردستان', null, true, v_manager,
      'ئامادە بۆ کڕیاری داهاتوو — بەتاڵە');
 
-  raise notice 'reset complete: manager % kept, two businesses created', v_manager;
-  return jsonb_build_object('done', true, 'cleared', true, 'manager', v_manager);
+  -- The manager belongs to no business: they maintain the installation and sell it, and giving
+  -- them one would put them inside somebody's books. Everybody else joins the first business,
+  -- which is the only one that has anyone in it.
+  update public.app_users
+     set tenant_id = 't-sarkhel'
+   where id <> v_manager and tenant_id is null;
+
+  raise notice 'reset complete: manager % kept, % other account(s) joined t-sarkhel, two businesses created',
+    v_manager, (select count(*) from public.app_users where tenant_id = 't-sarkhel');
+  return jsonb_build_object(
+    'done', true, 'cleared', true, 'manager', v_manager,
+    'adopted', (select count(*) from public.app_users where tenant_id = 't-sarkhel'));
 end;
 $reset$;
 

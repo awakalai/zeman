@@ -3035,11 +3035,24 @@ try {
       const left = psql(`select count(*) from public.${table}`).trim();
       if (left !== "0") throw new Error(`${table} still holds ${left} rows`);
     }
-    const admins = psql(`select coalesce(string_agg(admin_level, ','), '')
-                         from public.app_users where not deleted`).trim();
-    if (admins !== "manager") throw new Error(`the accounts left are ${admins || "none"}`);
     const tenants = psql("select coalesce(string_agg(id, ',' order by id), '') from public.tenants").trim();
     if (tenants !== "t-kurdistan,t-sarkhel") throw new Error(`the businesses are ${tenants}`);
+  });
+
+  // The reset clears rows, not people. An earlier draft deleted every account but the manager's,
+  // and it was wrong for a reason no test could have caught: by the time it ran there were no
+  // test accounts left to remove, only the three the owner had built on purpose. Clearing the
+  // data is the point; the accounts are what the cleared installation is for.
+  check("the reset keeps the accounts and puts them in the first business", () => {
+    const orphaned = psql(`select count(*) from public.app_users
+                           where tenant_id is null and coalesce(admin_level,'') <> 'manager'`).trim();
+    if (orphaned !== "0") throw new Error(`${orphaned} account(s) belong to no business`);
+
+    const managerTenant = psql(`select coalesce(string_agg(coalesce(tenant_id,'<none>'), ','), '')
+                                from public.app_users where admin_level = 'manager'`).trim();
+    if (managerTenant !== "<none>") {
+      throw new Error(`the manager was put inside a business: ${managerTenant}`);
+    }
   });
 
   // The append-only guards are right, and this is the one act allowed to go past them: a system
