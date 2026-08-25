@@ -133,12 +133,16 @@ begin
     select exists (select 1 from information_schema.columns
                     where table_schema = 'public' and table_name = 'app_users'
                       and column_name = 'admin_level') into has_level;
+    -- Which business each account belongs to, not just how many there are. The manager should
+    -- belong to none — they maintain the installation, and putting them in a business puts them
+    -- inside somebody's books — and everybody else should belong to exactly one.
     for r in execute format(
-      'select %s as rank, count(*) as n, count(*) filter (where deleted) as gone
-         from public.app_users group by 1 order by 1',
+      'select %s as rank, coalesce(tenant_id, ''<no business>'') as biz,
+              count(*) as n, count(*) filter (where deleted) as gone
+         from public.app_users group by 1, 2 order by 1, 2',
       case when has_level then 'coalesce(admin_level, role)' else 'role' end)
     loop
-      raise notice 'account: % — % (% deactivated)', r.rank, r.n, r.gone;
+      raise notice 'account: % — % — % (% deactivated)', r.rank, r.biz, r.n, r.gone;
     end loop;
   end if;
 
