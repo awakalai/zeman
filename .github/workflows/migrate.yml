@@ -44,35 +44,80 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends postgresql-client
 
-      - name: Check the connection
+      # Supabase's direct host, db.<ref>.supabase.co, resolves to IPv6 only, and GitHub's runners
+      # have no IPv6 route — so the obvious connection string fails with "Network is unreachable"
+      # through no fault of the person who wrote it. The pooler is IPv4, and its hostname carries
+      # a region nobody should have to go and look up.
+      #
+      # So: try what was given, and if the network cannot reach it, try the pooler in each region
+      # until one answers. The working string is passed to the later steps through the
+      # environment, never printed, and masked if anything tries.
+      - name: Find a route to the database
         env:
           PGURL: ${{ secrets.SUPABASE_DB_URL }}
         run: |
+          set -uo pipefail
           if [ -z "$PGURL" ]; then
             echo "::error::The SUPABASE_DB_URL secret is not set. Repository → Settings → Secrets and variables → Actions → New repository secret."
             exit 1
           fi
-          psql "$PGURL" -tAc "select 'connected to ' || current_database() || ' as ' || current_user"
+
+          try() {
+            PGCONNECT_TIMEOUT=10 psql "$1" -tAc "select 1" >/dev/null 2>&1
+          }
+
+          if try "$PGURL"; then
+            echo "Connected directly."
+            echo "::add-mask::$PGURL"
+            echo "DBURL=$PGURL" >> "$GITHUB_ENV"
+          else
+            # Pull the project reference and the password out of what was given, so the pooler
+            # string can be built without asking for anything a second time.
+            ref=$(printf '%s' "$PGURL" | sed -nE 's#.*@db\.([a-z0-9]+)\.supabase\.co.*#\1#p')
+            pw=$(printf '%s' "$PGURL" | sed -nE 's#^postgresql://[^:]+:(.*)@[^@]+$#\1#p')
+            if [ -z "$ref" ] || [ -z "$pw" ]; then
+              echo "::error::Could not reach the database, and the connection string is not the expected postgresql://postgres:PASSWORD@db.<ref>.supabase.co:5432/postgres shape, so the pooler cannot be worked out from it. Copy the *Session pooler* string from Supabase → Project Settings → Database → Connection string."
+              exit 1
+            fi
+
+            found=""
+            for region in eu-central-1 eu-central-2 eu-west-1 eu-west-2 eu-west-3 eu-north-1 \
+                          us-east-1 us-east-2 us-west-1 us-west-2 \
+                          ap-south-1 ap-southeast-1 ap-southeast-2 ap-northeast-1 ap-northeast-2 \
+                          ca-central-1 sa-east-1; do
+              for prefix in aws-0 aws-1; do
+                cand="postgresql://postgres.${ref}:${pw}@${prefix}-${region}.pooler.supabase.com:5432/postgres"
+                if try "$cand"; then found="$cand"; echo "Connected through ${prefix}-${region}."; break 2; fi
+              done
+            done
+
+            if [ -z "$found" ]; then
+              echo "::error::No route to the database. The direct host is IPv6-only and no pooler region accepted the connection — check the password, or copy the Session pooler string from the Supabase dashboard."
+              exit 1
+            fi
+            echo "::add-mask::$found"
+            echo "DBURL=$found" >> "$GITHUB_ENV"
+          fi
+
+      - name: Check the connection
+        run: psql "$DBURL" -tAc "select 'connected to ' || current_database() || ' as ' || current_user"
 
       # Which migrations the database has already had. The table is created on first use, so a
       # database that has never been migrated this way simply reports none.
       - name: Read what has already been applied
-        env:
-          PGURL: ${{ secrets.SUPABASE_DB_URL }}
         run: |
-          psql "$PGURL" -v ON_ERROR_STOP=1 -q <<'SQL'
+          psql "$DBURL" -v ON_ERROR_STOP=1 -q <<'SQL'
           create table if not exists public.schema_migrations (
             version text primary key,
             applied_at timestamptz not null default statement_timestamp(),
             checksum text
           );
           SQL
-          psql "$PGURL" -tAc "select version from public.schema_migrations order by version" > applied.txt
+          psql "$DBURL" -tAc "select version from public.schema_migrations order by version" > applied.txt
           echo "Already applied: $(wc -l < applied.txt)"
 
       - name: Apply, in order, stopping at the first failure
         env:
-          PGURL: ${{ secrets.SUPABASE_DB_URL }}
           DRY: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
@@ -93,8 +138,8 @@ jobs:
             # Each migration in one transaction of its own: a failure leaves that file undone
             # rather than half-done, and the ones before it stay applied.
             sum=$(sha256sum "$f" | cut -d' ' -f1)
-            psql "$PGURL" -v ON_ERROR_STOP=1 -q -f "$f"
-            psql "$PGURL" -v ON_ERROR_STOP=1 -q \
+            psql "$DBURL" -v ON_ERROR_STOP=1 -q -f "$f"
+            psql "$DBURL" -v ON_ERROR_STOP=1 -q \
               -c "insert into public.schema_migrations(version, checksum) values ('$version', '$sum') on conflict (version) do nothing"
             echo "::endgroup::"
             ran=$((ran + 1))
@@ -103,14 +148,12 @@ jobs:
 
       - name: Say what the database looks like now
         if: ${{ !inputs.dry_run }}
-        env:
-          PGURL: ${{ secrets.SUPABASE_DB_URL }}
         run: |
           echo "### Businesses" >> $GITHUB_STEP_SUMMARY
-          psql "$PGURL" -tAc "select id || ' — ' || name from public.tenants order by id" >> $GITHUB_STEP_SUMMARY || true
+          psql "$DBURL" -tAc "select id || ' — ' || name from public.tenants order by id" >> $GITHUB_STEP_SUMMARY || true
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Accounts" >> $GITHUB_STEP_SUMMARY
-          psql "$PGURL" -tAc "select coalesce(admin_level, role) || ' — ' || name || ' — ' || coalesce(tenant_id, 'no business') from public.app_users where not deleted order by 1" >> $GITHUB_STEP_SUMMARY || true
+          psql "$DBURL" -tAc "select coalesce(admin_level, role) || ' — ' || name || ' — ' || coalesce(tenant_id, 'no business') from public.app_users where not deleted order by 1" >> $GITHUB_STEP_SUMMARY || true
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Anything wrong" >> $GITHUB_STEP_SUMMARY
-          psql "$PGURL" -tAc "select coalesce(string_agg(table_name || ' — ' || state, E'\n'), 'nothing') from public.sarraf_schema_tables()" >> $GITHUB_STEP_SUMMARY || true
+          psql "$DBURL" -tAc "select coalesce(string_agg(table_name || ' — ' || state, E'\n'), 'nothing') from public.sarraf_schema_tables()" >> $GITHUB_STEP_SUMMARY || true
