@@ -76,6 +76,27 @@ export function receiptReadFailureText(error) {
   return `خوێندنەوە سەرکەوتوو نەبوو (${code})`;
 }
 
+/**
+ * Write down why a reading failed, on the receipt it failed for.
+ *
+ * When the reading fails inside the reader the server records an attempt row and a rule code.
+ * When it fails BEFORE the reader — no configuration, no session, the object could not be
+ * downloaded — it records nothing at all, and the database shows `uploading` with a null error
+ * for every one of them. The browser is told the code in the response body every single time,
+ * and kept it to itself.
+ *
+ * Best effort, always. A diagnosis that cannot be written down must not also lose the receipt.
+ */
+export async function noteReceiptReadFailure(client, documentId, cause) {
+  try {
+    await client.rpc("sarraf_receipt_note_read_failure", {
+      p_document_id: documentId,
+      p_code: cause?.code || "unknown",
+      p_status: Number(cause?.status) || null,
+    });
+  } catch { /* the receipt is safe either way; this is only the reason */ }
+}
+
 async function accessToken(client) {
   const result = await client.auth.getSession();
   const token = result?.data?.session?.access_token;
@@ -213,6 +234,13 @@ export async function intakeReceipt({
       evidenceKept: true,
     };
   } catch (cause) {
+    // Say so where it can be read back. When the reading fails inside the reader the server
+    // records an attempt row and a rule code; when it fails BEFORE the reader — no
+    // configuration, no session, the object could not be downloaded — it records nothing at all,
+    // and the database shows `uploading` with a null error for every one of them. The browser is
+    // told the code in the response body every single time, and until now it kept it to itself.
+    // Best effort: a diagnosis that cannot be written down must not also lose the receipt.
+    await noteReceiptReadFailure(client, id, cause);
     onStage(INTAKE_STAGE.readFailed, { documentId: id, state: "stored_retryable" });
     return {
       documentId: id,
