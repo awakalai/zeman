@@ -6505,7 +6505,7 @@ function ReceiptList({ rows, showFrom }) {
 }
 
 /* ─────────── ئەپلۆدکەری فیش ─────────── */
-function ReceiptUploader({ customerId, customerName, partnerId, uploaderId, direction = "in", onDone, flash, data, allowDirection, simple = false, staffReview = false, role }) {
+function ReceiptUploader({ customerId, customerName, partnerId, uploaderId, direction = "in", onDone, flash, data, allowDirection, simple = false, staffReview = false, role, adminOverrideReason = null }) {
   const [rows, setRows] = useState([]);
   const rowsRef = useRef([]);
   // A customer-seller sells to the house: their evidence is always money that arrived for them.
@@ -6782,15 +6782,27 @@ function ReceiptUploader({ customerId, customerName, partnerId, uploaderId, dire
       documentId: id,
       blob: img.blob,
       mediaType: img.mediaType || "image/jpeg",
-      transactionId,
+      // Absent for a customer-seller, whose receipt precedes any transaction. A partner
+      // uploading against an assignment supplies one; nothing here does yet.
+      transactionId: null,
       batchId: receiptCommandRef.current?.batchId || null,
-      adminOverrideReason: staffReview ? adminOverrideReason : null,
+      // Read here and declared nowhere, so a staff upload threw ReferenceError while a
+      // customer's did not — the ternary short-circuits before reaching it when staffReview is
+      // false. It is a prop now, filled from the reason the staff screen already asks for.
+      adminOverrideReason: staffReview ? (adminOverrideReason || null) : null,
       onStage: (stage, info) => patchRow(id, { note: intakeStatusText(info?.state) || stage }),
     });
   };
 
   const onFiles = async (files, source = "gallery") => {
-    if (!transactionId) return flash("سەرەتا مامەڵەی دیاریکراو هەڵبژێرە");
+    // There was a guard here — `if (!transactionId) return flash(...)` — and transactionId is
+    // not a prop of this component, not a state, and not declared anywhere in this file. It was
+    // a free variable, so the line threw ReferenceError the instant anybody chose an image:
+    // no flash, no rows, no error on screen, nothing at all. Every upload, for every role.
+    //
+    // It is gone rather than corrected, because the rule it was reaching for is wrong anyway.
+    // A customer-seller's receipt is what the transaction is made from; asking for a transaction
+    // before accepting the receipt inverts the flow the whole feature exists to replace.
     const list = Array.from(files || []).filter((f) => f.type?.startsWith("image/"));
     if (!list.length) return flash("تەنها وێنە هەڵبژێرە");
     if (working) return;
@@ -7907,9 +7919,15 @@ function ReceiptsHub({ data, usr, batches, batchLoadError, reloadBatches, flash,
               <Inp value={addReason} onChange={(event) => setAddReason(event.target.value)} maxLength={700} />
             </div>
           </div>
+          {/* direction={addDir} used to be below, and addDir is declared nowhere in this file. It
+              threw ReferenceError during render, so the staff screen for adding a customer's
+              receipts went blank the moment a customer was chosen. `allowDirection` is already
+              set, which means the uploader offers the choice itself — so what belongs here is the
+              starting value, and "in" is the one a customer-seller's evidence always has. */}
           {addFor && (
             <ReceiptUploader customerId={addFor} customerName={usr(addFor).name} uploaderId={profile?.id}
-              data={data} direction={addDir} allowDirection flash={flash} staffReview role={profile?.role}
+              data={data} direction="in" allowDirection flash={flash} staffReview role={profile?.role}
+              adminOverrideReason={addReason}
               onDone={() => { setAddFor(""); reloadBatches(); setTab("inbox"); }} />
           )}
         </Card>

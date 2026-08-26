@@ -116,14 +116,21 @@ const extractionPreview = (value) => value && typeof value === "object" ? {
 /**
  * Claim, store, then request server-owned OCR for one image.
  *
- * `transactionId` is mandatory. Flow, parties and currency are intentionally not accepted.
+ * `transactionId` is optional, and for the ordinary case it is absent. A customer-seller uploads
+ * the screenshot of a transfer they have just made; the transaction is what the owner creates
+ * *from* it afterwards. Requiring one first inverted the whole flow and made a new customer's
+ * first upload impossible — they had no transaction, and could not get one without uploading.
+ *
+ * A partner uploading against a purchase assigned to them by name does pass one, and that is a
+ * different case wearing the same function.
+ *
+ * Flow, parties and currency are still not accepted: the server decides those.
  */
 export async function intakeReceipt({
   client, blob, mediaType = "image/jpeg", transactionId, batchId = null,
   documentId = null, commandKey = null, adminOverrideReason = null,
   onStage = () => {}, fetchImpl = globalThis.fetch,
 }) {
-  if (!transactionId) throw new ReceiptIntakeError("claim", new Error("transaction id required"), false);
   const id = documentId || newId();
   // The document identity is already random. Binding the command key to it makes an upload
   // retry a replay of the same intent instead of a second command for the same evidence.
@@ -132,7 +139,7 @@ export async function intakeReceipt({
   onStage(INTAKE_STAGE.claiming, { documentId: id });
   const claim = await client.rpc("sarraf_receipt_intake_begin_v2", {
     p_document_id: id,
-    p_transaction_id: transactionId,
+    p_transaction_id: transactionId || null,
     p_batch_id: batchId,
     p_mime_type: mediaType,
     p_command_key: intentKey,
