@@ -32,7 +32,10 @@ select id, file_size_limit, allowed_mime_types from storage.buckets where id = '
 
 select pol.polname,
        case pol.polcmd when 'a' then 'INSERT' when 'w' then 'UPDATE' else pol.polcmd::text end as command,
-       pg_get_expr(pol.polwithcheck, pol.polrelid) like '%coalesce((metadata ->> ''size''::text), ''''::text) = ''''%'
+       -- Case-insensitive on purpose. pg_get_expr prints COALESCE in capitals, and asking for it
+       -- in lower case answered `f` for a policy that had in fact been replaced — a probe
+       -- reporting a fix as missing is worse than no probe at all.
+       pg_get_expr(pol.polwithcheck, pol.polrelid) ilike '%coalesce((metadata ->> ''size''::text), ''''::text) = ''''%'
          as allows_an_object_still_being_written
   from pg_policy pol
   join pg_class c on c.oid = pol.polrelid
