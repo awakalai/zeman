@@ -3,7 +3,7 @@ import { supabase } from "./lib/supabase";
 import { createReceiptIngestionCommand, ingestReceiptBatch } from "./services/receiptIngestion";
 import { forgetSend, outcomeText, pendingSend, rememberSend, resolveSendOutcome, settleFailedSend, stageText } from "./services/receiptSendState";
 import { arithmeticObjection, receiptNetFrom, sendableSet, validateReceiptArithmetic } from "./services/receiptValidation";
-import { intakeReceipt, intakeStatusText, requestStoredReceiptOcr } from "./services/receiptIntake";
+import { intakeReceipt, intakeStatusText, receiptReadFailureText, requestStoredReceiptOcr } from "./services/receiptIntake";
 import { DICT } from "./i18n/dictionary";
 import { computeInventoryPosition } from "./services/inventoryAccounting";
 import { createReceiptReviewCommand, finalizeReceiptBatch, loadReceiptPolicy, reviewReceiptBatch } from "./services/receiptReview";
@@ -6889,9 +6889,13 @@ function ReceiptUploader({ customerId, customerName, partnerId, uploaderId, dire
           }
         } catch (e) {
           const temporary = isTemporaryOcrError(e);
+          // What the server said, when it said anything. Every read failure used to reach this
+          // line as the same sentence — the image is safe, it will be retried — so an unset API
+          // key and an expired session were indistinguishable on screen and in a screenshot.
+          const named = receiptReadFailureText(e);
           const reason = temporary
             ? ocrRetryNote(e)
-            : `نەتوانرا بخوێندرێتەوە: ${String(e?.message || e)}`;
+            : `نەتوانرا بخوێندرێتەوە: ${named || String(e?.message || e)}`;
           patchRow(id, {
             status: temporary ? "retry" : "error",
             counted: false,
@@ -6969,9 +6973,10 @@ function ReceiptUploader({ customerId, customerName, partnerId, uploaderId, dire
       patchRow(id, { ...ready, intakeState: serverResult.state });
     } catch (e) {
       const temporary = isTemporaryOcrError(e);
+      const named = receiptReadFailureText(e);
       const reason = temporary
         ? ocrRetryNote(e, "خزمەتگوزاری خوێندنەوە هێشتا کاتێک بەردەست نییە")
-        : `نەتوانرا دووبارە بخوێندرێتەوە: ${String(e?.message || e)}`;
+        : `نەتوانرا دووبارە بخوێندرێتەوە: ${named || String(e?.message || e)}`;
       patchRow(id, {
         status: temporary ? "retry" : "error",
         counted: false,

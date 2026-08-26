@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   intakeReceipt, requestStoredReceiptOcr, submitReceiptDocuments,
-  intakeStatusText, INTAKE_STAGE, ReceiptIntakeError,
+  intakeStatusText, INTAKE_STAGE, ReceiptIntakeError, receiptReadFailureText,
 } from "../src/services/receiptIntake.js";
 
 const jsonResponse = (body, { status = 200 } = {}) => ({
@@ -245,4 +245,36 @@ test("the canonical intake has no migration-missing fallback to client OCR", asy
   assert.doesNotMatch(service, /sarraf_receipt_intake_extracted|readImage|p_flow|p_expected_currency/);
   assert.match(service, /sarraf_receipt_intake_begin_v3/);
   assert.match(service, /\/api\/receipt-ocr/);
+});
+
+// Every read failure reached the uploader as one sentence — "the image is safe, it will be
+// retried" — whatever the server had actually said. An unset OCR API key and an expired session
+// looked identical, on screen and in a screenshot, and neither the person uploading nor anyone
+// reading over their shoulder could tell which had happened.
+test("a read failure carries the server's own status, code and reason", async () => {
+  const client = stubClient();
+  const result = await intakeReceipt({
+    client,
+    blob,
+    documentId: "doc-503",
+    batchId: "batch-9",
+    fetchImpl: async () => jsonResponse(
+      { code: "server_not_configured", message: "receipt OCR service is not configured", retryable: true },
+      { status: 503 }),
+  });
+  const failure = result.readError;
+  assert.equal(failure.stage, "ocr");
+  assert.equal(failure.code, "server_not_configured");
+  // Dropped before, so isTemporaryOcrError could never see it and a 503 was judged permanent.
+  assert.equal(failure.status, 503);
+  assert.equal(failure.evidenceKept, true);
+  assert.equal(result.state, "stored_retryable");
+});
+
+test("a named failure says what to do about it, and an unnamed one still says which", () => {
+  assert.match(receiptReadFailureText({ code: "server_not_configured" }), /کلیلی API/);
+  assert.match(receiptReadFailureText({ code: "session_required" }), /چوونەژوورەوە/);
+  // Never invented, never swallowed.
+  assert.match(receiptReadFailureText({ code: "something_new" }), /something_new/);
+  assert.equal(receiptReadFailureText({}), null);
 });

@@ -40,9 +40,40 @@ export class ReceiptIntakeError extends Error {
     this.cause = cause;
     this.evidenceKept = evidenceKept;
     this.code = cause?.code || null;
+    // Carried, not dropped. The uploader's screen decides whether a failure is temporary by
+    // reading `status`, and this class kept only `code` — so a 503 from a reader that was
+    // briefly unavailable arrived with no status at all, was judged permanent, and the receipt
+    // was marked rejected instead of waiting. `reason` is what the server actually said, which
+    // is the difference between "no API key is configured" and "your session expired": both
+    // used to reach the screen as the same sentence.
+    this.status = Number(cause?.status) || null;
+    this.requestId = cause?.requestId || null;
+    this.reason = cause?.message || null;
     this.retryable = Boolean(cause?.retryable || stage === "ocr");
     this.outcomeKnown = cause?.outcomeKnown !== false;
   }
+}
+
+/** What an uploader can act on, for the failures the OCR route actually names. */
+export function receiptReadFailureText(error) {
+  const code = String(error?.code || "");
+  const named = {
+    server_not_configured: "خزمەتگوزاری خوێندنەوە لەسەر سێرڤەر ڕێک نەخراوە — کلیلی API دانەنراوە",
+    session_required: "چوونەژوورەوەکەت بەسەرچووە — دەرچۆ و دووبارە بچۆرە ژوورەوە",
+    receipt_not_owned: "ئەم فیشە هی تۆ نییە",
+    receipt_not_found: "فیشەکە نەدۆزرایەوە",
+    stored_image_unavailable: "وێنە پارێزراوەکە بەردەست نییە",
+    invalid_image_signature: "ئەم فایلە وێنەیەکی پشتگیریکراو نییە",
+    stored_image_changed: "بایتەکانی وێنەکە گۆڕاون دوای پاراستن",
+    receipt_ocr_rate_limited: "سنووری خوێندنەوە پڕبووە — کەمێک دواتر",
+    ocr_record_failed: "ئەنجامی خوێندنەوە تۆمار نەکرا",
+  }[code];
+  if (named) return named;
+  if (!code) return null;
+  // Never invent a translation for a code nobody has seen. Showing it verbatim is what lets
+  // somebody act on it — an unnamed failure that reads the same as every other unnamed failure
+  // is how an unset API key looked identical to an expired session for a whole evening.
+  return `خوێندنەوە سەرکەوتوو نەبوو (${code})`;
 }
 
 async function accessToken(client) {
