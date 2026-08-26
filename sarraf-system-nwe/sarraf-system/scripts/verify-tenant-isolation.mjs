@@ -171,6 +171,38 @@ try {
     if (Number(buy) !== 9.90) throw new Error(`the spread was overwritten: buy_rate is ${buy}, not 9.90`);
   });
 
+  // ── the health report, asked by a person rather than by a superuser ─────────
+  //
+  // The manager opened the health tab and it named fourteen tables as missing from the database.
+  // All fourteen were there. information_schema shows a table only to somebody holding a
+  // privilege on it, and these reports are SECURITY INVOKER, so they ran as the person asking and
+  // could not see the internal tables — the command logs, the counters, the control settings —
+  // which no client may read directly.
+  //
+  // Every gate ran them as the superuser, who sees everything, so every gate agreed the report
+  // was fine. This is the same shape as the tenancy policies: a check that never ran as the role
+  // that actually asks.
+  check("the health report says the same thing to a manager as to the superuser", () => {
+    const mgr = psql(`select coalesce(auth_id::text,'') from public.app_users
+                      where admin_level='manager' and not deleted limit 1`).trim();
+    const asSuper = psql("select count(*) from public.sarraf_schema_tables()").trim();
+    const asManager = asUser(mgr, "select count(*) from public.sarraf_schema_tables()").trim();
+    if (asSuper !== asManager) {
+      const named = asUser(mgr,
+        `select coalesce(string_agg(table_name, ', ' order by table_name), '')
+           from public.sarraf_schema_tables()`);
+      throw new Error(`the superuser sees ${asSuper} problems and the manager ${asManager}: ${named.slice(0, 240)}`);
+    }
+  });
+
+  check("a business owner is told the same about the schema as anyone else", () => {
+    const asSuper = psql("select count(*) from public.sarraf_schema_drift()").trim();
+    const asOwner = asUser(A_UID, "select count(*) from public.sarraf_schema_drift()").trim();
+    if (asSuper !== asOwner) {
+      throw new Error(`drift is ${asSuper} for the superuser and ${asOwner} for a business owner`);
+    }
+  });
+
   // ── and the manager, who is meant to see everything ─────────────────────────
   check("the manager still sees both businesses", () => {
     const mgr = psql(`select coalesce(auth_id::text,'') from public.app_users
