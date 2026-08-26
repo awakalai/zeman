@@ -24,7 +24,11 @@
 select d.id, d.state, d.received_at,
        exists(select 1 from storage.objects o
                where o.bucket_id='receipts' and o.name=d.storage_path) as image_is_stored,
-       d.ocr_attempts, d.last_error_code, d.image_sha256 is not null as server_attested
+       d.ocr_attempts,
+       -- A `client:` prefix is the browser reporting what /api/receipt-ocr answered it, which is
+       -- the only record of a failure that happened before the reader was ever called.
+       d.last_error_code,
+       d.image_sha256 is not null as server_attested
   from public.receipt_documents d
  order by d.received_at desc limit 12;
 

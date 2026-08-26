@@ -3,7 +3,7 @@ import { supabase } from "./lib/supabase";
 import { createReceiptIngestionCommand, ingestReceiptBatch } from "./services/receiptIngestion";
 import { forgetSend, outcomeText, pendingSend, rememberSend, resolveSendOutcome, settleFailedSend, stageText } from "./services/receiptSendState";
 import { arithmeticObjection, receiptNetFrom, sendableSet, validateReceiptArithmetic } from "./services/receiptValidation";
-import { intakeReceipt, intakeStatusText, receiptReadFailureText, requestStoredReceiptOcr } from "./services/receiptIntake";
+import { intakeReceipt, intakeStatusText, noteReceiptReadFailure, receiptReadFailureText, requestStoredReceiptOcr } from "./services/receiptIntake";
 import { DICT } from "./i18n/dictionary";
 import { computeInventoryPosition } from "./services/inventoryAccounting";
 import { createReceiptReviewCommand, finalizeReceiptBatch, loadReceiptPolicy, reviewReceiptBatch } from "./services/receiptReview";
@@ -6972,6 +6972,9 @@ function ReceiptUploader({ customerId, customerName, partnerId, uploaderId, dire
       const ready = await classifyParsed(id, r, d);
       patchRow(id, { ...ready, intakeState: serverResult.state });
     } catch (e) {
+      // The retry path reaches the reader without going through intakeReceipt, so it has to write
+      // the reason down itself or a retried failure is as silent as the first one was.
+      noteReceiptReadFailure(supabase, r.documentId, e);
       const temporary = isTemporaryOcrError(e);
       const named = receiptReadFailureText(e);
       const reason = temporary

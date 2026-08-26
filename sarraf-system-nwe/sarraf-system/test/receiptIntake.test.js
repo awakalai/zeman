@@ -278,3 +278,39 @@ test("a named failure says what to do about it, and an unnamed one still says wh
   assert.match(receiptReadFailureText({ code: "something_new" }), /something_new/);
   assert.equal(receiptReadFailureText({}), null);
 });
+
+// Where the reading failed was knowable and nobody wrote it down. A failure inside the reader
+// leaves an attempt row; a failure before it — no configuration, no session, the object could
+// not be downloaded — left the database saying `uploading` with a null error, identically, for
+// every cause. The browser is told the code every time and kept it to itself.
+test("a read failure is written down on the receipt it failed for", async () => {
+  const client = stubClient();
+  await intakeReceipt({
+    client,
+    blob,
+    documentId: "doc-note",
+    batchId: "batch-9",
+    fetchImpl: async () => jsonResponse(
+      { code: "server_not_configured", message: "not configured", retryable: true }, { status: 503 }),
+  });
+  const note = client.calls.rpc.find((c) => c.fn === "sarraf_receipt_note_read_failure");
+  assert.ok(note, "the reason was never recorded, so the database still says nothing happened");
+  assert.equal(note.args.p_document_id, "doc-note");
+  assert.equal(note.args.p_code, "server_not_configured");
+  assert.equal(note.args.p_status, 503);
+});
+
+test("recording the reason can fail without losing the receipt", async () => {
+  const client = stubClient({
+    rpc: { sarraf_receipt_note_read_failure: Promise.reject(new Error("write refused")) },
+  });
+  const result = await intakeReceipt({
+    client,
+    blob,
+    documentId: "doc-note-2",
+    batchId: "batch-9",
+    fetchImpl: async () => { throw new Error("network lost"); },
+  });
+  assert.equal(result.state, "stored_retryable");
+  assert.equal(result.evidenceKept, true);
+});
