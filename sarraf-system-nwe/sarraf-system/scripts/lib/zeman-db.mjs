@@ -79,7 +79,11 @@ port = ${PORT}
       do $$ begin
         if not exists (select 1 from pg_roles where rolname='anon') then create role anon nologin; end if;
         if not exists (select 1 from pg_roles where rolname='authenticated') then create role authenticated nologin; end if;
-        if not exists (select 1 from pg_roles where rolname='service_role') then create role service_role nologin; end if;
+        -- BYPASSRLS, as Supabase creates it. Without that the fixture models a service_role
+        -- that is subject to row-level security, which the real one is not — and a gate built on
+        -- a wrong model of the server's own key cannot see what the server's own key cannot do.
+        -- app_users held no grant for it for weeks and nothing here noticed.
+        if not exists (select 1 from pg_roles where rolname='service_role') then create role service_role nologin bypassrls; end if;
       end $$;
       create schema if not exists auth;
       create or replace function auth.uid() returns uuid language sql stable

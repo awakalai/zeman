@@ -115,7 +115,21 @@ async function requireAdminAal2(req, authClient, service) {
     .eq("deleted", false)
     .maybeSingle();
 
-  if (profileError || !profile?.id) {
+  // A failed query and an absent row are different facts, and collapsing them cost a day.
+  //
+  // service_role held no grant on app_users, so this came back `permission denied for table
+  // app_users` — and was reported as "this login has no account in the system". The owner was
+  // signed in, looking at their own screens, and told their account did not exist. I believed
+  // the message and went looking for a stale session, which it was not.
+  //
+  // An error is now an error, and says what the database said.
+  if (profileError) {
+    const e = new Error(`account lookup failed: ${profileError.message || profileError.code || "unknown"}`);
+    e.status = 500;
+    e.code = "profile_lookup_failed";
+    throw e;
+  }
+  if (!profile?.id) {
     const e = new Error("this login has no account in the system");
     e.status = 403;
     e.code = "no_profile";
@@ -207,7 +221,11 @@ export default async function handler(req, res) {
             ? "پاراستنی دوو هەنگاوی پێویستە"
             : e?.code === "no_profile"
               ? "ئەم لۆگینە ئەکاونتێکی نییە لە سیستەمەکەدا"
-              : "تەنها ئەدمین دەتوانێت ئەکاونت بەڕێوە ببات",
+              // Named as a server fault, because it is one. Telling somebody their account is
+              // missing when the server could not look is blaming them for our own permissions.
+              : e?.code === "profile_lookup_failed"
+                ? "سێرڤەرەکە نەیتوانی ئەکاونتەکە بخوێنێتەوە — کێشەیەکی سیستەمە، نەک هی ئەکاونتەکەت"
+                : "تەنها ئەدمین دەتوانێت ئەکاونت بەڕێوە ببات",
       code: e?.code || null,
     });
   }
