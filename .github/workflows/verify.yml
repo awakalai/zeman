@@ -1,6 +1,6 @@
 # The gate §15.24 asks for: nothing merges that a verifier refuses.
 #
-# Nine checks run on every push and every pull request. They are split into separate jobs on
+# Every check runs on every push and every pull request. They are split into separate jobs on
 # purpose — a red tick should say WHICH contract broke without anyone opening a log — and the
 # heavier ones only start once the fast ones have passed, so an obvious mistake fails in a
 # minute instead of ten.
@@ -61,7 +61,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        check: [brand, share, search]
+        # names is the no-undef rule this repository has no linter for. Three identifiers that
+        # were read and never declared made receipt upload throw ReferenceError inside an event
+        # handler — no message, no rows, nothing on the screen — and every other gate passed.
+        check: [brand, share, search, names]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -138,6 +141,29 @@ jobs:
       - run: npm ci
       - run: npm run verify:flows
 
+  # Can one buyer's staff reach another buyer's rows? Every other database gate connects as the
+  # superuser, which ignores row-level security entirely, so none of them has ever executed a
+  # tenant policy. This one connects as `authenticated` and as `sarraf_definer`.
+  isolation:
+    name: tenant isolation
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: sarraf-system-nwe/sarraf-system/package-lock.json
+      - name: Install PostgreSQL 16
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-16 postgresql-client-16
+          echo "/usr/lib/postgresql/16/bin" >> "$GITHUB_PATH"
+      - run: npm ci
+      - run: npm run verify:isolation
+
   # Each role driven through the shipped interface in a real browser.
   roles:
     name: per-role browser boundaries
@@ -162,12 +188,17 @@ jobs:
   verified:
     name: verified
     runs-on: ubuntu-latest
-    needs: [build-and-test, contracts, security, accounting, flows, roles]
+    needs: [build-and-test, contracts, security, accounting, flows, isolation, roles]
     if: always()
     steps:
       - name: Refuse anything that did not pass
         run: |
-          results='${{ join(needs.*.result, " ") }}'
+          # Single quotes are the ONLY string delimiter a workflow expression accepts. The double
+          # quotes that were here made the expression unparseable, and an unparseable expression
+          # does not fail the job — it stops the whole workflow from starting. Every run since
+          # this file was written ended in under a second with no jobs, and the tick beside each
+          # commit was red for a reason nobody could open a log to see.
+          results="${{ join(needs.*.result, ' ') }}"
           echo "upstream results: $results"
           for r in $results; do
             if [ "$r" != "success" ]; then

@@ -253,11 +253,23 @@ try {
       if (url.includes("/app_users")) {
         return json(Object.values(USERS).map((u) => ({ ...u, auth_id: `auth-${u.id}`, deleted: false, rate: 0, scope_curs: [] })));
       }
-      if (url.includes("/currencies")) {
-        return json([
-          { id: "usd", code: "USD", name: "Dollar", dec: 2, buy_rate: 1, sell_rate: 1 },
-          { id: "iqd", code: "IQD", name: "Dinar", dec: 0, buy_rate: 1400, sell_rate: 1420 },
-        ]);
+      // The catalogue, and the caller's own rates over it.
+      //
+      // This used to answer only `/currencies`, the table. 202608250002 stopped the browser
+      // reading that table — its rate belongs to the installation, and reading it directly made
+      // one business's rate the other's — and moved every caller to sarraf_currencies(). The
+      // stub did not follow, so the call fell through to the catch-all `/rpc/` branch and came
+      // back as `{}`; loadAll then ran `(c.data || []).map(...)` over an object, threw inside
+      // its own try, and left every role on "بارکردنی داتا..." forever.
+      //
+      // Every "cannot reach" check passed on that empty screen, and every "can reach" check
+      // failed. Nobody saw it, because the workflow this gate runs in has never once started.
+      const CURRENCIES = [
+        { id: "usd", code: "USD", name: "Dollar", dec: 2, rate: 1, buy_rate: 1, sell_rate: 1, own_rate: false },
+        { id: "iqd", code: "IQD", name: "Dinar", dec: 0, rate: 1410, buy_rate: 1400, sell_rate: 1420, own_rate: true },
+      ];
+      if (url.includes("/rpc/sarraf_currencies") || url.includes("/currencies")) {
+        return json(CURRENCIES);
       }
       // The administrator path refuses to load unless the database reports the contract it was
       // built against. Stubbed so the role check exercises the interface, not the migration.
