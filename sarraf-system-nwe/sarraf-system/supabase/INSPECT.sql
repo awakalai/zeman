@@ -1,116 +1,94 @@
--- Did the three logins become the three accounts they were meant to be?
+-- Why does the account-creation route say the signed-in owner has no account?
 --
 -- Read-only. The workflow opens the transaction with `set transaction read only`, so the server
 -- refuses any write here rather than trusting that none was written.
 --
--- The trigger on auth.users was supposed to notice each login as it was created and build the
--- account with the rank and business already decided. It swallows its own errors on purpose — a
--- failure there must not stop Supabase creating the login — which means a failure is silent, and
--- the only way to know is to look.
+-- The owner signs in as سەرخێڵ, opens the people screen, and is told their login has no account.
+-- The account is there — three separate reports have said so. So the question is not whether the
+-- row exists but why one particular reader cannot see it, and that reader is /api/admin-user,
+-- which looks the profile up with the service-role key:
+--
+--   service.from("app_users").select(...).eq("auth_id", user.id).eq("deleted", false).maybeSingle()
+--
+-- Guessing at that has already cost one wrong answer — a stale session, which it was not. So this
+-- runs the same query under the same role, and prints what it gets.
 
 \pset format aligned
 \pset border 2
-\pset null '—'
+\pset null '⟨null⟩'
 \pset pager off
 
 \echo ''
-\echo '════════ 1. The three accounts ════════'
+\echo '════════ 1. The accounts, exactly as stored ════════'
+\echo ''
+\echo 'deleted is shown as it really is. The route filters on `deleted = false`, and a null there'
+\echo 'is not false — it would drop the row and report the login as having no account.'
 \echo ''
 
-select
-  coalesce(u.admin_level, u.role)                   as rank,
-  u.name,
-  coalesce(t.name, '— (manager: no business)')      as business,
-  a.email                                           as sign_in,
-  case when u.deleted then 'deactivated' else 'active' end as state
-from public.app_users u
-left join auth.users a on a.id = u.auth_id
-left join public.tenants t on t.id = u.tenant_id
-order by case coalesce(u.admin_level, u.role)
-           when 'manager' then 1 when 'owner' then 2 else 3 end, u.name;
-
-\echo ''
-\echo '════════ 2. Was anything left unclaimed, or claimed twice? ════════'
-\echo ''
-
-select p.email,
-       p.name,
-       coalesce(p.admin_level, p.role) as intended_rank,
-       coalesce(t.name, '—')           as intended_business,
-       case
-         when p.claimed_at is null and a.id is null then 'waiting — no login created yet'
-         when p.claimed_at is null and a.id is not null then '⚠ LOGIN EXISTS BUT NO ACCOUNT WAS BUILT'
-         when u.id is null then '⚠ marked claimed but the account is gone'
-         else 'built'
-       end as outcome
-  from public.pending_accounts p
-  left join public.tenants t on t.id = p.tenant_id
-  left join auth.users a on lower(a.email) = lower(p.email)
-  left join public.app_users u on u.id = p.app_id
- order by case coalesce(p.admin_level, p.role)
-            when 'manager' then 1 when 'owner' then 2 else 3 end, p.email;
-
-\echo ''
-\echo '════════ 3. Logins with no account, and accounts with no login ════════'
-\echo ''
-
-select 'login with no account' as problem, a.email as who
-  from auth.users a
- where not exists (select 1 from public.app_users u where u.auth_id = a.id)
-union all
-select 'account with no login', u.name
+select u.id, u.name, coalesce(u.admin_level, u.role) as rank,
+       u.tenant_id, u.deleted, u.auth_id,
+       (a.id is not null) as login_exists
   from public.app_users u
- where u.auth_id is null or not exists (select 1 from auth.users a where a.id = u.auth_id)
- order by 1, 2;
+  left join auth.users a on a.id = u.auth_id
+ order by u.id;
 
 \echo ''
-\echo '════════ 4. The businesses, and whether each can be signed into ════════'
+\echo '════════ 2. The route''s own query, run as the role the route uses ════════'
 \echo ''
 
-select t.id, t.name,
-       case when t.active then 'active' else 'suspended' end as state,
-       count(u.id) filter (where not u.deleted) as accounts,
-       count(u.id) filter (where not u.deleted and u.admin_level = 'owner') as owners
-  from public.tenants t
-  left join public.app_users u on u.tenant_id = t.id
- group by t.id, t.name, t.active
- order by t.id;
-
-\echo ''
-\echo '════════ 5. Is the installation ready to be signed into? ════════'
-\echo ''
-
-do $ready$
-declare
-  v_managers int; v_owners int; v_tenants int; v_orphan_logins int; v_unbuilt int;
+do $asservice$
+declare r record; n integer;
 begin
-  select count(*) into v_managers from public.app_users
-   where admin_level = 'manager' and not deleted and auth_id is not null;
-  select count(*) into v_owners from public.app_users
-   where admin_level = 'owner' and not deleted and auth_id is not null;
-  select count(*) into v_tenants from public.tenants where active;
-  select count(*) into v_orphan_logins from auth.users a
-   where not exists (select 1 from public.app_users u where u.auth_id = a.id);
-  select count(*) into v_unbuilt from public.pending_accounts p
-    join auth.users a on lower(a.email) = lower(p.email)
-   where p.claimed_at is null;
-
-  raise notice 'managers who can sign in: %', v_managers;
-  raise notice 'business owners who can sign in: %', v_owners;
-  raise notice 'active businesses: %', v_tenants;
-  raise notice 'logins with no account behind them: %', v_orphan_logins;
-
-  if v_managers = 1 and v_owners = 2 and v_tenants = 2
-     and v_orphan_logins = 0 and v_unbuilt = 0 then
-    raise notice '';
-    raise notice '✓ ready: one manager, two businesses with an owner each, and nothing left over';
-  else
-    raise notice '';
-    if v_managers <> 1 then raise notice '⚠ expected exactly one manager, found %', v_managers; end if;
-    if v_owners <> 2 then raise notice '⚠ expected two business owners, found %', v_owners; end if;
-    if v_tenants <> 2 then raise notice '⚠ expected two active businesses, found %', v_tenants; end if;
-    if v_orphan_logins > 0 then raise notice '⚠ % login(s) can authenticate with no account', v_orphan_logins; end if;
-    if v_unbuilt > 0 then raise notice '⚠ % login(s) exist that the trigger did not build', v_unbuilt; end if;
-  end if;
+  for r in select u.auth_id, u.name from public.app_users u where u.auth_id is not null loop
+    -- SET LOCAL ROLE is what makes this the route''s question rather than a superuser''s: RLS is
+    -- decided by current_user, and the superuser this script connects as sees everything.
+    set local role service_role;
+    select count(*) into n from public.app_users
+     where auth_id = r.auth_id and deleted = false;
+    reset role;
+    raise notice 'service_role looking up % → % row(s)%', r.name, n,
+      case when n = 1 then '' else '   ⚠ THE ROUTE WOULD REFUSE THIS LOGIN' end;
+  end loop;
+exception when others then
+  reset role;
+  raise notice '⚠ the lookup failed outright as service_role: %', sqlerrm;
 end
-$ready$;
+$asservice$;
+
+\echo ''
+\echo '════════ 3. What service_role is allowed to do with app_users ════════'
+\echo ''
+
+select 'select' as privilege,
+       has_table_privilege('service_role', 'public.app_users', 'select') as service_role,
+       has_table_privilege('authenticated', 'public.app_users', 'select') as authenticated
+union all
+select 'insert',
+       has_table_privilege('service_role', 'public.app_users', 'insert'),
+       has_table_privilege('authenticated', 'public.app_users', 'insert')
+union all
+select 'update',
+       has_table_privilege('service_role', 'public.app_users', 'update'),
+       has_table_privilege('authenticated', 'public.app_users', 'update');
+
+\echo ''
+\echo '════════ 4. Row-level security on app_users, and who each policy is for ════════'
+\echo ''
+
+select c.relrowsecurity as rls_on,
+       c.relforcerowsecurity as forced,
+       (select rolbypassrls from pg_roles where rolname = 'service_role') as service_role_bypasses
+  from pg_class c
+  join pg_namespace n on n.oid = c.relnamespace and n.nspname = 'public'
+ where c.relname = 'app_users';
+
+select pol.polname,
+       case pol.polpermissive when true then 'permissive' else 'RESTRICTIVE' end as kind,
+       coalesce((select string_agg(r.rolname, ', ') from pg_roles r
+                  where r.oid = any(pol.polroles)), 'everyone') as applies_to,
+       pg_get_expr(pol.polqual, pol.polrelid) as using_expression
+  from pg_policy pol
+  join pg_class c on c.oid = pol.polrelid
+  join pg_namespace n on n.oid = c.relnamespace and n.nspname = 'public'
+ where c.relname = 'app_users'
+ order by pol.polpermissive, pol.polname;
