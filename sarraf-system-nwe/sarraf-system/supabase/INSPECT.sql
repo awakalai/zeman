@@ -1,24 +1,11 @@
--- Has an image EVER reached the receipts bucket, and when did that stop?
+-- Is the storage fix live, and has an image landed since?
 --
--- The last inspection settled which half fails: four receipts were claimed in the last hour,
--- every one of them sits at `uploading`, and the bucket holds nothing. So the claim works and
--- the storage upload is refused.
+-- 202608280002 rewrote the two policies that refused every upload: the insert one demanded a
+-- size and a type that Supabase Storage does not know yet when it reserves the name, and the
+-- update one forbade completing an object that a claim points at — which every claimed object
+-- is, by construction. It also gave the bucket the size and type limits it never had.
 --
--- Only one thing can refuse it. The permissive grant `rimg_insert` allows any insert into the
--- bucket; the restrictive `receipt_storage_assurance_insert` then requires ALL of:
---
---     owner_id = auth.uid()::text
---     name like 'ingest/%'
---     coalesce(metadata->>'size','') ~ '^[0-9]+$'
---     (metadata->>'size')::bigint between 1 and 10485760
---     lower(metadata->>'mimetype') in (...)
---
--- The first two are satisfied by construction — the path comes from the claim and the owner is
--- the caller. The other three read `metadata`, and Supabase's storage API creates the row to
--- reserve the name BEFORE it knows the object's size or type. If metadata is empty at that
--- moment, coalesce(...,'') is '', the regex fails, and the upload is refused every time.
---
--- This asks the database to date it. Objects before the policy and none after is the proof.
+-- Two questions, and the second one answers itself as soon as anybody uploads.
 
 \pset format aligned
 \pset border 2
@@ -26,56 +13,55 @@
 \pset pager off
 
 \echo ''
-\echo '════════ 1. Everything the bucket holds, by day ════════'
-\echo ''
-\echo 'receipt_storage_assurance_insert was created by 202608140002. If uploads stop dead on the'
-\echo 'day it was applied, the policy is the cause and nothing else needs arguing.'
+\echo '════════ 1. Is the correction applied? ════════'
 \echo ''
 
-select date(created_at) as day, count(*) as objects,
-       count(*) filter (where metadata ? 'size')     as with_size,
-       count(*) filter (where metadata ? 'mimetype') as with_mimetype,
-       min(created_at) as first, max(created_at) as last
-  from storage.objects
- where bucket_id = 'receipts'
- group by 1 order by 1 desc limit 30;
+select version, applied_at from public.schema_migrations
+ where version >= '202608280001' order by version;
 
 \echo ''
-\echo '════════ 2. The most recent objects, whenever they were ════════'
+\echo 'The bucket''s own limits, which storage-api enforces while holding the bytes.'
+\echo 'Both were null until this migration.'
 \echo ''
 
-select name, owner_id, created_at, metadata
-  from storage.objects
- where bucket_id = 'receipts'
- order by created_at desc limit 10;
+select id, file_size_limit, allowed_mime_types from storage.buckets where id = 'receipts';
 
 \echo ''
-\echo '════════ 3. Totals, so an empty table is not mistaken for a filtered one ════════'
+\echo 'And the insert policy as it now stands. A size that is not stated is no longer a refusal.'
 \echo ''
 
-select (select count(*) from storage.objects)                                as objects_all_buckets,
-       (select count(*) from storage.objects where bucket_id='receipts')     as objects_in_receipts,
-       (select count(*) from public.receipt_documents)                       as receipt_documents,
-       (select count(*) from public.receipt_documents where state='uploading') as stuck_at_uploading,
-       (select count(*) from public.receipts)                                as legacy_receipt_rows,
-       (select count(*) from public.receipt_batches)                         as legacy_batches;
+select pol.polname,
+       case pol.polcmd when 'a' then 'INSERT' when 'w' then 'UPDATE' else pol.polcmd::text end as command,
+       pg_get_expr(pol.polwithcheck, pol.polrelid) like '%coalesce((metadata ->> ''size''::text), ''''::text) = ''''%'
+         as allows_an_object_still_being_written
+  from pg_policy pol
+  join pg_class c on c.oid = pol.polrelid
+  join pg_namespace n on n.oid = c.relnamespace and n.nspname = 'storage'
+ where c.relname = 'objects' and pol.polname in
+       ('receipt_storage_assurance_insert','receipt_storage_assurance_update')
+ order by pol.polname;
 
 \echo ''
-\echo '════════ 4. When each storage policy was created ════════'
+\echo '════════ 2. Has an image landed since? ════════'
 \echo ''
-\echo 'A policy has no timestamp of its own, so this dates the migrations instead.'
-\echo ''
-
-select version, applied_at
-  from public.schema_migrations
- where version >= '202608140002'
- order by version limit 20;
-
-\echo ''
-\echo '════════ 5. The bucket''s own limits, which are where size and type belong ════════'
-\echo ''
-\echo 'storage-api enforces these itself, before any policy runs, and it knows the size at the'
-\echo 'moment it matters. Both are unset.'
+\echo 'Nothing has reached this bucket since 17 August. An object dated today is the proof that'
+\echo 'the whole path works: claim, store, and read.'
 \echo ''
 
-select id, public, file_size_limit, allowed_mime_types from storage.buckets;
+select o.name, o.created_at, (o.metadata->>'size')::bigint as bytes, o.metadata->>'mimetype' as mime
+  from storage.objects o
+ where o.bucket_id = 'receipts'
+ order by o.created_at desc limit 8;
+
+\echo ''
+\echo 'And where each claimed receipt has got to. `uploading` means the image never arrived;'
+\echo 'anything past it means it did.'
+\echo ''
+
+select d.id, d.state, d.received_at,
+       exists(select 1 from storage.objects o
+               where o.bucket_id='receipts' and o.name = d.storage_path) as image_is_stored,
+       (select e.currency || ' ' || e.gross_amount from public.receipt_extractions e
+         where e.document_id = d.id and e.is_original) as what_was_read
+  from public.receipt_documents d
+ order by d.received_at desc limit 12;
