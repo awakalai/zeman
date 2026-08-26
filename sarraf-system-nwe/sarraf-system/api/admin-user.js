@@ -135,6 +135,8 @@ async function requireAdminAal2(req, authClient, service) {
 //   manager  — the person who maintains the system. Above everyone, resets any password.
 //   owner    — the business owner who runs the exchange.
 //   operator — the owner's staff.
+// Eight characters, matching the interface. The two must agree or the screen accepts what the
+// server then refuses, which reads as the system being broken rather than as a rule.
 const ADMIN_LEVELS = new Set(["manager", "owner", "operator"]);
 
 const levelOf = (profile) =>
@@ -254,7 +256,7 @@ export default async function handler(req, res) {
       const address = safeText(body.address, 300);
       const note = safeText(body.note, 1000);
 
-      if (!name || phone.length < 7 || password.length < 12 || !ROLE_SET.has(role)) {
+      if (!name || phone.length < 7 || password.length < 8 || !ROLE_SET.has(role)) {
         return res.status(400).json({ error: "زانیاریی ئەکاونتەکە تەواو یان دروست نییە" });
       }
       if (!Number.isFinite(rate) || rate < 0 || rate > 100) {
@@ -407,7 +409,7 @@ export default async function handler(req, res) {
     if (action === "reset_password") {
       const userId = String(body.userId || "").trim();
       const password = String(body.password || "");
-      if (!userId || password.length < 12) {
+      if (!userId || password.length < 8) {
         return res.status(400).json({ error: "userId و وشەی نهێنیی لانیکەم ١٢ پیت پێویستن" });
       }
 
