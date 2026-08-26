@@ -674,17 +674,42 @@ const Back = ({ onClick, t }) => (
   </button>
 );
 
-function AdminCenterHub({ lang = "ku", onNavigate, isManager = false }) {
+function AdminCenterHub({ lang = "ku", onNavigate }) {
   const label = (ku, en, ar) => lang === "en" ? en : lang === "ar" ? ar : ku;
+  // Five groups of three or four, not three groups where the middle one holds eleven.
+  //
+  // A list of eleven is not a list, it is a wall — nobody scans it, they hunt through it, and
+  // hunting through the same wall every day is how a tool that has everything comes to feel like
+  // a tool that has nothing. The grouping below is the work itself: what you do today, the
+  // receipts, the money owed and held, the checking, and the protecting.
+  //
+  // Nothing is removed. Every screen that was reachable is still reachable, and the two that
+  // moved out went to the manager's own navigation, where they belong: an owner is the top of
+  // their own business and no part of the installation that sells it to them.
   const sections = [
     {
       title: label("کاری ڕۆژانە", "Daily operations", "العمليات اليومية"),
       items: [
         ["action-inbox", label("ئینباکسی کارەکان", "Action Inbox", "صندوق الإجراءات"), label("کار و فیش و بڕیارە چاوەڕوانەکان", "Pending work, receipts, and decisions", "الأعمال والإيصالات والقرارات المعلّقة"), Inbox],
         ["approvals", label("کۆنترۆڵ و پەسەندکردن", "Controls & Approvals", "التحكم والموافقات"), label("پەسەندکردنی دوو-ئەدمین و کۆنترۆڵی مەترسی", "Two-admin approval and risk controls", "موافقات إدارية مزدوجة وضوابط المخاطر"), ShieldCheck],
-        ["manager-console", label("کۆنسۆڵی ماناجەر", "Manager Console", "وحدة تحكم المدير"), label("سەرخێڵەکان، ئەکاونتەکان و تەندروستیی سیستەم — تەنها بۆ ماناجەر", "Businesses, accounts and system health — managers only", "الأعمال والحسابات وصحة النظام"), Building2, true],
-        ["manager-center", label("ناوەندی ماناجەر", "Manager Centre", "مركز المدير"), label("پلەکان و گۆڕینی وشەی نهێنی — تەنها بۆ ماناجەر", "Ranks and password resets — managers only", "الرتب وإعادة تعيين كلمات المرور — للمدير فقط"), KeyRound, true],
         ["close", label("بەستنی ڕۆژ", "Day Close", "إغلاق اليوم"), label("ژماردن، جیاوازی و تۆماری کۆتایی ڕۆژ", "Counts, differences, and end-of-day records", "الجرد والفروقات وسجل نهاية اليوم"), ClipboardCheck],
+      ],
+    },
+    {
+      title: label("فیشەکان", "Receipts", "الإيصالات"),
+      items: [
+        ["receipt-review", label("پشکنینی وردی فیش", "Receipt Review", "مراجعة الإيصالات"), label("وێنەی ڕەسەن، ژمارەکان و مێژووی ڕاستکردنەوە", "Original image, figures, and correction history", "الصورة الأصلية والأرقام وسجل التصحيح"), ClipboardCheck],
+        ["receipt-forwarding", label("ناردنی فیش", "Receipt Forwarding", "إرسال الإيصالات"), label("ناردنی فیشی پەسەندکراو بۆ خاوەنەکەی و پێکهاتنەوەی گەیاندن", "Send accepted receipts to their owner and reconcile delivery", "إرسال الإيصالات المعتمدة إلى أصحابها ومطابقة التسليم"), Send],
+        ["partner-holdings", label("ئەوەی لای هاوبەش دانراوە", "Placed With Partners", "المودع لدى الشركاء"), label("کۆمەڵە فیشەکان بەپێی ئەو هاوبەشەی پارەکەی لای دانراوە — وەرگر، بەروار، پلاتفۆرم و فی", "Receipt batches by the partner holding the money — receiver, date, platform and fee", "دفعات الإيصالات حسب الشريك الذي يحتفظ بالمال"), Boxes],
+      ],
+    },
+    {
+      title: label("پارە و قەرز", "Money & debt", "الأموال والديون"),
+      items: [
+        ["debt-center", label("قەرز و قاسە", "Debt & Cashbox", "الديون والخزنة"), label("قەرز بە ئاڕاستەی ڕوون، تەمەن و قاسەی کڕیاران", "Debts by explicit direction, aging, and customer cashboxes", "الديون باتجاه واضح والأعمار وخزائن الزبائن"), Scale],
+        ["cashbox", label("قاسەی کڕیاران", "Customer Cashbox", "خزنة الزبائن"), label("دانان، دەرهێنان و تسویەی قەرز لە قاسە", "Deposit, withdraw, and settle debt from the cashbox", "إيداع وسحب وتسوية الديون"), Wallet],
+        ["partner-accounts", label("حسابی هاوبەشان", "Partner Accounts", "حسابات الشركاء"), label("کریدیت، دابەشکردن و waterfall ـی قەرز", "Credit, disbursement, and debt waterfall", "الائتمان والصرف وتسوية الديون"), Handshake],
+        ["office-payments", label("پارەدانی نووسینگە", "Office Payments", "مدفوعات المكتب"), label("ئەرکی پارەدان و بەڵگە", "Payment assignments and evidence", "مهام الدفع والإثباتات"), Building2],
       ],
     },
     {
@@ -693,13 +718,6 @@ function AdminCenterHub({ lang = "ku", onNavigate, isManager = false }) {
         ["insights", label("ڕەوت و شیکاری", "Trends & Insights", "الاتجاهات والتحليلات"), label("ڕەوتی قازانج، مامەڵە و دۆخی دارایی", "Profit, transaction, and financial trends", "اتجاهات الربح والمعاملات والوضع المالي"), TrendingUp],
         ["integrity", label("ناوەندی یەکپارچەیی", "Integrity Center", "مركز سلامة البيانات"), label("پشکنینی ناکۆکی، دووبارە و پەیوەندیی شکێنراو", "Checks for inconsistencies, duplicates, and broken links", "فحص التعارض والتكرار والروابط المقطوعة"), ShieldAlert],
         ["audit", label("تۆماری گۆڕانکاری", "Change Log", "سجل التغييرات"), label("مێژووی کردار و گۆڕانکارییەکانی سیستەم", "History of system actions and changes", "سجل إجراءات النظام وتغييراته"), History],
-        ["receipt-review", label("پشکنینی فیش", "Receipt Review", "مراجعة الإيصالات"), label("وێنەی ڕەسەن، ژمارەکان و مێژووی ڕاستکردنەوە", "Original image, figures, and correction history", "الصورة الأصلية والأرقام وسجل التصحيح"), ClipboardCheck],
-        ["receipt-forwarding", label("ناردنی فیش", "Receipt Forwarding", "إرسال الإيصالات"), label("ناردنی فیشی پەسەندکراو بۆ خاوەنەکەی و پێکهاتنەوەی گەیاندن", "Send accepted receipts to their owner and reconcile delivery", "إرسال الإيصالات المعتمدة إلى أصحابها ومطابقة التسليم"), Send],
-        ["office-payments", label("پارەدانی نووسینگە", "Office Payments", "مدفوعات المكتب"), label("ئەرکی پارەدان و بەڵگە", "Payment assignments and evidence", "مهام الدفع والإثباتات"), Building2],
-        ["partner-accounts", label("حسابی هاوبەشان", "Partner Accounts", "حسابات الشركاء"), label("کریدیت، دابەشکردن و waterfall ـی قەرز", "Credit, disbursement, and debt waterfall", "الائتمان والصرف وتسوية الديون"), Handshake],
-        ["partner-holdings", label("ئەوەی لای هاوبەش دانراوە", "Placed With Partners", "المودع لدى الشركاء"), label("کۆمەڵە فیشەکان بەپێی ئەو هاوبەشەی پارەکەی لای دانراوە — وەرگر، بەروار، پلاتفۆرم و فی", "Receipt batches by the partner holding the money — receiver, date, platform and fee", "دفعات الإيصالات حسب الشريك الذي يحتفظ بالمال"), Boxes],
-        ["cashbox", label("قاسەی کڕیاران", "Customer Cashbox", "خزنة الزبائن"), label("دانان، دەرهێنان و تسویەی قەرز لە قاسە", "Deposit, withdraw, and settle debt from the cashbox", "إيداع وسحب وتسوية الديون"), Wallet],
-        ["debt-center", label("قەرز و قاسە", "Debt & Cashbox", "الديون والخزنة"), label("قەرز بە ئاڕاستەی ڕوون، تەمەن و قاسەی کڕیاران", "Debts by explicit direction, aging, and customer cashboxes", "الديون باتجاه واضح والأعمار وخزائن الزبائن"), Scale],
         ["export-audit", label("هەناردە و وردبینی", "Export & Audit", "التصدير والتدقيق"), label("هەناردەی سنووردار، timeline و checksum", "Bounded exports, timeline, and checksum", "تصدير محدود وخط زمني وبصمة تحقق"), FileCheck2],
       ],
     },
@@ -716,10 +734,7 @@ function AdminCenterHub({ lang = "ku", onNavigate, isManager = false }) {
       <H sub={label("هەموو ئامرازەکانی ئەدمین لە یەک شوێن؛ هیچ بەشێک لابراو نییە.", "Every admin tool in one place; no feature is removed.", "جميع أدوات الإدارة في مكان واحد؛ لم تتم إزالة أي قسم.")}>
         {label("ناوەندی بەڕێوەبردن", "Admin Center", "مركز الإدارة")}
       </H>
-      {sections
-        .map((section) => ({ ...section, items: section.items.filter((it) => !it[4] || isManager) }))
-        .filter((section) => section.items.length > 0)
-        .map((section) => (
+      {sections.map((section) => (
         <section key={section.title} aria-labelledby={`admin-center-${section.items[0][0]}`}>
           <h3 id={`admin-center-${section.items[0][0]}`} className="text-[12px] font-semibold mb-3" style={{ color: "var(--txt-2)" }}>
             {section.title}
@@ -3366,7 +3381,11 @@ export default function App() {
       items: [
         ["newtx", tr("مامەڵەی نوێ"), ArrowLeftRight],
         ["txs", tr("مامەڵەکان"), ListOrdered],
-        ["receipts", tr("پشکنینی فیش"), ScanLine],
+        // Not "پشکنینی فیش": the admin centre already has a screen by that name, and two
+        // different things with one name is a person opening the wrong one and concluding the
+        // right one is broken. This is the working list of batches — where a batch becomes a
+        // transaction. The other is the per-receipt examination.
+        ["receipts", tr("فیشەکان"), ScanLine],
       ],
     },
     {
@@ -3610,9 +3629,20 @@ export default function App() {
               onMakeTx={(b) => { setPendingBatch(b); setPage("newtx"); }} />}
             {page === "people" && <PeopleHub {...shared} accountMove={accountMove} accountTransfer={accountTransfer} profile={profile} detailId={detailId} setDetailId={setDetailId} onSave={saveTx} transfer={transfer} officePay={officePay} settle={settle} createUser={createUser} deleteUser={deleteUser} setUserRate={setUserRate} flash={flash} />}
             {page === "report" && <Report {...shared} />}
-            {page === "admin-center" && <AdminCenterHub lang={lang} onNavigate={setPage} isManager={isSystemManager} />}
+            {/* The admin centre is one business's world. A manager belongs to no business, so
+                for them it is not a page they should not open — it is a page with no meaning. */}
+            {page === "admin-center" && !isSystemManager && <AdminCenterHub lang={lang} onNavigate={setPage} />}
+
+            {/* The way back, and the door the manager fell through. Integrity, the change log
+                and data protection are on the manager's own navigation and are also filed under
+                the admin centre, so this link appeared for them too and led straight into the
+                exchange's hub — every screen belonging to a business they are not part of. It
+                now returns each rank to where they came from. */}
             {ADMIN_CENTER_PAGE_IDS.has(page) && page !== "admin-center" && (
-              <Back onClick={() => setPage("admin-center")} t={navSectionLabel("گەڕانەوە بۆ ناوەندی بەڕێوەبردن", "Back to Admin Center", "العودة إلى مركز الإدارة")} />
+              <Back onClick={() => setPage(isSystemManager ? "manager-console" : "admin-center")}
+                    t={isSystemManager
+                      ? navSectionLabel("گەڕانەوە بۆ سەرخێڵەکان", "Back to Businesses", "العودة إلى الأعمال")
+                      : navSectionLabel("گەڕانەوە بۆ ناوەندی بەڕێوەبردن", "Back to Admin Center", "العودة إلى مركز الإدارة")} />
             )}
             {page === "action-inbox" && <DeferredPanel><ActionInbox client={supabase} lang={lang} onNavigate={(path) => setPage(path.slice(2))} /></DeferredPanel>}
             {page === "integrity" && <DeferredPanel><IntegrityCenter client={supabase} lang={lang} onNavigate={(path) => setPage(path.slice(2))} /></DeferredPanel>}

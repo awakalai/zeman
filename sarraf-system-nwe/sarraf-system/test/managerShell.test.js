@@ -57,3 +57,66 @@ test("the landing redirect happens once, not on every render", () => {
   assert.match(source, /if \(managerLandingDone\.current\) return;/,
     "the redirect does not check whether it has already run");
 });
+
+// ── the admin centre belongs to a business, and the manager is not in one ────
+
+const hub = (() => {
+  const start = source.indexOf("function AdminCenterHub(");
+  assert.ok(start > 0, "the admin centre hub is gone");
+  const end = source.indexOf("\n  return (", start);
+  return source.slice(start, end);
+})();
+
+test("the manager cannot open the admin centre at all", () => {
+  assert.match(source, /page === "admin-center" && !isSystemManager && <AdminCenterHub/,
+    "the manager can still open one business's admin centre");
+});
+
+// This is the door they actually fell through. Integrity, the change log and data protection are
+// on the manager's own navigation and are also filed under the admin centre, so the "back"
+// link appeared for them and led into the exchange's hub.
+test("the way back sends each rank where they came from", () => {
+  assert.match(source, /setPage\(isSystemManager \? "manager-console" : "admin-center"\)/,
+    "the back link still sends the manager into a business's admin centre");
+});
+
+test("the manager's own screens are not listed inside a business's admin centre", () => {
+  for (const id of ["manager-console", "manager-center"]) {
+    assert.ok(!hub.includes(`"${id}"`),
+      `${id} belongs to the manager's navigation, not to an owner's admin centre`);
+  }
+  assert.ok(!hub.includes("isManager"),
+    "the hub still filters rows by rank, which means it still holds rows for another rank");
+});
+
+// Eleven entries under one heading is not a list, it is a wall: nobody scans it, they hunt
+// through it. Nothing was removed — every screen that was reachable still is.
+test("no section of the admin centre is a wall of entries", () => {
+  const sections = hub.split(/title: label\(/).slice(1);
+  assert.ok(sections.length >= 4, `expected the hub to be grouped, found ${sections.length} sections`);
+  for (const section of sections) {
+    const count = (section.match(/^\s{8}\["/gm) || []).length;
+    assert.ok(count <= 4, `a section holds ${count} entries; four is the most that reads as a group`);
+  }
+});
+
+test("every screen the admin centre used to offer is still offered", () => {
+  for (const id of ["action-inbox", "approvals", "close", "receipt-review", "receipt-forwarding",
+                    "partner-holdings", "debt-center", "cashbox", "partner-accounts",
+                    "office-payments", "insights", "integrity", "audit", "export-audit", "backup"]) {
+    assert.ok(hub.includes(`"${id}"`), `${id} disappeared from the admin centre`);
+  }
+});
+
+// Two screens called "پشکنینی فیش" meant opening the wrong one and concluding the right one was
+// broken. Names inside one navigation must be distinct.
+test("no two entries share a name", () => {
+  const names = [...hub.matchAll(/label\("([^"]+)", "([^"]+)"/g)]
+    .map((m) => m[2])
+    .filter((n) => n !== "Daily operations");
+  const seen = new Set();
+  for (const n of names) {
+    assert.ok(!seen.has(n), `"${n}" names two different screens`);
+    seen.add(n);
+  }
+});
