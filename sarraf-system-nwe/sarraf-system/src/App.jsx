@@ -8898,7 +8898,15 @@ function ReceiptArchive({ customerId, data, flash, simple = false }) {
 
   if (simple) {
     if (portalSummary === null) return <Card><StatePanel type="loading" title={tr("بارکردن...")} compact /></Card>;
-    if (portalSummaryError) return <Card><StatePanel type="error" title={tr("پوختەی فیشەکان بار نەبوو")} detail={portalSummaryError} compact /></Card>;
+    // A customer who has sent nothing has no summary to read, and the server says so as a
+    // refusal. Drawn as a red failure it reads as "the system is broken" to somebody whose
+    // only fault is being new — which is the first thing they see, before they have sent
+    // anything, on the screen that exists for sending. An empty summary is an empty summary.
+    if (portalSummaryError) {
+      return <DeferredPanel><PortalReceiptSummary summary={{ totals: [], batches: [] }} data={data}
+        ui={{ Card, Empty, Hero, Pill, fmtMoney, tr, num }}
+        loadSummary={(batchId) => loadBatchSummary(supabase, batchId)} /></DeferredPanel>;
+    }
     return <DeferredPanel><PortalReceiptSummary summary={portalSummary} data={data}
       ui={{ Card, Empty, Hero, Pill, fmtMoney, tr, num }}
       loadSummary={(batchId) => loadBatchSummary(supabase, batchId)} /></DeferredPanel>;
@@ -11564,10 +11572,15 @@ function CustomerPortal({ user, c, base, data, calc, cur, usr, flash, reloadBatc
               sub={!currencyIds.length ? tr("حیساب پاکە ✅") : !singleCurrency ? tr("دراوەکان تێکەڵ ناکرێن") : null} />
           </div>
 
-          {/* کرداری خێرا */}
-          {uploadTransactions.length > 0 && <div className="portal-actions-grid is-single">
-            <PortalAction icon={Upload} label={tr("ناردنی فیش")} hint={tr("بۆ مامەڵەی فرۆشتن بە زەمان")} onClick={() => setTab("upload")} primary />
-          </div>}
+          {/* کرداری خێرا
+              Sending a receipt is what a customer-seller comes here to do, so it is here always.
+              It used to appear only when they already had a purchase transaction — which is
+              backwards: the receipt is what becomes the transaction. A new customer therefore
+              saw no way to send anything, and could never get one, because the button that
+              starts the process was waiting for the process to have started. */}
+          <div className="portal-actions-grid is-single">
+            <PortalAction icon={Upload} label={tr("ناردنی فیش")} hint={tr("سکرینشۆتی ناردنی پارە")} onClick={() => setTab("upload")} primary />
+          </div>
 
           {/* دوو باڵانس */}
           {(owe.length > 0 || due.length > 0) && (
@@ -11633,14 +11646,19 @@ function CustomerPortal({ user, c, base, data, calc, cur, usr, flash, reloadBatc
 
       {tab === "documents" && (
         <>
-          {uploadTransactions.length > 0 && <PortalAction icon={Upload} label={tr("ناردنی فیش")}
-            hint={tr("تەنها بۆ فرۆشتن بە زەمان")} onClick={() => setTab("upload")} primary />}
+          {/* The order is the point. A customer-seller sends receipts; that is the whole of their
+              business with us. So: the way to send one, then what they have sent, and only then
+              anything sent back to them.
+              It used to open with "receipts sent to you" — an inbox, for somebody whose job is to
+              post — above an empty state and a permission error, with no way to send at all. */}
+          <PortalAction icon={Upload} label={tr("ناردنی فیش")}
+            hint={tr("سکرینشۆتی ناردنی پارە")} onClick={() => setTab("upload")} primary />
+          <ReceiptArchive customerId={user.id} data={data} flash={flash} simple />
           <DeferredPanel><ForwardedReceipts client={supabase} flash={flash}
             signedUrlFor={async (path) => {
               const { data: signed } = await supabase.storage.from("receipts").createSignedUrl(path, 3600);
               return signed?.signedUrl || null;
             }} /></DeferredPanel>
-          <ReceiptArchive customerId={user.id} data={data} flash={flash} simple />
         </>
       )}
 
