@@ -190,6 +190,18 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build-and-test, contracts, security, accounting, flows, isolation, roles]
     if: always()
+    # This job reads nothing but needs.*.result, so it checks nothing out — and then the
+    # workflow-level working-directory pointed it at a path that does not exist on a runner with
+    # an empty workspace:
+    #
+    #   An error occurred trying to start process '/usr/bin/bash' with working directory
+    #   '/home/runner/work/zeman/zeman/sarraf-system-nwe/sarraf-system'. No such file or directory
+    #
+    # The expression above it was correct and every one of the seven verifiers had passed. The
+    # job that exists to say so could not start a shell to say it in.
+    defaults:
+      run:
+        working-directory: .
     steps:
       - name: Refuse anything that did not pass
         run: |
