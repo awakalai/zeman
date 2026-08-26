@@ -30,10 +30,21 @@ const created = () => {
   return names;
 };
 
+// The last definition wins, as it does in the database. This used to read one named file, which
+// was true until sarraf_schema_tables was redefined by a later migration — after which the test
+// was checking a list the database no longer had, and passing.
 const expectedInReport = () => {
-  const file = readFileSync(
-    path.join(migrationsDir, "202608220002_schema_drift_tables.sql"), "utf8");
-  const block = file.slice(file.indexOf("with expected(t) as (values"), file.indexOf("), live as ("));
+  const files = readdirSync(migrationsDir).filter((n) => n.endsWith(".sql")).sort();
+  let block = null;
+  for (const name of files) {
+    const file = readFileSync(path.join(migrationsDir, name), "utf8");
+    let from = file.lastIndexOf("with expected(t) as (values");
+    if (from < 0) continue;
+    const to = file.indexOf("), live as (", from);
+    if (to < 0) continue;
+    block = file.slice(from, to);
+  }
+  assert.ok(block, "no migration defines the drift report's expected table list");
   const names = new Set();
   const pattern = /\('(\w+)'\)/g;
   let match;

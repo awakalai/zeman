@@ -41,7 +41,7 @@ const { psql } = db;
 try {
   // ── two businesses, each with a person and a receipt batch ──────────────────
   //
-  // The fixture already made t-sarkhel and t-kurdistan. What it did not make is somebody in the
+  // The fixture already made t-sarkhel and t-watan. What it did not make is somebody in the
   // second one, or anything for either of them to own.
   // Seeded with the triggers off. Creating an administrator is itself guarded — only a manager
   // or a business owner may do it — and a fixture is not trying to test that guard, it is trying
@@ -52,12 +52,12 @@ try {
     insert into public.app_users(id,name,role,admin_level,auth_id,tenant_id) values
       ('iso-mgr','Manager','admin','manager','cccccccc-0000-0000-0000-000000000001',null),
       ('iso-a','Owner A','admin','owner','${A_UID}','t-sarkhel'),
-      ('iso-b','Owner B','admin','owner','${B_UID}','t-kurdistan')
+      ('iso-b','Owner B','admin','owner','${B_UID}','t-watan')
     on conflict (id) do update set auth_id = excluded.auth_id, tenant_id = excluded.tenant_id;
 
     insert into public.receipt_batches(id,customer_id,customer_name,direction,status,currency,uploaded_by,tenant_id)
     values ('bat-a','iso-a','A','sell','pending','CNY','iso-a','t-sarkhel'),
-           ('bat-b','iso-b','B','sell','pending','CNY','iso-b','t-kurdistan')
+           ('bat-b','iso-b','B','sell','pending','CNY','iso-b','t-watan')
     on conflict (id) do update set tenant_id = excluded.tenant_id;
     commit;
   `);
@@ -112,7 +112,7 @@ try {
   check("a business owner cannot write a row into the other business", () => {
     refused(A_UID,
       `insert into public.receipt_batches(id,customer_id,customer_name,direction,status,currency,uploaded_by,tenant_id)
-       values ('bat-x','iso-a','X','sell','pending','CNY','iso-a','t-kurdistan')`,
+       values ('bat-x','iso-a','X','sell','pending','CNY','iso-a','t-watan')`,
       "writing a batch into the other business");
   });
 

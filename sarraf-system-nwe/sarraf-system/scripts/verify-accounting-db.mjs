@@ -2818,8 +2818,8 @@ try {
   // should have to trust that they cannot — the database must make it impossible.
 
   psql(`insert into public.app_users(id,name,role,admin_level,auth_id,tenant_id) values
-        ('own-b','سەرخێڵی دوو','admin','owner','b0570002-0000-0000-0000-000000000002','t-kurdistan'),
-        ('cust-b','کڕیاری دوو','customer',null,'c0570003-0000-0000-0000-000000000003','t-kurdistan')
+        ('own-b','سەرخێڵی دوو','admin','owner','b0570002-0000-0000-0000-000000000002','t-watan'),
+        ('cust-b','کڕیاری دوو','customer',null,'c0570003-0000-0000-0000-000000000003','t-watan')
         on conflict (id) do update set tenant_id = excluded.tenant_id`);
 
   const asTenantB = () => psql(`create or replace function auth.uid() returns uuid language sql stable
@@ -2842,7 +2842,7 @@ try {
     asTenantB();
     const sees = psql("select public.sarraf_sees_all_tenants()||'|'||coalesce(public.sarraf_tenant(),'-')").trim();
     asAdmin();
-    if (sees !== "false|t-kurdistan") throw new Error(`the second owner reads ${sees}`);
+    if (sees !== "false|t-watan") throw new Error(`the second owner reads ${sees}`);
   });
 
   // Two unknowns are not the same business. A row with no tenant must match nobody, or every
@@ -2850,7 +2850,7 @@ try {
   check("a row belonging to nobody is visible to no business", () => {
     asTenantB();
     const nul = psql("select public.sarraf_tenant_visible(null)::text").trim();
-    const own = psql("select public.sarraf_tenant_visible('t-kurdistan')::text").trim();
+    const own = psql("select public.sarraf_tenant_visible('t-watan')::text").trim();
     const other = psql("select public.sarraf_tenant_visible('t-sarkhel')::text").trim();
     asAdmin();
     if (nul !== "false") throw new Error("an untenanted row was visible to a business");
@@ -2861,7 +2861,7 @@ try {
   check("the manager sees a row of any business, and one of none", () => {
     asManager();
     const all = psql(`select public.sarraf_tenant_visible('t-sarkhel')||'|'||
-                             public.sarraf_tenant_visible('t-kurdistan')||'|'||
+                             public.sarraf_tenant_visible('t-watan')||'|'||
                              public.sarraf_tenant_visible(null)`).trim();
     asAdmin();
     if (all !== "true|true|true") throw new Error(`the manager reads ${all}`);
@@ -2870,7 +2870,7 @@ try {
   // The rule that keeps a person's history theirs: an account cannot walk away from the
   // transactions, receipts and debts it made.
   mustFail("an account cannot be moved to another business",
-    "update public.app_users set tenant_id='t-kurdistan' where id='cust-1'");
+    "update public.app_users set tenant_id='t-watan' where id='cust-1'");
 
   mustFail("every account except a manager must name a business",
     `insert into public.app_users(id,name,role,tenant_id)
@@ -2883,7 +2883,7 @@ try {
   // A rate is a price, not a definition: two exchanges do not quote the same one.
   check("each business sets its own ratio, and reads only its own", () => {
     psql(`insert into public.tenant_rates(tenant_id,cur_id,rate) values
-          ('t-sarkhel','cny',7.20),('t-kurdistan','cny',6.50)
+          ('t-sarkhel','cny',7.20),('t-watan','cny',6.50)
           on conflict (tenant_id,cur_id) do update set rate = excluded.rate`);
     asAdmin();
     const a = psql("select public.sarraf_usd_value(720,'cny')").trim();
@@ -2895,7 +2895,7 @@ try {
   });
 
   check("a business with no ratio of its own falls back to the installation's", () => {
-    psql("delete from public.tenant_rates where tenant_id='t-kurdistan' and cur_id='cny'");
+    psql("delete from public.tenant_rates where tenant_id='t-watan' and cur_id='cny'");
     const installation = Number(psql("select rate from public.currencies where id='cny'").trim());
     asTenantB();
     const b = Number(psql("select public.sarraf_usd_value(720,'cny')").trim());
@@ -2940,7 +2940,7 @@ try {
     const view = JSON.parse(psql("select public.sarraf_manager_tenants()::text"));
     asAdmin();
     const ids = (view.tenants || []).map((t) => t.id).sort();
-    if (!ids.includes("t-sarkhel") || !ids.includes("t-kurdistan")) {
+    if (!ids.includes("t-sarkhel") || !ids.includes("t-watan")) {
       throw new Error(`the businesses are ${ids.join(", ")}`);
     }
     const first = view.tenants.find((t) => t.id === "t-sarkhel");
@@ -3001,7 +3001,7 @@ try {
                        from public.sarraf_manager_accounts()`).trim();
     asAdmin();
     if (!rows.includes("mgr:-")) throw new Error("the manager is not listed as belonging to none");
-    if (!rows.includes("own-b:t-kurdistan")) throw new Error("the second business's owner is missing");
+    if (!rows.includes("own-b:t-watan")) throw new Error("the second business's owner is missing");
     if (!rows.includes("cust-1:t-sarkhel")) throw new Error("the first business's customer is missing");
   });
 
@@ -3052,7 +3052,7 @@ try {
       if (left !== "0") throw new Error(`${table} still holds ${left} rows`);
     }
     const tenants = psql("select coalesce(string_agg(id, ',' order by id), '') from public.tenants").trim();
-    if (tenants !== "t-kurdistan,t-sarkhel") throw new Error(`the businesses are ${tenants}`);
+    if (tenants !== "t-sarkhel,t-watan") throw new Error(`the businesses are ${tenants}`);
   });
 
   // The reset clears rows, not people. An earlier draft deleted every account but the manager's,
