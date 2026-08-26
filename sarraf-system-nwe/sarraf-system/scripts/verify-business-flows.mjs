@@ -756,6 +756,85 @@ try {
     });
   });
 
+  // ── 15 ──────────────────────────────────────────────────────────────────────
+  //
+  // The flow the business actually runs on, and the one the database refused.
+  //
+  // A customer-seller has just paid money and has a screenshot of it. They send it; the system
+  // reads it; what survives reaches the owner, who makes the transaction from it. Every other
+  // scenario here starts from a batch that already exists, so none of them ever asked whether a
+  // receipt can be *begun* — and it could not: sarraf_receipt_intake_begin refused a receipt
+  // naming no transaction, and then demanded an assignment row for the transaction it insisted
+  // on. A new customer had no transaction and could not get one without uploading.
+  scenario(15, "a customer-seller sends a receipt before any transaction exists", () => {
+    const sha = "a".repeat(64);
+
+    step("the customer claims a receipt naming no transaction", () => {
+      be("customer");
+      const claim = j(`public.sarraf_receipt_intake_begin_v3(
+        'f15-doc-1', null, 'f15-batch', 'image/jpeg', 'receipt-intake:receipt:f15-doc-1')`);
+      eq(claim.flow, "customer_sells_to_zeman", "the flow the server chose");
+      eq(claim.transaction_id, null, "a transaction was invented");
+      eq(claim.expected_currency, null, "a currency was expected of a receipt with nothing to agree with");
+      eq(claim.storage_path, "ingest/f15-batch/f15-doc-1.jpg", "the stored object");
+    });
+
+    step("it belongs to the customer who sent it, and to nobody else", () => {
+      eq(psql("select customer_id from public.receipt_documents where id='f15-doc-1'").trim(), "cus", "customer");
+      eq(psql("select uploader_id from public.receipt_documents where id='f15-doc-1'").trim(), "cus", "uploader");
+      eq(psql("select state from public.receipt_documents where id='f15-doc-1'").trim(), "uploading", "state");
+    });
+
+    step("a second claim of the same intent replays rather than duplicating", () => {
+      const again = j(`public.sarraf_receipt_intake_begin_v3(
+        'f15-doc-1', null, 'f15-batch', 'image/jpeg', 'receipt-intake:receipt:f15-doc-1')`);
+      if (again.replayed !== true) throw new Error("a repeated claim was treated as a new receipt");
+      eq(psql("select count(*) from public.receipt_documents where id='f15-doc-1'").trim(), 1, "documents");
+    });
+
+    step("a partner cannot begin one, because a purchase is evidenced by assignment", () => {
+      be("partner");
+      if (!refused(`select public.sarraf_receipt_intake_begin_v3(
+        'f15-doc-2', null, 'f15-batch', 'image/jpeg', 'receipt-intake:receipt:f15-doc-2')`)) {
+        throw new Error("an unassigned partner began a receipt");
+      }
+    });
+
+    step("the server reads the stored original and records what it read", () => {
+      psql(`select public.sarraf_receipt_record_server_extraction('f15-doc-1','${sha}',24680,'image/jpeg',
+        true,
+        '{"grossAmount":"1260.20","feeAmount":"36.70","netAmount":"1223.50","currency":"CNY",
+          "refNo":"F15R1","payee":"ئەحمەد","txDate":"2026-08-01","txTime":"11:04",
+          "platform":"wechat","feeTreatment":"deducted_from_principal",
+          "transactionStatus":"success","confidence":0.93}'::jsonb,
+        'verify','flow',120,'flow-request-15')`);
+      const state = psql("select state from public.receipt_documents where id='f15-doc-1'").trim();
+      // Nothing was expected of it, so nothing can mismatch: it is judged on its own reading.
+      if (state !== "validated") throw new Error(`the reading left the receipt at ${state}`);
+    });
+
+    step("the details the owner needs are on the receipt, not in the browser", () => {
+      const e = psql(`select gross_amount||'|'||fee_amount||'|'||net_amount||'|'||currency||'|'||ref_no
+                      from public.receipt_extractions where document_id='f15-doc-1' and is_original`).trim();
+      eq(e, "1260.2000000000|36.7000000000|1223.5000000000|CNY|F15R1", "what was read");
+    });
+
+    step("the customer sends it, and it is waiting for the owner", () => {
+      be("customer");
+      const sent = j(`public.sarraf_receipt_submit('["f15-doc-1"]'::jsonb,'receipt-submit:f15')`);
+      eq(sent.submitted, 1, "receipts sent");
+      eq(psql("select state from public.receipt_documents where id='f15-doc-1'").trim(), "submitted", "state");
+    });
+
+    step("another customer cannot send it, or see it", () => {
+      be("other");
+      if (!refused(`select public.sarraf_receipt_submit('["f15-doc-1"]'::jsonb,'receipt-submit:f15-theft')`)) {
+        throw new Error("a stranger sent somebody else's receipt");
+      }
+      be("admin");
+    });
+  });
+
   // ── the report ──────────────────────────────────────────────────────────────
   const failed = scenarios.filter((s) => !s.ok);
   for (const s of scenarios) {

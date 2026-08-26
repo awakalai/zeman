@@ -318,6 +318,35 @@ try {
     if (missing) throw new Error(`service_role cannot read: ${missing}`);
   });
 
+  // ── the hole that reopens every time somebody adds a function ───────────────
+  //
+  // 202608250001 moved 131 SECURITY DEFINER functions to sarraf_definer, a role with no
+  // BYPASSRLS, so that a command reaches only the rows the caller's own business may see. It
+  // moved the functions that existed that day, and nothing has watched since. A definer
+  // function added by a later migration is owned by whoever ran it — postgres, which bypasses
+  // row-level security — so one new function is a way straight through the tenancy, and every
+  // check above would still pass.
+  //
+  // This asks the question the ownership move answered once: is there any of them, today, whose
+  // owner can ignore a policy?
+  check("no SECURITY DEFINER function can bypass row-level security", () => {
+    const loose = psql(`
+      select coalesce(string_agg(p.oid::regprocedure::text || ' (owned by ' || o.rolname || ')',
+                                 ', ' order by p.proname), '')
+        from pg_proc p
+        join pg_namespace n on n.oid = p.pronamespace and n.nspname = 'public'
+        join pg_roles o on o.oid = p.proowner
+       where p.prosecdef
+         and p.prorettype <> 'pg_catalog.trigger'::regtype
+         -- Consulted from inside policies. A policy helper that is itself subject to policies
+         -- recurses into the table it is being consulted about, so these must keep bypassing.
+         -- Each reads the caller's own row and returns nothing else.
+         and p.proname not in ('sarraf_tenant','sarraf_tenant_visible','sarraf_sees_all_tenants',
+                               'sarraf_reset_installation','is_admin','my_app_id','my_role')
+         and (o.rolbypassrls or o.rolsuper)`).trim();
+    if (loose) throw new Error(`these run as a role that ignores every policy: ${loose}`);
+  });
+
   // ── and the manager, who is meant to see everything ─────────────────────────
   check("the manager still sees both businesses", () => {
     const mgr = psql(`select coalesce(auth_id::text,'') from public.app_users

@@ -124,11 +124,13 @@ const extractionPreview = (value) => value && typeof value === "object" ? {
  * A partner uploading against a purchase assigned to them by name does pass one, and that is a
  * different case wearing the same function.
  *
- * Flow, parties and currency are still not accepted: the server decides those.
+ * Flow and currency are still not accepted: the server decides those. `customerId` is a staff
+ * upload naming whose receipt this is, and the server checks it is a real, live customer —
+ * a customer-seller's own upload ignores it entirely and is recorded against themselves.
  */
 export async function intakeReceipt({
   client, blob, mediaType = "image/jpeg", transactionId, batchId = null,
-  documentId = null, commandKey = null, adminOverrideReason = null,
+  documentId = null, commandKey = null, adminOverrideReason = null, customerId = null,
   onStage = () => {}, fetchImpl = globalThis.fetch,
 }) {
   const id = documentId || newId();
@@ -137,13 +139,17 @@ export async function intakeReceipt({
   const intentKey = commandKey || receiptIntakeCommandKey(transactionId, id);
 
   onStage(INTAKE_STAGE.claiming, { documentId: id });
-  const claim = await client.rpc("sarraf_receipt_intake_begin_v2", {
+  // v3, because v2's signature has no room to name the customer a staff upload is for. v2 still
+  // exists and still answers; it simply forwards here now, so there is one set of rules rather
+  // than two that can drift.
+  const claim = await client.rpc("sarraf_receipt_intake_begin_v3", {
     p_document_id: id,
     p_transaction_id: transactionId || null,
     p_batch_id: batchId,
     p_mime_type: mediaType,
     p_command_key: intentKey,
     p_override_reason: adminOverrideReason,
+    p_customer_id: customerId || null,
   });
   if (claim.error) throw new ReceiptIntakeError("claim", claim.error, false);
   const path = claim.data?.storage_path;

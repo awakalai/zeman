@@ -6786,6 +6786,9 @@ function ReceiptUploader({ customerId, customerName, partnerId, uploaderId, dire
       // uploading against an assignment supplies one; nothing here does yet.
       transactionId: null,
       batchId: receiptCommandRef.current?.batchId || null,
+      // Whose receipt this is, when staff are the ones holding the phone. A customer-seller
+      // uploading their own is recorded against themselves and this is ignored.
+      customerId: staffReview ? (customerId || null) : null,
       // Read here and declared nowhere, so a staff upload threw ReferenceError while a
       // customer's did not — the ternary short-circuits before reaching it when staffReview is
       // false. It is a prop now, filled from the reason the staff screen already asks for.
@@ -6811,7 +6814,15 @@ function ReceiptUploader({ customerId, customerName, partnerId, uploaderId, dire
     setWorking(true);
     // Created up front, not at send time: the durable intake and the later ingest must agree
     // on the batch id so both resolve to one storage path per receipt.
-    receiptCommandRef.current ||= { batchId: `receipt-batch-${uid()}` };
+    //
+    // It used to be built by hand here — `{ batchId: \`receipt-batch-${uid()}\` }` — with no
+    // idempotency key, and `send()` only fills one in when the ref is still empty. Choosing
+    // images always ran this first, so the send that followed carried `p_command_key:
+    // undefined`. JSON.stringify drops an undefined value entirely, so the argument never
+    // reached the server at all: PostgREST could not match the three-argument function, called
+    // it missing from the schema cache, and the fallback route was handed the same nothing.
+    // Every send failed, for every uploader, and none of it was about the receipts.
+    receiptCommandRef.current ||= createReceiptIngestionCommand();
     const tasks = list.map((file) => ({ id: uid(), file }));
     setInspectorId((current) => current || tasks[0]?.id || null);
     commitRows((xs) => [
@@ -7218,7 +7229,20 @@ function ReceiptUploader({ customerId, customerName, partnerId, uploaderId, dire
       });
       return;
     }
-    const sendRows = [...counted, ...evidence];
+    // public.receipts declares `amount numeric not null check (amount > 0)` and a currency
+    // matching ^[A-Z]{3,8}$, and the ingestion command re-checks both for EVERY row in the
+    // batch — the rejected ones included. So one image that turned out not to be a receipt at
+    // all, carrying no amount and no currency, refused the whole send with `invalid amount`,
+    // and the eleven good receipts beside it went nowhere.
+    //
+    // Those rows are not lost by being left out: each is already a durable receipt_document
+    // with its image, its reading attempts and the reason it failed, and it stays on the
+    // uploader's screen marked as it is. What has no figures simply cannot be written into a
+    // table whose whole purpose is figures.
+    const storable = (row) => Number(row?.amount) > 0
+      && /^[A-Z]{3,8}$/.test(String(row?.currency || "").trim().toUpperCase());
+    const withoutFigures = evidence.filter((row) => !storable(row));
+    const sendRows = [...counted, ...evidence.filter(storable)];
     if (!sendRows.length) return flash("هیچ فیشێکی گونجاو بۆ ناردن نییە");
     const currencies = new Set(counted.map((row) => String(row.currency || "").trim().toUpperCase()).filter(Boolean));
     if (currencies.size > 1) {
@@ -7275,7 +7299,8 @@ function ReceiptUploader({ customerId, customerName, partnerId, uploaderId, dire
       // to the client's own tally only when the server total is unavailable.
       const acceptedCount = Number.isFinite(Number(commitData?.accepted_count)) ? Number(commitData.accepted_count) : good.length;
       const serverRejected = Number.isFinite(Number(commitData?.rejected_count)) ? Number(commitData.rejected_count) - bad.length : 0;
-      flash(`${acceptedCount} ${tr("فیش نێردرا")} ✓${bad.length ? ` — ${bad.length} ${tr("ڕەتکراو بە وێنە و هۆکارەوە تۆمار کران")}` : ""}${serverRejected > 0 ? ` — ⚠️ ${serverRejected} ${tr("لەوانەی وا دەرکەوت پشتڕاستکراوبن لەلایەن سێرڤەرەوە وەک دووبارە ڕەتکرانەوە؛ لیستی فیشە ڕەتکراوەکان ببینە")}` : ""}`);
+      const recordedRejects = sendRows.length - counted.length;
+      flash(`${acceptedCount} ${tr("فیش نێردرا")} ✓${recordedRejects ? ` — ${recordedRejects} ${tr("ڕەتکراو بە وێنە و هۆکارەوە تۆمار کران")}` : ""}${withoutFigures.length ? ` — ${withoutFigures.length} ${tr("وێنە نەخوێندرایەوە و بڕ و دراوی نییە؛ وەک بەڵگە پارێزراوە بەڵام نەنێردرا")}` : ""}${serverRejected > 0 ? ` — ⚠️ ${serverRejected} ${tr("لەوانەی وا دەرکەوت پشتڕاستکراوبن لەلایەن سێرڤەرەوە وەک دووبارە ڕەتکرانەوە؛ لیستی فیشە ڕەتکراوەکان ببینە")}` : ""}`);
       forgetSend();
       commitRows([]); receiptCommandRef.current = null; setEditingId(null); setInspectorId(null);
       setSelectedRows([]); setReviewTab("all"); setReviewSearch(""); setReviewPlatform("all");
