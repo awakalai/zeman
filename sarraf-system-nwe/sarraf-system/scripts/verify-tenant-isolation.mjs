@@ -274,6 +274,50 @@ try {
     }
   });
 
+  // ── the server's own key ────────────────────────────────────────────────────
+  //
+  // service_role is what /api/admin-user uses to create an account. It bypasses row-level
+  // security, which is the thing everybody remembers about it, and bypassing a policy is not the
+  // same as being allowed to read a table. It held no grant on app_users at all, so the route
+  // came back `permission denied` and reported it to a signed-in owner as "this login has no
+  // account in the system" — an accusation, about the one thing that was not wrong.
+  //
+  // Every gate here connects as a superuser or as authenticated. Nothing had ever asked what the
+  // server's own key can do, which is why a route nobody could use looked healthy.
+  check("the server's key can read and write the accounts it creates", () => {
+    for (const priv of ["select", "insert", "update"]) {
+      const ok = psql(
+        `select has_table_privilege('service_role', 'public.app_users', '${priv}')::text`).trim();
+      if (ok !== "true") {
+        throw new Error(`service_role cannot ${priv} app_users, so account creation is refused`);
+      }
+    }
+  });
+
+  check("the route's own lookup succeeds as the role the route uses", () => {
+    const uid = psql(`select auth_id::text from public.app_users where id = 'iso-a'`).trim();
+    const seen = psql(
+      `begin;
+       set local role service_role;
+       select count(*) from public.app_users where auth_id = '${uid}' and deleted = false;
+       commit;`);
+    const n = String(seen).split("\n").map((l) => l.trim()).filter(Boolean).pop();
+    if (n !== "1") throw new Error(`the route would find ${n} accounts for its own caller`);
+  });
+
+  // A table added later is a table the grant was not written for. Two migrations already patched
+  // two tables by hand after hitting this, which is what meeting a problem one table at a time
+  // looks like.
+  check("no table in the schema is closed to the server's key", () => {
+    const missing = psql(`
+      select coalesce(string_agg(c.relname, ', ' order by c.relname), '')
+        from pg_class c
+        join pg_namespace n on n.oid = c.relnamespace and n.nspname = 'public'
+       where c.relkind = 'r'
+         and not has_table_privilege('service_role', c.oid, 'select')`).trim();
+    if (missing) throw new Error(`service_role cannot read: ${missing}`);
+  });
+
   // ── and the manager, who is meant to see everything ─────────────────────────
   check("the manager still sees both businesses", () => {
     const mgr = psql(`select coalesce(auth_id::text,'') from public.app_users
