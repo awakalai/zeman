@@ -95,6 +95,12 @@ port = ${PORT}
         id uuid primary key, email text, created_at timestamptz not null default now());
       grant select on auth.users to authenticated, service_role;
       create schema if not exists storage;
+      create table if not exists storage.buckets (
+        id text primary key, name text not null, public boolean not null default false,
+        file_size_limit bigint, allowed_mime_types text[],
+        created_at timestamptz not null default statement_timestamp());
+      insert into storage.buckets(id, name) values ('receipts','receipts')
+        on conflict (id) do nothing;
       create table if not exists storage.objects (
         id uuid default gen_random_uuid(), bucket_id text not null, name text not null,
         owner_id text, metadata jsonb not null default '{}'::jsonb,
@@ -102,6 +108,25 @@ port = ${PORT}
         primary key(bucket_id,name));
       alter table storage.objects enable row level security;
       grant usage on schema storage to authenticated, anon, service_role;
+
+      -- The half of Supabase Storage this fixture never modelled, and so never tested.
+      --
+      -- A browser uploading an image is an INSERT into storage.objects as authenticated,
+      -- followed by an UPDATE once the bytes are stored and their size and type are known. The
+      -- fixture created the table and stopped there: no grant, no permissive policy, and nothing
+      -- in any gate ever inserted a row. So the restrictive policies this repository writes over
+      -- that table have never once been executed, and one of them has been refusing every upload
+      -- on the live system.
+      --
+      -- rimg_insert is the project's own permissive grant, reproduced here by name.
+      grant select, insert, update, delete on storage.objects to authenticated;
+      grant select on storage.buckets to authenticated;
+      drop policy if exists rimg_insert on storage.objects;
+      create policy rimg_insert on storage.objects
+        for insert to authenticated with check (bucket_id = 'receipts');
+      drop policy if exists rimg_rest on storage.objects;
+      create policy rimg_rest on storage.objects
+        for all to authenticated using (bucket_id = 'receipts') with check (bucket_id = 'receipts');
     `);
     psqlFile(prereq);
 

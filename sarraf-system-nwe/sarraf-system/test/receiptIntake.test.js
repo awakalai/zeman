@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   intakeReceipt, requestStoredReceiptOcr, submitReceiptDocuments,
-  intakeStatusText, INTAKE_STAGE, ReceiptIntakeError,
+  intakeStatusText, INTAKE_STAGE, ReceiptIntakeError, receiptReadFailureText,
 } from "../src/services/receiptIntake.js";
 
 const jsonResponse = (body, { status = 200 } = {}) => ({
@@ -24,7 +24,7 @@ const stubClient = ({ rpc = {}, uploadError = null, token = "session-token" } = 
     rpc(fn, args) {
       calls.rpc.push({ fn, args });
       if (rpc[fn]) return Promise.resolve(rpc[fn]);
-      if (fn === "sarraf_receipt_intake_begin_v2") {
+      if (fn === "sarraf_receipt_intake_begin_v3") {
         return Promise.resolve({
           data: {
             document_id: args.p_document_id,
@@ -77,7 +77,7 @@ test("the stored original exists before server OCR is requested", async () => {
   assert.equal(result.extraction.amount, 100);
 });
 
-test("the browser supplies transaction identity, never flow, parties, currency, or OCR JSON", async () => {
+test("the browser supplies identity only, never flow, parties, currency, or OCR JSON", async () => {
   const client = stubClient();
   await intakeReceipt({
     client,
@@ -88,13 +88,53 @@ test("the browser supplies transaction identity, never flow, parties, currency, 
     fetchImpl: async () => jsonResponse({ documentId: "doc-001", state: "needs_manual_review" }),
   });
   const claim = client.calls.rpc[0];
-  assert.equal(claim.fn, "sarraf_receipt_intake_begin_v2");
+  assert.equal(claim.fn, "sarraf_receipt_intake_begin_v3");
   assert.deepEqual(Object.keys(claim.args).sort(), [
-    "p_batch_id", "p_command_key", "p_document_id", "p_mime_type",
+    "p_batch_id", "p_command_key", "p_customer_id", "p_document_id", "p_mime_type",
     "p_override_reason", "p_transaction_id",
   ]);
   assert.equal(JSON.stringify(claim.args).includes("customer_sells_to_zeman"), false);
   assert.equal(client.calls.rpc.some((call) => /extracted|stored$/.test(call.fn)), false);
+});
+
+// The receipt comes first and the transaction is made from it. Requiring a transaction to
+// claim the document made a new customer's first upload impossible: they had no transaction,
+// and could not get one without uploading.
+test("a customer-seller claims a receipt with no transaction at all", async () => {
+  const client = stubClient();
+  const result = await intakeReceipt({
+    client,
+    blob,
+    documentId: "doc-777",
+    batchId: "batch-9",
+    fetchImpl: async () => jsonResponse({
+      documentId: "doc-777", state: "validated", extraction: { grossAmount: "250", currency: "CNY" },
+    }),
+  });
+  const claim = client.calls.rpc[0];
+  assert.equal(claim.args.p_transaction_id, null);
+  assert.equal(claim.args.p_customer_id, null);
+  // The command key is still bound to the document, so a retry replays one intent.
+  assert.match(claim.args.p_command_key, /^receipt-intake:receipt:doc-777$/);
+  assert.equal(client.calls.uploads[0].path, "ingest/batch-9/doc-777.jpg");
+  assert.equal(result.state, "validated");
+  assert.equal(result.extraction.amount, 250);
+});
+
+test("a staff upload names the customer it is for", async () => {
+  const client = stubClient();
+  await intakeReceipt({
+    client,
+    blob,
+    documentId: "doc-778",
+    batchId: "batch-9",
+    customerId: "u-cust-3",
+    adminOverrideReason: "counter upload for a walk-in seller",
+    fetchImpl: async () => jsonResponse({ documentId: "doc-778", state: "needs_manual_review" }),
+  });
+  const claim = client.calls.rpc[0];
+  assert.equal(claim.args.p_customer_id, "u-cust-3");
+  assert.equal(claim.args.p_transaction_id, null);
 });
 
 test("the upload is immutable and never uses upsert", async () => {
@@ -146,7 +186,7 @@ test("an upload failure is reported as evidence not kept", async () => {
 
 test("a refused assignment claim never uploads anything", async () => {
   const client = stubClient({
-    rpc: { sarraf_receipt_intake_begin_v2: { data: null, error: { code: "42501", message: "outside assignment" } } },
+    rpc: { sarraf_receipt_intake_begin_v3: { data: null, error: { code: "42501", message: "outside assignment" } } },
   });
   await assert.rejects(
     () => intakeReceipt({ client, blob, transactionId: "tx-1", documentId: "doc-001" }),
@@ -166,7 +206,7 @@ test("the same document has the same intake command key on every retry", async (
   };
   await intakeReceipt(args);
   await intakeReceipt(args);
-  const claims = client.calls.rpc.filter((call) => call.fn === "sarraf_receipt_intake_begin_v2");
+  const claims = client.calls.rpc.filter((call) => call.fn === "sarraf_receipt_intake_begin_v3");
   assert.equal(claims[0].args.p_command_key, claims[1].args.p_command_key);
   assert.equal(client.calls.uploads[0].path, client.calls.uploads[1].path);
 });
@@ -203,6 +243,38 @@ test("the canonical intake has no migration-missing fallback to client OCR", asy
   const fs = await import("node:fs");
   const service = fs.readFileSync(new URL("../src/services/receiptIntake.js", import.meta.url), "utf8");
   assert.doesNotMatch(service, /sarraf_receipt_intake_extracted|readImage|p_flow|p_expected_currency/);
-  assert.match(service, /sarraf_receipt_intake_begin_v2/);
+  assert.match(service, /sarraf_receipt_intake_begin_v3/);
   assert.match(service, /\/api\/receipt-ocr/);
+});
+
+// Every read failure reached the uploader as one sentence — "the image is safe, it will be
+// retried" — whatever the server had actually said. An unset OCR API key and an expired session
+// looked identical, on screen and in a screenshot, and neither the person uploading nor anyone
+// reading over their shoulder could tell which had happened.
+test("a read failure carries the server's own status, code and reason", async () => {
+  const client = stubClient();
+  const result = await intakeReceipt({
+    client,
+    blob,
+    documentId: "doc-503",
+    batchId: "batch-9",
+    fetchImpl: async () => jsonResponse(
+      { code: "server_not_configured", message: "receipt OCR service is not configured", retryable: true },
+      { status: 503 }),
+  });
+  const failure = result.readError;
+  assert.equal(failure.stage, "ocr");
+  assert.equal(failure.code, "server_not_configured");
+  // Dropped before, so isTemporaryOcrError could never see it and a 503 was judged permanent.
+  assert.equal(failure.status, 503);
+  assert.equal(failure.evidenceKept, true);
+  assert.equal(result.state, "stored_retryable");
+});
+
+test("a named failure says what to do about it, and an unnamed one still says which", () => {
+  assert.match(receiptReadFailureText({ code: "server_not_configured" }), /کلیلی API/);
+  assert.match(receiptReadFailureText({ code: "session_required" }), /چوونەژوورەوە/);
+  // Never invented, never swallowed.
+  assert.match(receiptReadFailureText({ code: "something_new" }), /something_new/);
+  assert.equal(receiptReadFailureText({}), null);
 });

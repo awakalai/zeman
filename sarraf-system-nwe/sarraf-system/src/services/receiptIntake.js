@@ -40,9 +40,40 @@ export class ReceiptIntakeError extends Error {
     this.cause = cause;
     this.evidenceKept = evidenceKept;
     this.code = cause?.code || null;
+    // Carried, not dropped. The uploader's screen decides whether a failure is temporary by
+    // reading `status`, and this class kept only `code` — so a 503 from a reader that was
+    // briefly unavailable arrived with no status at all, was judged permanent, and the receipt
+    // was marked rejected instead of waiting. `reason` is what the server actually said, which
+    // is the difference between "no API key is configured" and "your session expired": both
+    // used to reach the screen as the same sentence.
+    this.status = Number(cause?.status) || null;
+    this.requestId = cause?.requestId || null;
+    this.reason = cause?.message || null;
     this.retryable = Boolean(cause?.retryable || stage === "ocr");
     this.outcomeKnown = cause?.outcomeKnown !== false;
   }
+}
+
+/** What an uploader can act on, for the failures the OCR route actually names. */
+export function receiptReadFailureText(error) {
+  const code = String(error?.code || "");
+  const named = {
+    server_not_configured: "خزمەتگوزاری خوێندنەوە لەسەر سێرڤەر ڕێک نەخراوە — کلیلی API دانەنراوە",
+    session_required: "چوونەژوورەوەکەت بەسەرچووە — دەرچۆ و دووبارە بچۆرە ژوورەوە",
+    receipt_not_owned: "ئەم فیشە هی تۆ نییە",
+    receipt_not_found: "فیشەکە نەدۆزرایەوە",
+    stored_image_unavailable: "وێنە پارێزراوەکە بەردەست نییە",
+    invalid_image_signature: "ئەم فایلە وێنەیەکی پشتگیریکراو نییە",
+    stored_image_changed: "بایتەکانی وێنەکە گۆڕاون دوای پاراستن",
+    receipt_ocr_rate_limited: "سنووری خوێندنەوە پڕبووە — کەمێک دواتر",
+    ocr_record_failed: "ئەنجامی خوێندنەوە تۆمار نەکرا",
+  }[code];
+  if (named) return named;
+  if (!code) return null;
+  // Never invent a translation for a code nobody has seen. Showing it verbatim is what lets
+  // somebody act on it — an unnamed failure that reads the same as every other unnamed failure
+  // is how an unset API key looked identical to an expired session for a whole evening.
+  return `خوێندنەوە سەرکەوتوو نەبوو (${code})`;
 }
 
 async function accessToken(client) {
@@ -124,11 +155,13 @@ const extractionPreview = (value) => value && typeof value === "object" ? {
  * A partner uploading against a purchase assigned to them by name does pass one, and that is a
  * different case wearing the same function.
  *
- * Flow, parties and currency are still not accepted: the server decides those.
+ * Flow and currency are still not accepted: the server decides those. `customerId` is a staff
+ * upload naming whose receipt this is, and the server checks it is a real, live customer —
+ * a customer-seller's own upload ignores it entirely and is recorded against themselves.
  */
 export async function intakeReceipt({
   client, blob, mediaType = "image/jpeg", transactionId, batchId = null,
-  documentId = null, commandKey = null, adminOverrideReason = null,
+  documentId = null, commandKey = null, adminOverrideReason = null, customerId = null,
   onStage = () => {}, fetchImpl = globalThis.fetch,
 }) {
   const id = documentId || newId();
@@ -137,13 +170,17 @@ export async function intakeReceipt({
   const intentKey = commandKey || receiptIntakeCommandKey(transactionId, id);
 
   onStage(INTAKE_STAGE.claiming, { documentId: id });
-  const claim = await client.rpc("sarraf_receipt_intake_begin_v2", {
+  // v3, because v2's signature has no room to name the customer a staff upload is for. v2 still
+  // exists and still answers; it simply forwards here now, so there is one set of rules rather
+  // than two that can drift.
+  const claim = await client.rpc("sarraf_receipt_intake_begin_v3", {
     p_document_id: id,
     p_transaction_id: transactionId || null,
     p_batch_id: batchId,
     p_mime_type: mediaType,
     p_command_key: intentKey,
     p_override_reason: adminOverrideReason,
+    p_customer_id: customerId || null,
   });
   if (claim.error) throw new ReceiptIntakeError("claim", claim.error, false);
   const path = claim.data?.storage_path;
