@@ -19,7 +19,8 @@
     "verify:accounting": "node scripts/verify-accounting-db.mjs",
     "verify:roles": "node scripts/verify-roles-e2e.mjs",
     "verify:flows": "node scripts/verify-business-flows.mjs",
-    "verify:isolation": "node scripts/verify-tenant-isolation.mjs"
+    "verify:isolation": "node scripts/verify-tenant-isolation.mjs",
+    "verify:names": "node scripts/verify-no-free-variables.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",
