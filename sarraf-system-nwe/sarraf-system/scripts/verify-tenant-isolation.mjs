@@ -318,6 +318,76 @@ try {
     if (missing) throw new Error(`service_role cannot read: ${missing}`);
   });
 
+  // ── the upload itself, which no gate has ever performed ─────────────────────
+  //
+  // A browser storing an image is two statements as `authenticated`: an INSERT into
+  // storage.objects to reserve the name, and an UPDATE once the bytes are stored and their size
+  // and type are known. Supabase Storage does it in that order — the row exists before the
+  // object does — so at INSERT time the metadata is empty.
+  //
+  // Nothing here had ever run either statement. The fixture created storage.objects and left it
+  // ungranted and policy-free, so every restrictive policy this repository writes over that
+  // table was dead code in every gate, while being very much alive in production.
+  //
+  // Four receipts were claimed on the live system tonight. All four sit at `uploading` and the
+  // bucket holds nothing.
+  const asUpload = (uid, sql) => asUser(uid, sql);
+  const claimPath = "ingest/iso-batch-1/iso-doc-000001.jpg";
+
+  check("an uploader may reserve the object their claim named", () => {
+    psql(`delete from storage.objects where bucket_id='receipts' and name like 'ingest/iso-%'`);
+    // Exactly what Supabase Storage writes first: no size and no type, because the bytes have
+    // not been stored yet.
+    asUpload(A_UID, `insert into storage.objects(bucket_id,name,owner_id,metadata)
+                     values ('receipts','${claimPath}','${A_UID}','{}'::jsonb)`);
+    const stored = psql(`select count(*) from storage.objects
+                          where bucket_id='receipts' and name='${claimPath}'`).trim();
+    if (stored !== "1") throw new Error("the object row was refused, so no image can ever be stored");
+  });
+
+  check("the storage service may then record what it stored", () => {
+    asUpload(A_UID, `update storage.objects
+                        set metadata='{"size":240641,"mimetype":"image/jpeg"}'::jsonb
+                      where bucket_id='receipts' and name='${claimPath}'`);
+    const size = psql(`select coalesce(metadata->>'size','⟨none⟩') from storage.objects
+                        where bucket_id='receipts' and name='${claimPath}'`).trim();
+    if (size !== "240641") throw new Error(`the size was never recorded (${size})`);
+  });
+
+  check("an uploader cannot write outside the ingest namespace", () => {
+    refused(A_UID, `insert into storage.objects(bucket_id,name,owner_id,metadata)
+                    values ('receipts','elsewhere/iso-doc-2.jpg','${A_UID}','{}'::jsonb)`,
+      "an object outside ingest/");
+  });
+
+  check("an uploader cannot put somebody else's name on an object", () => {
+    refused(A_UID, `insert into storage.objects(bucket_id,name,owner_id,metadata)
+                    values ('receipts','ingest/iso-batch-1/iso-doc-3.jpg','${B_UID}','{}'::jsonb)`,
+      "an object owned by another person");
+  });
+
+  // The rule the update policy exists for. Once the bytes are stored and a claim points at them,
+  // the evidence is fixed: swapping the object under a claimed receipt must be impossible.
+  check("stored evidence a claim points at cannot be swapped", () => {
+    psql(`insert into public.receipt_documents(
+            id,flow,state,uploader_id,customer_id,storage_path,mime_type,tenant_id)
+          values ('iso-doc-000001','customer_sells_to_zeman','created','iso-a','iso-a',
+                  '${claimPath}','image/jpeg','t-sarkhel')
+          on conflict (id) do update set storage_path=excluded.storage_path`);
+    // A refused UPDATE does not raise. Row-level security filters the row out of the statement,
+    // so the update simply touches nothing and returns quietly — which is why this asks what the
+    // row says afterwards instead of waiting for an error that never comes. Reading that silence
+    // as success is the whole reason this repository shipped a bucket that accepted nothing.
+    try {
+      asUpload(A_UID, `update storage.objects
+                          set metadata='{"size":11,"mimetype":"image/jpeg"}'::jsonb
+                        where bucket_id='receipts' and name='${claimPath}'`);
+    } catch { /* refused outright is also correct */ }
+    const size = psql(`select coalesce(metadata->>'size','⟨none⟩') from storage.objects
+                        where bucket_id='receipts' and name='${claimPath}'`).trim();
+    if (size !== "240641") throw new Error(`claimed evidence was swapped; the size is now ${size}`);
+  });
+
   // ── the hole that reopens every time somebody adds a function ───────────────
   //
   // 202608250001 moved 131 SECURITY DEFINER functions to sarraf_definer, a role with no
