@@ -2889,7 +2889,9 @@ export default function App() {
   };
 
   const createUser = (f) => run(async () => {
-    if (!f.name || !f.phone || !f.password || f.password.length < 12) {
+    // Eight, not twelve. Twelve was chosen here and nowhere else — Supabase itself accepts six —
+    // so the only thing it achieved was refusing passwords the owner had already decided on.
+    if (!f.name || !f.phone || !f.password || f.password.length < 8) {
       flash("ناو، ژمارە، و وشەی نهێنی بەهێز (لانیکەم ١٢ پیت) پێویستن");
       return false;
     }

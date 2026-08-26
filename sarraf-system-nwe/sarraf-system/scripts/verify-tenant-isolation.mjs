@@ -86,6 +86,24 @@ try {
     return lines[lines.length - 1] ?? "";
   };
 
+  // Some functions are internal: authenticated holds no EXECUTE on them, and control_settings is
+  // revoked from it outright. That is correct — the browser never calls them — and it means a
+  // check that calls them as `authenticated` proves nothing except that the grant is tight.
+  //
+  // A command reaches them as sarraf_definer, with the caller's JWT still in the session, so
+  // auth.uid() is the person and current_user is the role. That is what this reproduces. It is
+  // the only honest way to ask what a command sees on somebody's behalf.
+  const asDefiner = (uid, sql) => {
+    const out = psql(
+      `begin;
+       select set_config('request.jwt.claim.sub','${uid}',true);
+       set local role sarraf_definer;
+       ${sql};
+       commit;`);
+    const lines = String(out).split("\n").map((l) => l.trim()).filter(Boolean);
+    return lines[lines.length - 1] ?? "";
+  };
+
   const refused = (uid, sql, what) => {
     let out = null;
     try { out = asUser(uid, sql); }
@@ -200,6 +218,59 @@ try {
     const asOwner = asUser(A_UID, "select count(*) from public.sarraf_schema_drift()").trim();
     if (asSuper !== asOwner) {
       throw new Error(`drift is ${asSuper} for the superuser and ${asOwner} for a business owner`);
+    }
+  });
+
+  // ── the admin is refused, not queued ───────────────────────────────────────
+  //
+  // The owner's rule: an administrator does everything the owner can except the sensitive
+  // things, and cannot do those — rather than doing them and waiting for the owner to accept.
+  //
+  // What was built decided approval by amount alone, so it did neither. An administrator's large
+  // transaction was accepted and parked; the owner's own was parked too, waiting for a second
+  // administrator — who, in a business with one owner and one member of staff, is the member of
+  // staff. The control ran backwards.
+  check("an administrator is refused a sensitive operation, and told whose it is", () => {
+    psql(`begin;
+          set local session_replication_role = replica;
+          insert into public.app_users(id,name,role,admin_level,auth_id,tenant_id)
+          values ('iso-op','Staff','admin','operator','dddddddd-0000-0000-0000-000000000001','t-sarkhel')
+          on conflict (id) do update set auth_id = excluded.auth_id;
+          update public.control_settings set transaction_approval_usd = 100;
+          commit;`);
+    const needs = asDefiner("dddddddd-0000-0000-0000-000000000001",
+      "select public.sarraf_requires_approval('commit_transactions', 5000)::text");
+    if (needs !== "true") throw new Error(`an administrator was not stopped at all: ${needs}`);
+
+    let message = "";
+    try {
+      asDefiner("dddddddd-0000-0000-0000-000000000001",
+        `select public.sarraf_request_approval('commit_transactions','k-iso-1',null,'{}'::jsonb,5000,'x')`);
+    } catch (e) { message = String(e.message || e); }
+    if (!message) throw new Error("the operation was queued instead of refused");
+    if (!message.includes("خاوەن کار")) {
+      throw new Error(`refused, but without saying whose it is: ${message.slice(0, 200)}`);
+    }
+  });
+
+  check("the owner is not made to wait for their own staff to approve them", () => {
+    const needs = asDefiner(A_UID,
+      "select public.sarraf_requires_approval('commit_transactions', 5000)::text");
+    if (needs !== "false") throw new Error(`the owner was sent for approval by somebody below them`);
+  });
+
+  // control_settings and receipt_control_policy are still read `where singleton` in twenty
+  // places, a pattern from when one row served the whole installation. There is a row per
+  // business now and both carry singleton = true, so what stops one business reading the other's
+  // approval threshold is row-level security and nothing else. That is worth a check rather than
+  // an argument.
+  check("one business's approval threshold is not the other's", () => {
+    psql(`update public.control_settings set transaction_approval_usd = 100 where tenant_id = 't-sarkhel';
+          update public.control_settings set transaction_approval_usd = 900000 where tenant_id = 't-watan';`);
+    const a = asDefiner(A_UID, "select transaction_approval_usd::text from public.control_settings");
+    const b = asDefiner(B_UID, "select transaction_approval_usd::text from public.control_settings");
+    if (Number(a) !== 100 || Number(b) !== 900000) {
+      throw new Error(`سەرخێڵ reads ${a} and وەتەن reads ${b}; each should read only its own`);
     }
   });
 
