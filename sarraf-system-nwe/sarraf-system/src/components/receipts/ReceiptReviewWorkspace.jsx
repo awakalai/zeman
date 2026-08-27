@@ -4,8 +4,8 @@ import {
   Loader2, Minus, RefreshCw, XCircle, ZoomIn,
 } from "lucide-react";
 import {
-  correctExtraction, diffVersions, loadDocumentDetail, loadReplacementChain, loadReviewQueue,
-  finalizeReceipt, loadReceiptSummary, reviewEquation, reviewTotals,
+  correctExtraction, diffVersions, enterReadingByHand, loadDocumentDetail, loadReplacementChain,
+  loadReviewQueue, finalizeReceipt, loadReceiptSummary, reviewEquation, reviewTotals,
   setReceiptDailyRate, transitionDocument,
 } from "../../services/receiptWorkspace";
 import "./receipt-review.css";
@@ -38,6 +38,10 @@ const COPY = {
     finalize: "جێگیرکردن و ئامادەکردن بۆ ناردن", mfa: "ئەم هەنگاوە MFA ـی ئەدمین پێویستە",
     frozen: "نرخ لەسەر خودی فیشەکە جێگیر دەکرێت و دوای ئەوە ناگۆڕدرێت",
     code: "کۆدی فیش", copied: "کۆپی کرا",
+    unread: "خوێنەرەکە ئەم فیشەی نەخوێندەوە",
+    unreadNote: "دەتوانیت خۆت ئەوەی لەسەر وێنەکەیە بنووسیت. هەمان مەرجی خوێندنەوەی ئۆتۆماتیکی بەسەریدا دەسەپێت، و ناوی تۆ لەسەری تۆمار دەکرێت.",
+    enter: "نووسینی خوێندنەوە بە دەست", enterReason: "هۆکاری نووسین بە دەست (لانیکەم ٨ پیت)",
+    platform: "پلاتفۆرم", txDate: "بەرواری فیش", txTime: "کاتی فیش",
     replacesTitle: "ئەم فیشە جێگرەوەیە",
     replacesBody: (code) => `لە جێگەی ${code} نێردراوە، کە پێشتر ڕەت کرابووەوە.`,
     replacesWhy: "هۆکاری ڕەتکردنەوەی پێشوو",
@@ -74,6 +78,10 @@ export function ReceiptReviewWorkspace({ client, lang = "ku", signedUrlFor = nul
   const [acceptText, setAcceptText] = useState("");
   const [rejectText, setRejectText] = useState("");
   const [editing, setEditing] = useState(null);
+  // Writing down what the reader could not. Separate from `editing`, which corrects a reading
+  // that exists; these are two different acts and the database refuses to confuse them.
+  const [handEntry, setHandEntry] = useState(null);
+  const [handReason, setHandReason] = useState("");
   const [correctReason, setCorrectReason] = useState("");
   const [rateValue, setRateValue] = useState("");
   const [rateReason, setRateReason] = useState("");
@@ -98,6 +106,7 @@ export function ReceiptReviewWorkspace({ client, lang = "ku", signedUrlFor = nul
   useEffect(() => {
     let alive = true;
     setDetail(null); setChain(null); setImageUrl(null); setZoom(1); setEditing(null); setAcceptText(""); setRejectText("");
+    setHandEntry(null); setHandReason("");
     setRateValue(""); setRateReason(""); setFinalReason("");
     if (!currentDoc) return;
     (async () => {
@@ -150,6 +159,21 @@ export function ReceiptReviewWorkspace({ client, lang = "ku", signedUrlFor = nul
     }), "✓");
   const reject = () => act(
     () => transitionDocument(client, { documentId: currentDoc.id, toState: "rejected", reason: rejectText }), "✓");
+  const HAND_FIELDS = ["grossAmount", "orderAmount", "feeAmount", "netAmount", "currency",
+                       "refNo", "payee", "platform", "txDate", "txTime"];
+  const saveHandEntry = () => act(async () => {
+    const reading = {};
+    for (const key of HAND_FIELDS) {
+      const value = String(handEntry?.[key] ?? "").trim();
+      if (!value) continue;
+      reading[key] = ["grossAmount", "orderAmount", "feeAmount", "netAmount"].includes(key)
+        ? Number(value) : value;
+    }
+    return enterReadingByHand(client, {
+      documentId: currentDoc.id, reading, reason: handReason,
+    });
+  }, "✓");
+
   const saveCorrection = () => act(async () => {
     const changed = {};
     for (const [k, v] of Object.entries(editing || {})) {
@@ -382,6 +406,47 @@ export function ReceiptReviewWorkspace({ client, lang = "ku", signedUrlFor = nul
                           {busy ? <Loader2 className="rrw-spin" aria-hidden="true" /> : null} {copy.save}
                         </button>
                         <button type="button" className="rrw-btn" onClick={() => setEditing(null)}>{copy.cancel}</button>
+                      </div>
+                    </div>
+                  ) : handEntry ? (
+                    <div className="rrw-edit">
+                      {HAND_FIELDS.map((k) => (
+                        <label key={k}>
+                          {copy[{ grossAmount: "gross", orderAmount: "order", feeAmount: "fee",
+                                  netAmount: "net", currency: "currency", refNo: "ref", payee: "payee",
+                                  platform: "platform", txDate: "txDate", txTime: "txTime" }[k]]}
+                          <input value={handEntry[k] ?? ""} inputMode={
+                            ["grossAmount", "orderAmount", "feeAmount", "netAmount"].includes(k) ? "decimal" : undefined}
+                            onChange={(e) => setHandEntry({ ...handEntry, [k]: e.target.value })} />
+                        </label>
+                      ))}
+                      <label className="rrw-wide">
+                        {copy.enterReason}
+                        <input value={handReason} onChange={(e) => setHandReason(e.target.value)} />
+                      </label>
+                      <div className="rrw-actions">
+                        <button type="button" className="rrw-btn is-pos"
+                                disabled={busy || handReason.trim().length < 8} onClick={saveHandEntry}>
+                          {busy ? <Loader2 className="rrw-spin" aria-hidden="true" /> : null} {copy.save}
+                        </button>
+                        <button type="button" className="rrw-btn" onClick={() => setHandEntry(null)}>{copy.cancel}</button>
+                      </div>
+                    </div>
+                  ) : !detail.current ? (
+                    // Nothing was ever read. Before today this was the end of the road: nothing to
+                    // correct because nothing exists, nothing to accept for the same reason, and
+                    // the only move left was to reject a receipt for real money.
+                    <div className="rrw-chain">
+                      <AlertTriangle aria-hidden="true" />
+                      <div>
+                        <b>{copy.unread}</b>
+                        <p>{copy.unreadNote}</p>
+                        <div className="rrw-actions">
+                          <button type="button" className="rrw-btn is-pos"
+                                  onClick={() => setHandEntry({ currency: currentDoc?.expectedCurrency || "" })}>
+                            {copy.enter}
+                          </button>
+                        </div>
                       </div>
                     </div>
                   ) : (
