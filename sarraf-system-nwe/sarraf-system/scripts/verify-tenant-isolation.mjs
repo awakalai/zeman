@@ -388,6 +388,53 @@ try {
     if (size !== "240641") throw new Error(`claimed evidence was swapped; the size is now ${size}`);
   });
 
+  // ── the server's own key, calling a definer function ────────────────────────
+  //
+  // /api/receipt-ocr downloads the stored original and records what the reader saw through
+  // sarraf_receipt_record_server_extraction, which is granted to service_role and to nobody
+  // else. service_role holds BYPASSRLS, so on its own it sees every row in the database.
+  //
+  // The function does not run as service_role. 202608250001 gave it to sarraf_definer so that a
+  // definer function could not bypass tenancy — and sarraf_definer IS subject to the tenant
+  // policy, which asks sarraf_tenant_visible(tenant_id), which asks who auth.uid() is. On a
+  // service-key request there is no user: auth.uid() is null, sarraf_tenant() is null,
+  // sees_all_tenants is false, and the row is invisible. The function then raises "receipt
+  // intake not found", the route turns that into ocr_record_failed, and nothing is written
+  // anywhere — no attempt row, no state change, no error code on the document.
+  //
+  // Which is exactly what the live system shows for every receipt uploaded since that migration
+  // was applied on 25 August. The last image it ever read was on the 17th.
+  const asService = (sql) => {
+    const out = psql(
+      `begin;
+       select set_config('request.jwt.claim.role','service_role',true);
+       select set_config('request.jwt.claim.sub','',true);
+       set local role service_role;
+       ${sql};
+       commit;`);
+    const lines = String(out).split("\n").map((l) => l.trim()).filter(Boolean);
+    return lines[lines.length - 1] ?? "";
+  };
+
+  check("the server's key can record what the reader saw", () => {
+    psql(`insert into public.receipt_documents(
+            id,flow,state,uploader_id,customer_id,storage_path,mime_type,tenant_id)
+          values ('iso-ocr-000001','customer_sells_to_zeman','created','iso-a','iso-a',
+                  'ingest/iso-batch-1/iso-ocr-000001.jpg','image/jpeg','t-sarkhel')
+          on conflict (id) do nothing`);
+    psql(`update public.receipt_documents set state='uploading' where id='iso-ocr-000001'`);
+    const out = asService(`select public.sarraf_receipt_record_server_extraction(
+      'iso-ocr-000001','${"b".repeat(64)}',24680,'image/jpeg',true,
+      '{"grossAmount":"1260.20","feeAmount":"36.70","netAmount":"1223.50","currency":"CNY",
+        "refNo":"ISOR1","payee":"ئەحمەد","txDate":"2026-08-01","txTime":"11:04",
+        "platform":"wechat","feeTreatment":"deducted_from_principal",
+        "transactionStatus":"success","confidence":0.93}'::jsonb,
+      'verify','iso',120,'iso-request-1')::text`);
+    if (!out.includes("document_id")) throw new Error(`the server got: ${out.slice(0, 200)}`);
+    const state = psql("select state from public.receipt_documents where id='iso-ocr-000001'").trim();
+    if (state === "uploading") throw new Error("the reading was never recorded; the receipt never moves");
+  });
+
   // ── the hole that reopens every time somebody adds a function ───────────────
   //
   // 202608250001 moved 131 SECURITY DEFINER functions to sarraf_definer, a role with no
@@ -412,9 +459,27 @@ try {
          -- recurses into the table it is being consulted about, so these must keep bypassing.
          -- Each reads the caller's own row and returns nothing else.
          and p.proname not in ('sarraf_tenant','sarraf_tenant_visible','sarraf_sees_all_tenants',
-                               'sarraf_reset_installation','is_admin','my_app_id','my_role')
+                               'sarraf_reset_installation','is_admin','my_app_id','my_role',
+         -- And the two the server calls with its own key and no user attached. A policy that
+         -- asks who auth.uid() is answers "nobody" on those requests and hides every row, which
+         -- is how the receipt reader was silently dead for nine days. The check below is what
+         -- makes this exception safe: neither may be callable from a browser.
+                               'sarraf_receipt_record_server_extraction',
+                               'sarraf_office_payment_attach_evidence_server')
          and (o.rolbypassrls or o.rolsuper)`).trim();
     if (loose) throw new Error(`these run as a role that ignores every policy: ${loose}`);
+  });
+
+  check("the functions allowed to bypass tenancy are closed to every browser", () => {
+    const open = psql(`
+      select coalesce(string_agg(p.proname, ', ' order by p.proname), '')
+        from pg_proc p
+        join pg_namespace n on n.oid = p.pronamespace and n.nspname = 'public'
+       where p.proname in ('sarraf_receipt_record_server_extraction',
+                           'sarraf_office_payment_attach_evidence_server')
+         and (has_function_privilege('authenticated', p.oid, 'execute')
+              or has_function_privilege('anon', p.oid, 'execute'))`).trim();
+    if (open) throw new Error(`a browser can call these, and they bypass tenancy: ${open}`);
   });
 
   // ── and the manager, who is meant to see everything ─────────────────────────
