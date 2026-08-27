@@ -25,6 +25,11 @@ export const finalizeCommandKey = (documentId) =>
 export const RECEIPT_REVIEW_STATES = [
   "needs_manual_review", "parsed", "validated", "submitted",
   "duplicate", "currency_mismatch", "tamper_suspected", "accepted",
+  // The images that most need a person were the ones a person never saw. A reading that failed
+  // for good leaves the document at ocr_failed_retryable, and that state was not on this list —
+  // so it never appeared in the queue, and the only way anybody learned of it was the uploader
+  // asking why nothing had happened.
+  "ocr_failed_retryable",
 ];
 
 export async function loadReviewQueue(client, { states = RECEIPT_REVIEW_STATES, limit = 100 } = {}) {
@@ -295,6 +300,32 @@ export async function transitionDocument(client, { documentId, toState, reason, 
     p_changes: {},
     p_reason: why.slice(0, 700),
     p_command_key: commandKey || reviewCommandKey(action, documentId),
+  });
+  if (error) throw error;
+  return data;
+}
+
+/**
+ * Write down what the machine could not read.
+ *
+ * Only where there is no reading at all. A receipt that HAS one is corrected — `correctExtraction`
+ * — which keeps the original readable beside the correction; replacing it would throw away the
+ * evidence of what was actually read. The database enforces both halves of that; this is the
+ * call, not the rule.
+ *
+ * Held to the same standard the reader is held to: every field, and the arithmetic. It leaves the
+ * receipt in review rather than accepting it, because writing the figures and deciding on them
+ * are two decisions and each is recorded with its own reason.
+ */
+export async function enterReadingByHand(client, { documentId, reading, reason, commandKey }) {
+  const why = String(reason ?? "").normalize("NFKC").trim();
+  if (why.length < 8) throw new Error("نووسینی خوێندنەوە پێویستی بە هۆکارێکی لانیکەم ٨ پیتی هەیە");
+  if (!reading || typeof reading !== "object") throw new Error("هیچ خوێندنەوەیەک نەنووسراوە");
+  const { data, error } = await client.rpc("sarraf_receipt_enter_reading", {
+    p_document_id: documentId,
+    p_reading: reading,
+    p_reason: why.slice(0, 700),
+    p_command_key: commandKey || `receipt-hand:${String(documentId).slice(0, 70)}:${commandId()}`,
   });
   if (error) throw error;
   return data;

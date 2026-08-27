@@ -12,6 +12,7 @@
 // about a browser rather than about data — how a page behaves on refresh, or what a screenshot
 // looks like — the part that lives in the data is checked here and the rest is named as belonging
 // to the role gate. Nothing is asserted that is not actually exercised.
+import { readFileSync } from "node:fs";
 import { PG_HINT, postgresAvailable, startDatabase } from "./lib/zeman-db.mjs";
 
 if (!postgresAvailable()) {
@@ -1019,6 +1020,100 @@ try {
                             '${sha}', null, null, null, null, null, null, 'f17-second')`).trim();
       eq(still, 0, "a refused receipt still blocking its own replacement");
       be("admin");
+    });
+  });
+
+  // An image the reader can never read is money nobody can record. Both review commands refused
+  // it — nothing to correct because nothing was read, nothing to accept for the same reason — so
+  // the only move left was to reject a receipt for real money.
+  scenario(18, "a person may write down what the machine could not read", () => {
+    const hand = (reading, reason = "خوێنەرەکە نەیتوانی بیخوێنێتەوە، بە دەست نووسرا") => {
+      const out = psql(`
+        begin;
+        select set_config('request.jwt.claim.aal','aal2',true);
+        select public.sarraf_receipt_enter_reading('f18-doc','${reading}'::jsonb,
+          '${reason}','hand-f18-${Math.random().toString(36).slice(2)}')::text;
+        commit;`);
+      return String(out).split("\n").map((l) => l.trim()).filter(Boolean).pop() || "";
+    };
+    const refusedHand = (reading) => { try { hand(reading); return false; } catch { return true; } };
+    const whole = `{"grossAmount":836.30,"feeAmount":36.30,"netAmount":800.00,"currency":"CNY",
+      "refNo":"F18HAND","payee":"لەیلا","txDate":"2026-08-05","txTime":"10:20","platform":"alipay"}`;
+
+    step("a receipt is uploaded and the reader fails for good", () => {
+      be("customer");
+      j(`public.sarraf_receipt_intake_begin_v3(
+           'f18-doc', null, 'f18-batch', 'image/jpeg', 'receipt-intake:receipt:f18-doc')`);
+      psql(`select public.sarraf_receipt_record_server_extraction('f18-doc','${"f".repeat(64)}',
+        24680,'image/jpeg',false,'{"error":"ocr_unreadable"}'::jsonb,'verify','flow',120,'flow-request-f18')`);
+      eq(psql("select state from public.receipt_documents where id='f18-doc'").trim(),
+        "ocr_failed_retryable", "where a failed reading leaves the receipt");
+      eq(psql("select count(*) from public.receipt_extractions where document_id='f18-doc'").trim(),
+        0, "readings recorded");
+      be("admin");
+    });
+
+    step("half a reading is refused, and so are numbers that do not add up", () => {
+      if (!refusedHand(`{"grossAmount":836.30,"currency":"CNY"}`)) {
+        throw new Error("a reading missing everything but a total was written down");
+      }
+      if (!refusedHand(`{"grossAmount":836.30,"feeAmount":36.30,"netAmount":999,"currency":"CNY",
+        "refNo":"F18BAD","payee":"لەیلا","txDate":"2026-08-05","platform":"alipay"}`)) {
+        throw new Error("a reading whose numbers do not add up was written down");
+      }
+      eq(psql("select count(*) from public.receipt_extractions where document_id='f18-doc'").trim(),
+        0, "readings recorded after two refusals");
+    });
+
+    step("a whole reading is written down, named, and left for a decision", () => {
+      const out = hand(whole);
+      if (!out.includes('"state": "needs_manual_review"')) throw new Error(out.slice(0, 200));
+      const row = psql(`select provider || '|' || coalesce(corrected_by,'⟨none⟩') || '|' || is_original::text
+                          from public.receipt_extractions where document_id='f18-doc'`).trim();
+      eq(row, "human|adm|false", "who the reading says wrote it");
+      eq(psql(`select coalesce(correction_reason,'⟨none⟩') from public.receipt_extractions
+                where document_id='f18-doc'`).trim(),
+        "خوێنەرەکە نەیتوانی بیخوێنێتەوە، بە دەست نووسرا", "why it says it was written by hand");
+    });
+
+    step("it cannot be written twice", () => {
+      if (!refusedHand(whole)) throw new Error("a second reading replaced the first");
+    });
+
+    step("and now the receipt can be corrected and accepted like any other", () => {
+      const corrected = psql(`
+        begin;
+        select set_config('request.jwt.claim.aal','aal2',true);
+        select public.sarraf_receipt_review_command('f18-doc','correct',
+          '{"payee":"لەیلا حەمە"}'::jsonb,'ناوی وەرگر تەواوتر کرا','f18-correct-reading')::text;
+        commit;`);
+      if (!String(corrected).includes('"version": 2')) {
+        throw new Error(`a correction on a receipt with no transaction: ${String(corrected).slice(0, 200)}`);
+      }
+      const accepted = psql(`
+        begin;
+        select set_config('request.jwt.claim.aal','aal2',true);
+        select public.sarraf_receipt_review_command('f18-doc','accept','{}'::jsonb,
+          'وێنەکە پشکنین کرا و ژمارەکان ڕاستن','f18-accept-reading')::text;
+        commit;`);
+      if (!String(accepted).includes('"state": "accepted"')) {
+        throw new Error(String(accepted).slice(0, 200));
+      }
+    });
+
+    // The images that most need a person were the ones a person never saw: the review queue
+    // reads a fixed list of states and ocr_failed_retryable was not on it.
+    step("a failed reading is one a reviewer can find", () => {
+      psql(`insert into public.receipt_documents(id,flow,state,uploader_id,customer_id,storage_path,mime_type,tenant_id)
+            values ('f18-lost','customer_sells_to_zeman','created','cus','cus',
+                    'ingest/f18-batch/f18-lost.jpg','image/jpeg','t-sarkhel')`);
+      for (const st of ["uploading","uploaded","ocr_pending","ocr_processing","ocr_failed_retryable"]) {
+        psql(`update public.receipt_documents set state='${st}' where id='f18-lost'`);
+      }
+      const states = readFileSync(new URL("../src/services/receiptWorkspace.js", import.meta.url), "utf8");
+      if (!/RECEIPT_REVIEW_STATES = \[[^\]]*"ocr_failed_retryable"/s.test(states)) {
+        throw new Error("the review queue does not ask for receipts whose reading failed");
+      }
     });
   });
 

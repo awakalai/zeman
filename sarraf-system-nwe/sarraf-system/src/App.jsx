@@ -6684,6 +6684,12 @@ function ReceiptUploader({ customerId, customerName, partnerId, uploaderId, dire
     // and recipient, with no identifier matching — is a suspicion for a person to settle, because
     // it is also the shape of a genuine second payment to the same supplier on a busy day.
     let suspect = null;
+    // A duplicate check that fails is a duplicate check that did not happen, and swallowing it
+    // leaves a receipt looking as though it passed. Declared out here because it is read below,
+    // outside the block that sets it — inside, it is a free variable at the point of use, and a
+    // free variable in this file has already cost this project a whole evening of uploads that
+    // did nothing at all.
+    let dupeCheckFailed = null;
     // The image itself is always a key, so this always runs. It used to run only when the
     // reading had produced a reference — and `p_hash` was hard-coded to null, so the one rule
     // that catches the same photograph sent twice never ran at all. An unreadable receipt could
@@ -6697,7 +6703,7 @@ function ReceiptUploader({ customerId, customerName, partnerId, uploaderId, dire
       ));
       let old = null;
       try {
-        const { data: hit } = await supabase.rpc("check_receipt_dupe", {
+        const { data: hit, error: dupErr } = await supabase.rpc("check_receipt_dupe", {
           p_hash: img.hash || null,
           p_ref: rn,
           p_merchant_ref: merchantRn,
@@ -6709,8 +6715,12 @@ function ReceiptUploader({ customerId, customerName, partnerId, uploaderId, dire
           // is already in the table it is being compared against.
           p_exclude_id: id,
         });
+        if (dupErr) throw dupErr;
         if (hit?.length) old = hit[0];
-      } catch {}
+      } catch (cause) {
+        console.error("duplicate check", cause);
+        dupeCheckFailed = cause?.message || "unknown";
+      }
       // A suspicion is never a refusal: it goes to review with the reason attached.
       if (old?.kind === "suspect" && !local) { suspect = old; old = null; }
       if (local || old) {
@@ -6752,6 +6762,11 @@ function ReceiptUploader({ customerId, customerName, partnerId, uploaderId, dire
 
     const reviewReasons = [];
     let reviewCode = null;
+
+    if (dupeCheckFailed) {
+      reviewReasons.push("پشکنینی دووبارەبوونەوە نەکرا — پێویستە بە دەست دڵنیا ببیتەوە");
+      reviewCode = reviewCode || "dupe_check_unavailable";
+    }
 
     if (!amountV || amountV <= 0 || !d?.currency || /نەزانراو|unknown/i.test(String(d.currency))) {
       reviewReasons.push("بڕ یان دراو بە دڵنیایی نەخوێندرایەوە");
