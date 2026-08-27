@@ -2713,7 +2713,18 @@ export default function App() {
         if (off) await notify(off.id, "payment", tr("پارەدانێکی نوێ چاوەڕوانە"),
           `${who} · ${fmt(t.total, cur(f.againstId).dec ?? 0)} ${cur(f.againstId).code}`, null, t.id);
       }
-      flash(`مامەڵە تۆمار کرا ✓${t.code ? ` — #${t.code}` : ""}`);
+      // The conversion runs in two calls: one creates the transaction, a second confirms the
+      // money actually moved in the ledger. The second one's failure was returned and never
+      // read, so a transaction whose money had not moved was reported with a tick. It is money;
+      // it is said out loud, and it is written down where it survives the message disappearing.
+      if (result?.ledger_confirmed === false) {
+        const warning = tr("مامەڵەکە تۆمار کرا، بەڵام جووڵەی پارە لە دەفتەردا پشتڕاست نەکرایەوە");
+        flash(`⚠️ ${warning}${t.code ? ` — #${t.code}` : ""}`);
+        await notify(profile.id, "system", tr("پشتڕاستکردنەوەی دەفتەر سەرکەوتوو نەبوو"),
+          `${warning} — ${line}`, null, t.id);
+      } else {
+        flash(`مامەڵە تۆمار کرا ✓${t.code ? ` — #${t.code}` : ""}`);
+      }
     }, `tx:${txId}`);
   };
 
