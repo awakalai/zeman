@@ -1224,6 +1224,218 @@ try {
     });
   });
 
+  // Twenty-one of the fifty-nine commands this application calls had never been executed by any
+  // gate. One of them — the second half of a conversion — was hiding a failure that reported a
+  // transaction with a tick while its money had not moved. These are the rest of the ones an
+  // owner touches on an ordinary day, run as the role a browser connects as.
+  scenario(20, "the owner's daily commands do what they say, and only once", () => {
+    const asAdmin = (sql) => {
+      const out = psql(`
+        begin;
+        select set_config('request.jwt.claim.aal','aal2',true);
+        set local role authenticated;
+        ${sql};
+        commit;`);
+      return String(out).split("\n").map((l) => l.trim()).filter(Boolean).pop() || "";
+    };
+    const refusedAsAdmin = (sql) => { try { asAdmin(sql); return false; } catch { return true; } };
+
+    step("a verified batch is waiting for a decision", () => {
+      be("admin");
+      psql(`delete from public.receipt_intake_items where batch_id='f20'`);
+      psql(`delete from public.receipt_batches where id='f20'`);
+      psql(`insert into public.receipt_batches(id,customer_id,customer_name,direction,status,currency,
+              uploaded_by,receipt_stage,tenant_id,n)
+            values ('f20','cus','کڕیار فرۆشیار','in','new','CNY','cus','verified','t-sarkhel',1)`);
+      psql(`insert into public.receipt_intake_items(id,batch_id,submitted_by,customer_id,direction,
+              image_path,source_status,intake_status,counted,currency,amount,fee,net_amount,
+              payee,tx_date,platform,has_fee)
+            values ('f20-item','f20','cus','cus','in',
+                    'ingest/flow-twenty-batch-01/receipt-f20-item.jpg','ok','accepted',true,
+                    'CNY',2000,0,2000,'ئەحمەد','2026-08-06','wechat',false)`);
+    });
+
+    step("the review screen can read the policy it must obey", () => {
+      const policy = asAdmin("select public.sarraf_receipt_policy()::text");
+      if (!/min_match_score/.test(policy)) throw new Error(`the policy came back as: ${policy.slice(0, 200)}`);
+    });
+
+    // A rejection without a reason is a rejection nobody can answer.
+    step("a decision without a reason is refused", () => {
+      if (!refusedAsAdmin(`select public.sarraf_review_receipt_batch('f20','reject',null,null,
+        'receipt-decision:f20:none:00000000abcdef01')`)) {
+        throw new Error("a batch was rejected with no reason recorded");
+      }
+    });
+
+    step("the owner rejects it, and the reason is kept on the batch", () => {
+      const out = asAdmin(`select public.sarraf_review_receipt_batch('f20','reject',null,
+        'وێنەکان ڕوون نین و ناتوانرێن پشکنین بکرێن','receipt-decision:f20:none:0123456789abcdef')::text`);
+      if (!/"decision": "rejected"/.test(out)) throw new Error(out.slice(0, 200));
+      const state = psql(`select receipt_stage || ' / ' || coalesce(decision_status,'⟨none⟩')
+                            from public.receipt_batches where id='f20'`).trim();
+      eq(state, "rejected / rejected", "what the batch says afterwards");
+      eq(psql(`select coalesce(decision_reason,'⟨none⟩') from public.receipt_batches where id='f20'`).trim(),
+        "وێنەکان ڕوون نین و ناتوانرێن پشکنین بکرێن", "the reason the owner gave");
+    });
+
+    step("pressing it twice is one decision, not two", () => {
+      const again = asAdmin(`select public.sarraf_review_receipt_batch('f20','reject',null,
+        'وێنەکان ڕوون نین و ناتوانرێن پشکنین بکرێن','receipt-decision:f20:none:0123456789abcdef')::text`);
+      if (!/"replayed": true/.test(again)) throw new Error(`a second press was a second decision: ${again.slice(0, 200)}`);
+    });
+
+    // The four reads an owner opens to see how the business stands. None had ever been run by a
+    // gate, and each is a SECURITY DEFINER function reading across the whole schema.
+    step("the reports an owner opens all answer", () => {
+      const reports = {
+        "sarraf_report_range('2026-08-01','2026-08-31')": /generated_at/,
+        "sarraf_reconciliation_report()": /"checks"/,
+        "sarraf_export_audit_snapshot()": /"counts"/,
+        "sarraf_read_model_snapshot()": /"counts"/,
+        "sarraf_system_health()": /"ok"/,
+      };
+      for (const [call, expected] of Object.entries(reports)) {
+        const out = asAdmin(`select public.${call}::text`);
+        if (!expected.test(out)) throw new Error(`${call} came back as: ${out.slice(0, 200)}`);
+      }
+    });
+
+    step("the transaction list pages without a full-table read", () => {
+      const rows = asAdmin("select count(*) from public.sarraf_tx_history_page(20, null)");
+      if (!/^\d+$/.test(rows)) throw new Error(`the history page came back as: ${rows.slice(0, 120)}`);
+    });
+
+    step("a customer reads their own receipts and the business's reports refuse them", () => {
+      be("customer");
+      const mine = psql(`
+        begin;
+        set local role authenticated;
+        select count(*) from public.sarraf_my_receipt_intakes_v2(50);
+        commit;`);
+      if (!/\d/.test(String(mine))) throw new Error("a customer cannot read their own receipts");
+      if (!refused("select public.sarraf_reconciliation_report()")) {
+        throw new Error("a customer read the whole business's reconciliation report");
+      }
+      be("admin");
+    });
+  });
+
+  // The last ten. Two of them decide whether anybody can use the application at all: the profile
+  // read that every sign-in makes, and the runtime contract the application refuses to start
+  // without. Neither had ever been executed by a gate.
+  scenario(21, "the commands that decide whether the application opens at all", () => {
+    const as = (who, sql) => {
+      be(who);
+      const out = psql(`
+        begin;
+        select set_config('request.jwt.claim.aal','aal2',true);
+        set local role authenticated;
+        ${sql};
+        commit;`);
+      return String(out).split("\n").map((l) => l.trim()).filter(Boolean).pop() || "";
+    };
+
+    // Every sign-in makes this call. If it stops answering, nobody gets in — and the failure
+    // would look like a login problem rather than a database one.
+    step("every sign-in reads a profile, for staff and for a customer alike", () => {
+      const owner = as("admin", "select public.sarraf_self_profile()::text");
+      if (!/"role": "admin"/.test(owner)) throw new Error(`the owner's own profile: ${owner.slice(0, 200)}`);
+      const customer = as("customer", "select public.sarraf_self_profile()::text");
+      if (!/"role": "customer"/.test(customer)) throw new Error(`the customer's own profile: ${customer.slice(0, 200)}`);
+      if (/"id": "adm"/.test(customer)) throw new Error("a customer was handed the administrator's profile");
+      be("admin");
+    });
+
+    // The application checks this before it will draw anything, and refuses to start on a
+    // mismatch. A gate that never runs it cannot notice the day it stops matching.
+    step("the application's startup contract is the one the application demands", () => {
+      const contract = as("admin", "select public.sarraf_runtime_contract()::text");
+      if (!/"contract_version": "13f-v1"/.test(contract)) {
+        throw new Error(`the frontend refuses to start unless this says 13f-v1: ${contract.slice(0, 220)}`);
+      }
+      if (!/"phase13f_applied": true/.test(contract)) {
+        throw new Error(`the frontend refuses to start unless this is applied: ${contract.slice(0, 220)}`);
+      }
+    });
+
+    step("the customer's own screen is answered by the server, not totalled in the browser", () => {
+      const summary = as("customer", "select public.sarraf_portal_receipt_summary_v2(365)::text");
+      for (const field of ["totals", "batches", "accepted_count", "rejected_count"]) {
+        if (!new RegExp(`"${field}"`).test(summary)) {
+          throw new Error(`the portal summary has no ${field}: ${summary.slice(0, 200)}`);
+        }
+      }
+      be("admin");
+    });
+
+    step("the approval thresholds and the inventory answer", () => {
+      if (!/"tenant_id"/.test(as("admin", "select public.sarraf_control_snapshot()::text"))) {
+        throw new Error("the control snapshot does not say whose settings it is");
+      }
+      const inv = as("admin", "select public.sarraf_inventory_snapshot('cny', null, null)::text");
+      if (!/\{/.test(inv)) throw new Error(`the inventory snapshot: ${inv.slice(0, 200)}`);
+    });
+
+    // Only the owner may move the rules a review obeys, and a change must leave a version behind.
+    step("only the owner may change the rules a review obeys, and the change is versioned", () => {
+      const before = Number(
+        psql("select version from public.receipt_control_policy order by version desc limit 1").trim());
+      const out = as("admin", `select public.sarraf_update_receipt_policy(
+        '{"min_match_score":85}'::jsonb,'بەرزکردنەوەی پێوەری یەکگرتن',
+        'receipt-policy:flow-twenty-one-0001')::text`);
+      if (!/min_match_score/.test(out)) throw new Error(`the policy change returned: ${out.slice(0, 200)}`);
+      const after = Number(
+        psql("select version from public.receipt_control_policy order by version desc limit 1").trim());
+      if (!(after > before)) throw new Error(`the policy changed without a new version (${before} → ${after})`);
+      const live = as("admin", "select public.sarraf_receipt_policy()::text");
+      if (!/"min_match_score": 85/.test(live)) throw new Error(`the change did not take effect: ${live.slice(0, 200)}`);
+    });
+
+    step("an ordinary member of staff cannot change them", () => {
+      be("office");
+      if (!refused(`select public.sarraf_update_receipt_policy('{"min_match_score":10}'::jsonb,
+        'کەمکردنەوەی پێوەرەکە','receipt-policy:flow-twenty-one-0002')`)) {
+        throw new Error("somebody who is not the owner moved the review rules");
+      }
+      be("admin");
+    });
+
+    step("the reconciliation sweeps run and report what they did", () => {
+      for (const call of ["sarraf_reconcile_receipt_conversions()",
+                          "sarraf_reconcile_pending_office_assignments()"]) {
+        const out = as("admin", `select public.${call}::text`);
+        if (!/\{/.test(out)) throw new Error(`${call}: ${out.slice(0, 200)}`);
+      }
+    });
+
+    step("a receipt with no match says so rather than failing", () => {
+      if (!refused("select public.sarraf_receipt_match_candidates('no-such-batch')")) {
+        throw new Error("a batch that does not exist returned matches for it");
+      }
+    });
+
+    // Written for exactly one purpose: so that a reading which failed before the reader was
+    // reached leaves something behind. It must never be able to become a verdict.
+    step("the uploader may write down why a reading failed, and nothing more", () => {
+      be("customer");
+      j(`public.sarraf_receipt_intake_begin_v3(
+           'f21-doc', null, 'f21-batch', 'image/jpeg', 'receipt-intake:receipt:f21-doc')`);
+      psql(`
+        begin;
+        set local role authenticated;
+        select public.sarraf_receipt_note_read_failure('f21-doc','server_not_configured',500);
+        commit;`);
+      const code = psql("select coalesce(last_error_code,'⟨none⟩') from public.receipt_documents where id='f21-doc'").trim();
+      if (!code.startsWith("client:")) throw new Error(`the reason was written as '${code}'`);
+      eq(psql("select state from public.receipt_documents where id='f21-doc'").trim(), "uploading",
+        "a note about a failure moved the receipt");
+      eq(psql("select counted::text from public.receipt_documents where id='f21-doc'").trim(), "false",
+        "a note about a failure counted the receipt");
+      be("admin");
+    });
+  });
+
   // ── the report ──────────────────────────────────────────────────────────────
   const failed = scenarios.filter((s) => !s.ok);
   for (const s of scenarios) {
