@@ -8,6 +8,7 @@ import {
 } from "../../services/managerConsole.js";
 import { rankName, rankOf } from "../../services/adminRanks.js";
 import "./debt-center.css";
+import { errorText } from "../../services/userFacingError";
 
 /**
  * The manager's console: businesses, accounts, and the health of the installation.
@@ -82,7 +83,7 @@ export function ManagerConsole({ client, lang = "ku", isManager = false, flash =
       if (t.status === "rejected") throw t.reason;
       setState("ready");
     } catch (e) {
-      setError(String(e?.message || e).slice(0, 200));
+      setError(errorText(e).slice(0, 200));
       setState("error");
     }
   }, [client]);
@@ -99,7 +100,7 @@ export function ManagerConsole({ client, lang = "ku", isManager = false, flash =
       flash(copy.add + " ✓");
       await load();
     } catch (e) {
-      setError(String(e?.message || e).slice(0, 200));
+      setError(errorText(e).slice(0, 200));
     } finally { setBusy(""); }
   }, [client, form, load, flash, copy.add]);
 
@@ -111,7 +112,7 @@ export function ManagerConsole({ client, lang = "ku", isManager = false, flash =
       await setTenantActive(client, { id: tenant.id, active: !tenant.active, reason });
       await load();
     } catch (e) {
-      setError(String(e?.message || e).slice(0, 200));
+      setError(errorText(e).slice(0, 200));
     } finally { setBusy(""); }
   }, [client, load, copy.reason]);
 

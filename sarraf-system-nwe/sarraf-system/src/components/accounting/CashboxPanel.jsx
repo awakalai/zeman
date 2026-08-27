@@ -5,6 +5,7 @@ import {
   moveCustomerVault, previewDebtWaterfall,
 } from "../../services/accounting";
 import "./debt-center.css";
+import { errorText } from "../../services/userFacingError";
 
 const COPY = {
   ku: {
@@ -71,7 +72,7 @@ export function CashboxPanel({ client, lang = "ku", customers = [], flash = () =
       setVaults(v); setStatement(s); setDebts(d); setState("ready");
     } catch (e) {
       console.error("cashbox", e);
-      flash(String(e?.message || e));
+      flash(errorText(e));
       setState("error");
     }
   }, [client, customerId, flash]);
@@ -98,7 +99,7 @@ export function CashboxPanel({ client, lang = "ku", customers = [], flash = () =
       await load();
     } catch (e) {
       console.error("cashbox command", e);
-      flash(String(e?.message || e));
+      flash(errorText(e));
     } finally { setBusy(false); }
   };
 
@@ -119,7 +120,7 @@ export function CashboxPanel({ client, lang = "ku", customers = [], flash = () =
         debtorType: "customer", debtorId: customerId,
         creditorType: "zeman", currency, amount: Number(amount),
       }));
-    } catch (e) { flash(String(e?.message || e)); }
+    } catch (e) { flash(errorText(e)); }
   };
 
   const canAct = customerId && Number(amount) > 0 && reason.trim().length >= 3 && !busy;

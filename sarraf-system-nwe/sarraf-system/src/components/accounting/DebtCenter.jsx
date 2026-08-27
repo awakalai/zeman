@@ -9,6 +9,7 @@ import {
   loadDebtHistory, loadVoucherRegister, offsetAmount, offsetDebts, offsetObjection, writeOffDebt,
 } from "../../services/debtRegister";
 import "./debt-center.css";
+import { errorText } from "../../services/userFacingError";
 
 const COPY = {
   ku: {
@@ -116,7 +117,7 @@ export function DebtCenter({ client, lang = "ku", partyId = null, nameOf = (id) 
       setState("ready");
     } catch (e) {
       console.error("debt centre", e);
-      setError(String(e?.message || e));
+      setError(errorText(e));
       setState("error");
     }
   }, [client, partyId]);
@@ -156,7 +157,7 @@ export function DebtCenter({ client, lang = "ku", partyId = null, nameOf = (id) 
       await load();
     } catch (e) {
       console.error("debt command", e);
-      say(String(e?.message || e));
+      say(errorText(e));
     } finally {
       setBusy(false);
     }
@@ -165,7 +166,7 @@ export function DebtCenter({ client, lang = "ku", partyId = null, nameOf = (id) 
   const openHistory = async (debtId) => {
     if (history?.debt_id === debtId) return setHistory(null);
     try { setHistory(await loadDebtHistory(client, debtId)); }
-    catch (e) { say(String(e?.message || e)); }
+    catch (e) { say(errorText(e)); }
   };
 
   if (state === "loading") return <div className="debt-panel"><div className="debt-loading">{copy.loading}</div></div>;

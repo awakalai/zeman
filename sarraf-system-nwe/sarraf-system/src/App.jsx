@@ -6,6 +6,8 @@ import { arithmeticObjection, receiptNetFrom, sendableSet, validateReceiptArithm
 import { BuildStamp, UpdateBanner } from "./components/system/UpdateBanner";
 import { loadNotifications, markAllNotificationsRead, markNotificationRead, subscribeToNotifications } from "./services/notifications";
 import { loadWholeTable } from "./services/tableLoader";
+import { setActiveLanguage } from "./services/activeLanguage";
+import { errorText } from "./services/userFacingError";
 import { MyReceipts } from "./components/portal/MyReceipts";
 import { intakeReceipt, intakeStatusText, loadMyReceipts, noteReceiptReadFailure, receiptReadFailureText, replaceReceipt, requestStoredReceiptOcr } from "./services/receiptIntake";
 import { DICT } from "./i18n/dictionary";
@@ -311,7 +313,9 @@ const LANGS = { ku: { name: "کوردی", dir: "rtl", flag: "KU" },
                 ar: { name: "العربية", dir: "rtl", flag: "AR" } };
 
 let _lang = (() => { try { return localStorage.getItem("lang") || "ku"; } catch { return "ku"; } })();
-const setLangGlobal = (l) => { _lang = l; try { localStorage.setItem("lang", l); } catch {} };
+// One source of the chosen language, so a module outside this file can still write a
+// sentence in it. tr() and l10n() keep reading the local copy; both are set together.
+const setLangGlobal = (l) => { _lang = l; setActiveLanguage(l); };
 /* t() — گەر وەرگێڕان نەبوو، کوردییەکە دەگەڕێنێتەوە */
 const tr = (k) => (_lang === "ku" ? k : (DICT[_lang]?.[k] ?? k));
 const l10n = (ku, en, ar) => _lang === "en" ? en : _lang === "ar" ? ar : ku;
@@ -7020,7 +7024,7 @@ function ReceiptUploader({ customerId, customerName, partnerId, uploaderId, dire
           const named = receiptReadFailureText(e);
           const reason = temporary
             ? ocrRetryNote(e)
-            : `نەتوانرا بخوێندرێتەوە: ${named || String(e?.message || e)}`;
+            : `نەتوانرا بخوێندرێتەوە: ${named || errorText(e)}`;
           patchRow(id, {
             status: temporary ? "retry" : "error",
             counted: false,
@@ -7104,7 +7108,7 @@ function ReceiptUploader({ customerId, customerName, partnerId, uploaderId, dire
       const named = receiptReadFailureText(e);
       const reason = temporary
         ? ocrRetryNote(e, "خزمەتگوزاری خوێندنەوە هێشتا کاتێک بەردەست نییە")
-        : `نەتوانرا دووبارە بخوێندرێتەوە: ${named || String(e?.message || e)}`;
+        : `نەتوانرا دووبارە بخوێندرێتەوە: ${named || errorText(e)}`;
       patchRow(id, {
         status: temporary ? "retry" : "error",
         counted: false,

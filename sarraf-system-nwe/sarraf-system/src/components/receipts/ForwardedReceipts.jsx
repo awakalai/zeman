@@ -4,6 +4,7 @@ import {
   deliveryText, forwardedTotals, loadForwardedToMe, markSeen,
 } from "../../services/receiptForwarding";
 import "./receipt-forwarding.css";
+import { errorText } from "../../services/userFacingError";
 
 const COPY = {
   ku: {
@@ -44,7 +45,7 @@ export function ForwardedReceipts({ client, lang = "ku", signedUrlFor = null, fl
       setState("ready");
     } catch (e) {
       console.error("forwarded receipts", e);
-      flashRef.current(String(e?.message || e));
+      flashRef.current(errorText(e));
       setState("error");
     }
   }, [client]);
@@ -65,7 +66,7 @@ export function ForwardedReceipts({ client, lang = "ku", signedUrlFor = null, fl
           : x));
     } catch (e) {
       console.error("mark seen", e);
-      flash(String(e?.message || e));
+      flash(errorText(e));
     } finally { setBusyId(null); }
   };
 
@@ -75,7 +76,7 @@ export function ForwardedReceipts({ client, lang = "ku", signedUrlFor = null, fl
       // §8.10: a short-lived signed URL fetched at view time, never a stored public link.
       const url = await signedUrlFor(row.storagePath);
       if (url) window.open(url, "_blank", "noopener,noreferrer");
-    } catch (e) { flash(String(e?.message || e)); }
+    } catch (e) { flash(errorText(e)); }
   };
 
   return (

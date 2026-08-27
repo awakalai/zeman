@@ -5,6 +5,7 @@ import {
   passwordObjection, passwordTooShort, rankName, rankObjection, rankOf,
 } from "../../services/adminRanks.js";
 import "./debt-center.css";
+import { errorText } from "../../services/userFacingError";
 
 /**
  * What only a manager can do: hand out ranks, and put a password back.
@@ -74,7 +75,7 @@ export function ManagerCenter({ users = [], profile, lang = "ku", request, flash
       onDone?.();
       return true;
     } catch (e) {
-      setError(String(e?.message || e).slice(0, 200));
+      setError(errorText(e).slice(0, 200));
       return false;
     } finally {
       setBusy("");
