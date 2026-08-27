@@ -7,6 +7,7 @@ import { BuildStamp, UpdateBanner } from "./components/system/UpdateBanner";
 import { loadNotifications, markAllNotificationsRead, markNotificationRead, subscribeToNotifications } from "./services/notifications";
 import { loadWholeTable } from "./services/tableLoader";
 import { setActiveLanguage } from "./services/activeLanguage";
+import { currencyDecimals as currencyDecimalsOf, formatMoney, formatNumber, roundToCurrency } from "./services/money";
 import { errorText } from "./services/userFacingError";
 import { MyReceipts } from "./components/portal/MyReceipts";
 import { intakeReceipt, intakeStatusText, loadMyReceipts, noteReceiptReadFailure, receiptReadFailureText, replaceReceipt, requestStoredReceiptOcr } from "./services/receiptIntake";
@@ -195,35 +196,14 @@ const ADMIN_CENTER_PAGE_IDS = new Set([
   "backup",
 ]);
 
-const fmt = (n, d=0) => {
-  const value = Number(n);
-  if (!Number.isFinite(value)) return "—";
-  return value.toLocaleString("en-US", { minimumFractionDigits:d, maximumFractionDigits:d });
-};
-
-const currencyDecimals = (data, code) => {
-  const key = String(code || "").trim().toUpperCase();
-  const found = (data?.currencies || []).find((c) =>
-    String(c?.code || "").trim().toUpperCase() === key ||
-    String(c?.id || "").trim().toUpperCase() === key
-  );
-  // Receipt values must preserve the decimals printed by the payment service.
-  // CNY receipts in the real benchmark always use fen (2 decimals).
-  if (key === "CNY") return 2;
-  if (["IQD", "JPY", "KRW"].includes(key)) return 0;
-  const explicit = Number(found?.dec);
-  if (Number.isInteger(explicit) && explicit >= 0 && explicit <= 6) return explicit;
-  return 2;
-};
-const fmtMoney = (data, n, code) => fmt(n, currencyDecimals(data, code));
-const roundMoney = (data, n, code) => {
-  const value = Number(n);
-  if (!Number.isFinite(value)) return 0;
-  const d = currencyDecimals(data, code);
-  const m = 10 ** d;
-  const rounded = Math.round((Math.abs(value) + Number.EPSILON) * m) / m;
-  return value < 0 ? -rounded : rounded;
-};
+// Moved to src/services/money.js. There were three rounders in this file and two of them
+// disagreed with this one on ordinary money — 1.005 became 1.00 rather than 1.01 — and one of
+// those two computed the total a transaction is stored with. The names are kept so that every
+// call site in this file reads exactly as it did.
+const fmt = formatNumber;
+const currencyDecimals = currencyDecimalsOf;
+const fmtMoney = formatMoney;
+const roundMoney = roundToCurrency;
 const num = { fontVariantNumeric: "tabular-nums", direction: "ltr", unicodeBidi: "embed" };
 
 /* ── Currency-pair rate helpers ──────────────────────────────────────────
@@ -2527,11 +2507,10 @@ export default function App() {
         return result;
       }, `edit:${existing.id}`);
     }
-    const roundCur = (value, curId) => {
-      const dec = Math.max(0, Math.min(6, Number(cur(curId).dec) || 0));
-      const m = 10 ** dec;
-      return Math.round(Number(value) * m) / m;
-    };
+    // One rounder. This used to be its own implementation without the epsilon, which rounded a
+    // half-cent down: an amount of 1.005 was stored as 1.00 here and shown as 1.01 everywhere
+    // else on the same screen.
+    const roundCur = (value, curId) => roundToCurrency(data, value, curId);
     const amount = roundCur(+f.amount, f.curId), rate = +f.rate, total = roundCur(amount * rate, f.againstId);
     if (!(amount > 0)) { flash("بڕ دەبێت لە سفر گەورەتر بێت"); return false; }
     if (f.curId === f.againstId) { flash("ناکرێت دراوەکە لەگەڵ خۆی مامەڵەی پێبکرێت"); return false; }
@@ -5151,11 +5130,7 @@ function TxForm({ data, cur, calc, usr, avgRate, inventoryPosition, usdValueAt, 
   const partners = data.users.filter((u) => u.role === "partner" && !u.deleted);
   const offices = data.users.filter((u) => u.role === "office" && !u.deleted);
 
-  const roundByCurrency = (value, curId) => {
-    const dec = Math.max(0, Math.min(6, Number(cur(curId).dec) || 0));
-    const m = 10 ** dec;
-    return Math.round((Number(value) || 0) * m) / m;
-  };
+  const roundByCurrency = (value, curId) => roundToCurrency(data, value, curId);
 
   const autoStored = autoRate(f.type, f.curId, f.againstId);
   const autoQuote = autoStored
