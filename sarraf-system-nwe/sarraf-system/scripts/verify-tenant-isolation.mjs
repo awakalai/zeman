@@ -104,6 +104,8 @@ try {
     return lines[lines.length - 1] ?? "";
   };
 
+  const CUS_UID = "dddddddd-0000-0000-0000-000000000001";
+
   const refused = (uid, sql, what) => {
     let out = null;
     try { out = asUser(uid, sql); }
@@ -450,19 +452,18 @@ try {
     // auth_id cleared first, the way the cast at the top of this file is: creating an account is
     // itself guarded, and `on conflict (id)` does not catch a collision on auth_id, which is its
     // own unique key.
-    const CUS = "dddddddd-0000-0000-0000-000000000001";
     psql(`
       begin;
       set local session_replication_role = replica;
-      delete from public.app_users where auth_id = '${CUS}' and id <> 'iso-cus';
+      delete from public.app_users where auth_id = '${CUS_UID}' and id <> 'iso-cus';
       insert into public.app_users(id,name,role,auth_id,tenant_id)
-      values ('iso-cus','کڕیار','customer','${CUS}','t-sarkhel')
+      values ('iso-cus','کڕیار','customer','${CUS_UID}','t-sarkhel')
       on conflict (id) do update set auth_id = excluded.auth_id, tenant_id = excluded.tenant_id;
       commit;`);
 
     // The image, stored by the browser and completed by the storage service.
-    asUser(CUS, `insert into storage.objects(bucket_id,name,owner_id,metadata)
-                 values ('receipts','${path}','${CUS}','{}'::jsonb)`);
+    asUser(CUS_UID, `insert into storage.objects(bucket_id,name,owner_id,metadata)
+                 values ('receipts','${path}','${CUS_UID}','{}'::jsonb)`);
     psql(`update storage.objects
              set metadata='{"size":264888,"mimetype":"image/jpeg"}'::jsonb
            where bucket_id='receipts' and name='${path}'`);
@@ -511,7 +512,7 @@ try {
         expires_at = excluded.expires_at;
       commit;`);
 
-    const out = asUser(CUS, `select public.sarraf_ingest_receipt_batch(
+    const out = asUser(CUS_UID, `select public.sarraf_ingest_receipt_batch(
       '${batch}'::jsonb, '${receipts}'::jsonb, '${commandKey}')::text`);
     if (!out.includes("batch_id")) throw new Error(`the send returned: ${out.slice(0, 200)}`);
     // Accepted, not merely stored. The command records a rejected receipt too — with its image
@@ -524,6 +525,63 @@ try {
     if (!kept.startsWith("accepted")) throw new Error(`the receipt was recorded as: ${kept}`);
     const stage = psql(`select receipt_stage from public.receipt_batches where id='${batchId}'`).trim();
     if (stage !== "verified") throw new Error(`the batch reached the owner as '${stage}'`);
+  });
+
+  // ── and when it refuses, it says which rule ─────────────────────────────────
+  //
+  // Every refusal was written down as 'server_rejected' / "فیشەکە یاساکانی ناردنی نەبڕیوە",
+  // which names nothing, and the uploader was told they were duplicates whatever the cause. The
+  // most common cause is the first rule: a browser that never claimed acceptance, which almost
+  // always means it is running an older bundle.
+  check("a refused receipt says which rule refused it", () => {
+    const send = (suffix, overrides) => {
+      const bid = `refuse${suffix}-4753-ab10-4237115159b8`;
+      const rid = `isoref${suffix}0001`;
+      const p = `ingest/${bid}/${rid}.jpg`;
+      psql(`delete from public.receipt_intake_items where batch_id='${bid}'`);
+      psql(`delete from public.receipt_batches where id='${bid}'`);
+      psql(`delete from storage.objects where bucket_id='receipts' and name='${p}'`);
+      asUser(CUS_UID, `insert into storage.objects(bucket_id,name,owner_id,metadata)
+                       values ('receipts','${p}','${CUS_UID}','{}'::jsonb)`);
+      psql(`update storage.objects set metadata='{"size":264888,"mimetype":"image/jpeg"}'::jsonb
+             where bucket_id='receipts' and name='${p}'`);
+      const key = `receipt-ingest:${bid}`;
+      const tok = "isoTokenaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+      psql(`
+        begin;
+        select set_config('request.jwt.claim.role','service_role',true);
+        set local role service_role;
+        insert into public.receipt_ingestion_authorizations(command_key,actor_id,authorization_token,expires_at)
+        values ('${key}','iso-cus','${tok}', now() + interval '5 minutes')
+        on conflict (command_key) do update set expires_at = excluded.expires_at;
+        commit;`);
+      const b = JSON.stringify({ id: bid, customer_id: "iso-cus", customer_name: "کڕیار",
+        partner_id: null, direction: "in", currency: "CNY", _authorization_token: tok,
+        source: "app" }).replace(/'/g, "''");
+      const rows = JSON.stringify([{ id: rid, batch_id: bid, customer_id: "iso-cus",
+        direction: "in", amount: 1246.30, fee: 36.30, net_amount: 1210.00, currency: "CNY",
+        ref_no: `ISOREF${suffix}`, image_hash: suffix.padEnd(64, "b").slice(0, 64),
+        image_path: p, status: "ok", counted: true, intake_status: "accepted",
+        raw: {}, ...overrides }]).replace(/'/g, "''");
+      asUser(CUS_UID, `select public.sarraf_ingest_receipt_batch('${b}'::jsonb,'${rows}'::jsonb,'${key}')`);
+      return psql(`select rule_code from public.receipt_intake_items where batch_id='${bid}'`).trim();
+    };
+
+    // The one that has been happening: an older browser, sending no verdict at all.
+    const noVerdict = send("aaaa", { intake_status: undefined });
+    if (noVerdict !== "not_submitted_for_acceptance") {
+      throw new Error(`a receipt with no verdict was refused as '${noVerdict}'`);
+    }
+    const wrongCurrency = send("bbbb", { currency: "USD" });
+    if (wrongCurrency !== "currency_not_the_batch") {
+      throw new Error(`a receipt in another currency was refused as '${wrongCurrency}'`);
+    }
+    const badFee = send("cccc", { fee: 9999 });
+    if (badFee !== "invalid_fee") throw new Error(`a fee larger than the amount was refused as '${badFee}'`);
+    // The uploader's own reason is not overwritten by the command's.
+    const mine = send("dddd", { status: "error", counted: false, intake_status: "rejected",
+      reject_code: "unreadable", reject_reason: "وێنەکە نەخوێندرایەوە" });
+    if (mine !== "unreadable") throw new Error(`the uploader's own reason became '${mine}'`);
   });
 
   // ── the server's own key, calling a definer function ────────────────────────
