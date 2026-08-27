@@ -271,6 +271,70 @@ export async function submitReceiptDocuments(client, documentIds, commandKey = n
   };
 }
 
+/**
+ * Send a receipt in place of one that was refused.
+ *
+ * «لە بەرامبەر فیشە ڕەتکراوەکەدا دوگمەی «بارکردنەوەی فیشی نوێ» چالاک دەبێت ... بارکردنەوەی نوێ
+ *   بەستەر (Link) دەکرێتەوە بە فیشە ڕەتکراوەکەی پێشوو»
+ *
+ * The upload itself is the ordinary one — same claim, same storage, same reading — and the link
+ * is made afterwards, so a replacement that fails to link is still a receipt that arrived rather
+ * than an image that was lost. The database refuses the link if the old one was never refused,
+ * if it already has a replacement, or if the two belong to different businesses.
+ */
+export async function replaceReceipt(client, rejectedDocumentId, newDocumentId) {
+  const { data, error } = await client.rpc("sarraf_receipt_replace", {
+    p_rejected_document_id: rejectedDocumentId,
+    p_new_document_id: newDocumentId,
+  });
+  if (error) throw error;
+  return {
+    replaced: data?.replaced || rejectedDocumentId,
+    by: data?.by || newDocumentId,
+    trackingCode: data?.tracking_code || null,
+    replayed: data?.replayed === true,
+  };
+}
+
+/** An uploader's own receipts, their names, and what replaced what. */
+export async function loadMyReceipts(client, limit = 50) {
+  const { data, error } = await client.rpc("sarraf_my_receipt_intakes_v2", { p_limit: limit });
+  if (error) throw error;
+  return (data || []).map((r) => ({
+    id: r.id,
+    trackingCode: r.tracking_code || null,
+    state: r.state,
+    flow: r.flow,
+    receivedAt: r.received_at,
+    ocrAttempts: r.ocr_attempts ?? 0,
+    reason: r.rule_reason,
+    replacedBy: r.replaced_by_document_id || null,
+    replacedByTrackingCode: r.replaced_by_tracking_code || null,
+    replaces: r.replaces_document_id || null,
+  }));
+}
+
+/**
+ * What a receipt's state means for the person who sent it, once the replacement chain is taken
+ * into account. The specification names four: PENDING, APPROVED, REJECTED, REPLACED. REPLACED is
+ * not stored — a stored copy of it could disagree with the link — it is what a refused receipt
+ * becomes once something has been sent in its place.
+ */
+export function receiptOutcome(receipt) {
+  if (receipt?.replacedBy) return "replaced";
+  const state = receipt?.state;
+  if (["accepted", "finalized", "forwarded", "delivered", "seen"].includes(state)) return "approved";
+  if (["rejected", "duplicate", "currency_mismatch", "tamper_suspected", "failed_terminal"].includes(state)) {
+    return "rejected";
+  }
+  return "pending";
+}
+
+/** Whether the uploader may send something in place of this one. */
+export function mayBeReplaced(receipt) {
+  return receiptOutcome(receipt) === "rejected" && !receipt?.replacedBy;
+}
+
 /** An uploader's own receipts and where each one has got to. */
 export async function loadMyIntakes(client, limit = 50) {
   const { data, error } = await client.rpc("sarraf_my_receipt_intakes", { p_limit: limit });

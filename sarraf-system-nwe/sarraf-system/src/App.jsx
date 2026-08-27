@@ -4,7 +4,9 @@ import { createReceiptIngestionCommand, ingestReceiptBatch } from "./services/re
 import { forgetSend, outcomeText, pendingSend, rememberSend, resolveSendOutcome, settleFailedSend, stageText } from "./services/receiptSendState";
 import { arithmeticObjection, receiptNetFrom, sendableSet, validateReceiptArithmetic } from "./services/receiptValidation";
 import { BuildStamp, UpdateBanner } from "./components/system/UpdateBanner";
-import { intakeReceipt, intakeStatusText, noteReceiptReadFailure, receiptReadFailureText, requestStoredReceiptOcr } from "./services/receiptIntake";
+import { NotificationBell } from "./components/system/NotificationBell";
+import { MyReceipts } from "./components/portal/MyReceipts";
+import { intakeReceipt, intakeStatusText, loadMyReceipts, noteReceiptReadFailure, receiptReadFailureText, replaceReceipt, requestStoredReceiptOcr } from "./services/receiptIntake";
 import { DICT } from "./i18n/dictionary";
 import { computeInventoryPosition } from "./services/inventoryAccounting";
 import { createReceiptReviewCommand, finalizeReceiptBatch, loadReceiptPolicy, reviewReceiptBatch } from "./services/receiptReview";
@@ -3589,6 +3591,9 @@ export default function App() {
               style={{ background: "var(--glass)", border: "1px solid var(--line)", color: "var(--txt-2)" }}>
               {theme === "dark" ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
             </button>}
+            {/* Both sides of a receipt hear about it here: the owner that a batch arrived, the
+                person who sent it that it was accepted or refused and why. */}
+            <NotificationBell client={supabase} />
             <button onClick={signOut} aria-label={navSectionLabel("چوونەدەرەوە", "Sign out", "تسجيل الخروج")} className="w-9 h-9 rounded-full tap flex items-center justify-center"
               style={{ background: "var(--glass)", border: "1px solid var(--line)", color: "var(--txt-2)" }}>
               <LogOut className="w-4 h-4" />
@@ -6503,6 +6508,13 @@ function ReceiptList({ rows, showFrom }) {
                 <div className="text-[10px] mt-0.5 truncate" style={{ ...num, color: "var(--txt-3)" }}>
                   {r.ref_no || "—"} · {r.tx_time || new Date(r.created_at).toLocaleDateString("en-GB")}
                 </div>
+                {/* The name the person who sent it can quote down a phone. Both sides read the
+                    same one — it is the intake document's, not a second one minted here. */}
+                {r.tracking_code && (
+                  <div className="text-[10px] mt-0.5 truncate font-mono" style={{ color: "var(--txt-3)" }}>
+                    {r.tracking_code}
+                  </div>
+                )}
               </div>
             </div>
           ))}
@@ -8953,6 +8965,33 @@ function ReceiptArchive({ customerId, data, flash, simple = false }) {
   const [portalSummary, setPortalSummary] = useState(null);
   const [portalSummaryError, setPortalSummaryError] = useState("");
   const [q, setQ] = useState(""); const [from, setFrom] = useState(""); const [to, setTo] = useState("");
+  // Their own receipts, one row each, by name — which is where a refused one is refused *to*
+  // somebody rather than merely refused. The batch summary above says what was counted; this
+  // says what happened to each image, and gives the way back out of a rejection.
+  const [mine, setMine] = useState(null);
+  const [mineError, setMineError] = useState("");
+
+  const reloadMine = useCallback(async () => {
+    if (!simple) return;
+    try {
+      setMine(await loadMyReceipts(supabase));
+      setMineError("");
+    } catch (error) {
+      console.error("my receipts", error);
+      setMineError(userFacingServiceError(error, _lang, "فیشەکانی خۆت بار نەبوون"));
+    }
+  }, [simple]);
+
+  useEffect(() => { reloadMine(); }, [reloadMine]);
+
+  // The upload is the ordinary one; the link is made after it, so a replacement that cannot be
+  // linked is still a receipt that arrived rather than an image that was lost.
+  const replaceOne = async (receipt, file) => {
+    const intake = await intakeReceipt({
+      client: supabase, blob: file, mediaType: file.type || "image/jpeg",
+    });
+    await replaceReceipt(supabase, receipt.id, intake.documentId);
+  };
 
   useEffect(() => {
     let active = true;
@@ -8979,15 +9018,19 @@ function ReceiptArchive({ customerId, data, flash, simple = false }) {
     // refusal. Drawn as a red failure it reads as "the system is broken" to somebody whose
     // only fault is being new — which is the first thing they see, before they have sent
     // anything, on the screen that exists for sending. An empty summary is an empty summary.
-    if (portalSummaryError) {
-      return <DeferredPanel><PortalReceiptSummary summary={{ totals: [], batches: [] }} data={data}
-        ui={{ Card, Empty, Hero, Pill, fmtMoney, tr, num }}
-        loadSummary={(batchId) => loadBatchSummary(supabase, batchId)} /></DeferredPanel>;
-    }
-    return <DeferredPanel><PortalReceiptSummary summary={portalSummary} data={data}
-      ui={{ Card, Empty, Hero, Pill, fmtMoney, tr, num }}
-      loadSummary={(batchId) => loadBatchSummary(supabase, batchId)} /></DeferredPanel>;
+    const summaryShown = portalSummaryError ? { totals: [], batches: [] } : portalSummary;
+    return (
+      <div className="space-y-3">
+        <DeferredPanel><PortalReceiptSummary summary={summaryShown} data={data}
+          ui={{ Card, Empty, Hero, Pill, fmtMoney, tr, num }}
+          loadSummary={(batchId) => loadBatchSummary(supabase, batchId)} /></DeferredPanel>
+        <MyReceipts receipts={mine} loading={mine === null} error={mineError}
+          onReload={reloadMine} onReplace={replaceOne}
+          ui={{ Card, Pill, Empty, StatePanel, tr }} />
+      </div>
+    );
   }
+
 
   if (!recs) return <Card><Empty t={tr("بارکردن...")} /></Card>;
   const list = simple ? recs : recs.filter((r) => {
