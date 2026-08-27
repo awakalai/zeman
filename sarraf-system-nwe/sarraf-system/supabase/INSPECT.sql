@@ -1,23 +1,21 @@
--- The send reaches the server now, and the server keeps nothing.
+-- Which rule refused them, and did the browser send the field at all?
 --
---   0 فیش نێردرا — 1 وێنە نەخوێندرایەوە و بڕ و دراوی نییە؛ وەک بەڵگە پارێزراوە بەڵام نەنێردرا
---   ⚠️ 3 لەوانەی وا دەرکەوت پشتڕاستکراوبن لەلایەن سێرڤەرەوە وەک دووبارە ڕەتکرانەوە
+-- Every one of the four was refused with rule_code 'server_rejected' and the reason
+-- "فیشەکە یاساکانی ناردنی نەبڕیوە", which is the command's DEFAULT — the text it uses when the
+-- browser named no reason of its own. So this was not the duplicate test: nothing has ever been
+-- accepted for them to duplicate, and all four images and all four references are distinct.
 --
--- That sentence is mine, and it assumes the reason is duplication. The command writes the real
--- reason on every row it refuses — rule_code and rule_reason — and it refuses for several
--- different reasons:
+-- v_accept is a single conjunction of six things, and the command records which row it refused
+-- without recording WHICH of the six failed:
 --
---   the row did not claim acceptance          intake_status <> 'accepted'
---   the browser did not count it              status <> 'ok', or counted false
---   the amount or fee is out of range         amount <= 0, fee > amount
---   the currency is not the batch's           v_row_currency <> v_currency
---   the image or reference is already kept    duplicate
+--   intake_status = 'accepted'
+--   status = 'ok'
+--   counted in (true,t,1)
+--   amount > 0 and amount <= 1000000000000
+--   fee >= 0 and fee <= amount
+--   currency ~ '^[A-Z]{3,8}$' and currency = the batch's currency
 --
--- The last one is the only one my sentence describes. This asks which it actually was, and
--- whether anything was ever accepted before that these could be duplicates OF.
---
--- The owner sees "هیچ کۆمەڵەیەکی نوێ نییە" because the command closes a batch that accepted
--- nothing: status 'done', receipt_stage 'rejected'. The batch exists; it is simply not new.
+-- The audit event keeps the raw row the browser sent. That answers it outright.
 
 \pset format aligned
 \pset border 2
@@ -25,50 +23,43 @@
 \pset pager off
 
 \echo ''
-\echo '════════ 1. Every batch ever committed, and how it closed ════════'
+\echo '════════ 1. Exactly what the browser sent for each refused receipt ════════'
+\echo ''
+\echo 'intake_status is the field added this morning. If it is ⟨absent⟩ the phone was still'
+\echo 'running the previous bundle when it sent — a service worker serves the cached app until'
+\echo 'it updates, so a deploy five minutes earlier does not mean the phone had it.'
 \echo ''
 
-select b.id, b.customer_id, b.currency, b.n, b.rejected_n, b.status, b.receipt_stage,
-       b.total_gross, to_char(b.created_at,'HH24:MI:SS') as at, b.tenant_id
-  from public.receipt_batches b order by b.created_at desc limit 10;
+select e.receipt_id,
+       coalesce(e.metadata->>'intake_status','⟨absent⟩') as intake_status,
+       coalesce(e.metadata->>'status','⟨absent⟩')        as status,
+       coalesce(e.metadata->>'counted','⟨absent⟩')       as counted,
+       coalesce(e.metadata->>'amount','⟨absent⟩')        as amount,
+       coalesce(e.metadata->>'fee','⟨absent⟩')           as fee,
+       coalesce(e.metadata->>'currency','⟨absent⟩')      as currency
+  from public.receipt_audit_events e
+ where e.event_type = 'rejected'
+ order by e.created_at desc limit 8;
 
 \echo ''
-\echo '════════ 2. Every receipt the command kept, and the reason for each refusal ════════'
+\echo '════════ 2. The batch''s own currency, which every row must match ════════'
 \echo ''
+\echo 'v_row_currency = v_currency is the one test that compares a row against the batch. A batch'
+\echo 'that fell back to UNKNOWN refuses every CNY receipt in it.'
+\echo ''
+
+select b.id, b.currency as batch_currency, b.n, b.rejected_n, b.status, b.receipt_stage,
+       to_char(b.created_at,'HH24:MI:SS') as at
+  from public.receipt_batches b order by b.created_at desc limit 5;
 
 select i.batch_id, i.id, i.intake_status, i.counted, i.rule_code,
-       left(i.rule_reason, 60) as reason,
-       i.amount, i.currency, left(i.ref_no, 28) as ref_no,
-       to_char(i.created_at,'HH24:MI:SS') as at
-  from public.receipt_intake_items i
- order by i.created_at desc limit 20;
+       i.amount, i.currency, i.fee
+  from public.receipt_intake_items i order by i.created_at desc limit 8;
 
 \echo ''
-\echo '════════ 3. Was there anything to be a duplicate OF? ════════'
-\echo ''
-\echo 'The duplicate test only looks at rows already accepted. If none was ever accepted, no'
-\echo 'receipt can be a duplicate and the refusal is something else wearing that name.'
+\echo '════════ 3. Everything the browser put in the metadata, once, in full ════════'
 \echo ''
 
-select coalesce(intake_status,'⟨none⟩') as intake_status, count(*) as rows,
-       count(distinct image_hash) as distinct_images,
-       count(distinct upper(regexp_replace(coalesce(ref_no,''),'[^0-9A-Za-z]','','g'))) as distinct_refs
-  from public.receipt_intake_items group by 1 order by 1;
-
-\echo ''
-\echo '════════ 4. What the browser actually sent, as the audit recorded it ════════'
-\echo ''
-
-select e.event_type, e.batch_id, e.receipt_id,
-       left(e.metadata::text, 220) as metadata, to_char(e.created_at,'HH24:MI:SS') as at
+select jsonb_pretty(e.metadata) as sent
   from public.receipt_audit_events e
- order by e.created_at desc limit 10;
-
-\echo ''
-\echo '════════ 5. The documents behind them, and whether the owner can reach any of it ════════'
-\echo ''
-
-select d.id, d.state, d.rule_code, to_char(d.received_at,'HH24:MI:SS') as at, d.tenant_id
-  from public.receipt_documents d
- where d.received_at > now() - interval '3 hours'
- order by d.received_at desc limit 10;
+ where e.event_type = 'rejected' order by e.created_at desc limit 1;
