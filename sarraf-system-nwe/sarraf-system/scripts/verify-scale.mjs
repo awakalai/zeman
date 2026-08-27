@@ -193,6 +193,42 @@ try {
     "the ledger is walked in order and abandoned once the page is full",
     asTenant.split("\n").find((l) => /Scan/.test(l))?.trim());
 
+  // ── and the tenant question is asked once, not once per row ────────────────
+  //
+  // `sarraf_tenant_visible(tenant_id)` takes a column, so PostgreSQL must invoke it for every row
+  // it looks at — and being `security definer` it is never inlined, so each invocation runs two
+  // more definer functions that each query app_users. Written as `(select f())` instead, the
+  // lookup becomes an InitPlan: one evaluation for the whole statement.
+  //
+  // An InitPlan in the plan, and no per-row call left in the filter, is what says so.
+  record(/InitPlan/.test(asTenant) && !/sarraf_tenant_visible/.test(asTenant),
+    "the tenant question is asked once for the query, not once for every row",
+    asTenant.split("\n").filter((l) => /Filter|InitPlan/.test(l)).join("\n").slice(0, 300));
+
+  // The counts the loader takes BEFORE it fetches anything, to find out how many pages there are.
+  // This was the slowest read in the application and nothing measured it.
+  const countPlan = psql(`
+    begin;
+      set local role authenticated;
+      select set_config('request.jwt.claim.sub','11111111-1111-1111-1111-111111111111',true);
+      explain (analyze, format text) select count(*) from public.ledger;
+    commit;
+  `);
+  record(/InitPlan/.test(countPlan) && !/sarraf_tenant_visible/.test(countPlan),
+    "and once for the count the loader takes before it fetches a single row",
+    countPlan.split("\n").filter((l) => /Filter|InitPlan/.test(l)).join("\n").slice(0, 300));
+
+  // Every table, not just the one measured. A tenant policy still written the per-row way is a
+  // table that will slow down exactly as the ledger did, and nothing else would notice.
+  const perRow = psql(`
+    select coalesce(string_agg(tablename || '.' || policyname, ', '), '')
+      from pg_policies
+     where schemaname = 'public'
+       and (coalesce(qual, '') like '%sarraf_tenant_visible%'
+         or coalesce(with_check, '') like '%sarraf_tenant_visible%')
+  `).trim();
+  record(perRow === "", "no table is left asking the tenant question once per row", perRow.slice(0, 300));
+
   console.log(`\n${failures.length ? `${failures.length} of ${passed + failures.length}` : `All ${passed}`} opening queries ${failures.length ? "sort a whole table." : `scale, at ${LEDGER_ROWS.toLocaleString()} rows of history.`}`);
 } finally {
   db.stop();
