@@ -19,7 +19,12 @@ export function receiptIdentity(receipt) {
 export function validateReceiptArithmetic(receipt, decimals = 2) {
   const gross = moneyUnits(receipt?.amount ?? receipt?.grossAmount, decimals);
   const fee = moneyUnits(receipt?.fee ?? 0, decimals);
-  const order = moneyUnits(receipt?.orderAmount, decimals);
+  // An order amount of zero is the reader saying the receipt states none — a payment of nothing
+  // is not a payment. Kept as a real order it made `expectedNet = order ?? (gross - fee)` return
+  // 0, because ?? only falls through on null, and every honest receipt was accused on screen of
+  // "1,246.30 − 36.30 = 0.00، بەڵام 1,210.00 نووسراوە". receiptNetFrom below already guards this
+  // with `order > 0`; this line did not.
+  const order = moneyUnits(receipt?.orderAmount, decimals) || null;
   const net = moneyUnits(receipt?.netAmount ?? receipt?.net, decimals);
   const tolerance = 1;
   const issues = [];
