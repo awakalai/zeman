@@ -5,6 +5,7 @@ import { forgetSend, outcomeText, pendingSend, rememberSend, resolveSendOutcome,
 import { arithmeticObjection, receiptNetFrom, sendableSet, validateReceiptArithmetic } from "./services/receiptValidation";
 import { BuildStamp, UpdateBanner } from "./components/system/UpdateBanner";
 import { NotificationBell } from "./components/system/NotificationBell";
+import { loadWholeTable } from "./services/tableLoader";
 import { MyReceipts } from "./components/portal/MyReceipts";
 import { intakeReceipt, intakeStatusText, loadMyReceipts, noteReceiptReadFailure, receiptReadFailureText, replaceReceipt, requestStoredReceiptOcr } from "./services/receiptIntake";
 import { DICT } from "./i18n/dictionary";
@@ -1750,6 +1751,9 @@ export default function App() {
   // to. Landing on the receipts page with two hundred batches on it and leaving the person to
   // find theirs is not a search result, it is a page change.
   const [searchFocus, setSearchFocus] = useState("");
+  // Named tables whose rows would not all fit. Empty on every installation this system has, and
+  // the one thing that must never be silent when it stops being empty.
+  const [truncatedTables, setTruncatedTables] = useState([]);
   // The manager does not land on an exchange's dashboard. They maintain this installation and
   // sell it; they are not a party to anybody's trades, and the first screen they see should be
   // the businesses running on it rather than a set of totals belonging to one of them.
@@ -1874,52 +1878,15 @@ export default function App() {
   // per-request row ceiling. Financial calculations must never run on a
   // truncated tx/ledger/account history. We verify an exact RLS-visible count
   // and retry once if concurrent writes changed the result while paging.
-  const fetchAllRows = async (
-    table,
-    { orders = [], pageSize = 500, maxAttempts = 2 } = {}
-  ) => {
-    let lastMismatch = null;
-    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-      const countRes = await supabase.from(table).select("*", { count: "exact", head: true });
-      if (countRes.error) return { data: null, error: countRes.error };
-      const expected = Number(countRes.count ?? 0);
-      const byId = new Map();
-      let from = 0;
-
-      while (true) {
-        let q = supabase
-          .from(table)
-          .select("*")
-          .range(from, from + pageSize - 1);
-
-        for (const order of orders) {
-          q = q.order(order.column, { ascending: order.ascending !== false });
-        }
-
-        const page = await q;
-        if (page.error) return { data: null, error: page.error };
-        const rows = page.data || [];
-        for (const row of rows) {
-          const key = row?.id ?? `${from}:${byId.size}`;
-          byId.set(String(key), row);
-        }
-
-        if (rows.length < pageSize) break;
-        from += pageSize;
-      }
-
-      const data = [...byId.values()];
-      if (data.length === expected) return { data, error: null };
-
-      lastMismatch = new Error(
-        `${table} changed while loading (${data.length}/${expected}); retrying for a consistent financial view`
-      );
-    }
-
-    return {
-      data: null,
-      error: lastMismatch || new Error(`${table} could not be loaded completely`),
-    };
+  // Extracted to src/services/tableLoader.js, where it can be tested: it decides whether the
+  // dashboard opens at all, and it lived here as a closure nothing could reach. Two faults went
+  // with it — a load that failed whenever somebody else wrote a row, and no upper bound at all.
+  const tablesThatDidNotFit = useRef(new Set());
+  const fetchAllRows = async (table, options = {}) => {
+    const result = await loadWholeTable(supabase, table, options);
+    if (result.truncated) tablesThatDidNotFit.current.add(table);
+    else tablesThatDidNotFit.current.delete(table);
+    return { data: result.data, error: result.error };
   };
 
   const loadAll = async (activeProfile = profile) => {
@@ -1956,6 +1923,10 @@ export default function App() {
         throw rt.error;
       }
       if (queryErrors.length) throw queryErrors[0].error;
+      // A view computed from part of the ledger is not a smaller answer, it is a wrong one. If a
+      // table was too large to load whole, that is said out loud and kept on the screen — never
+      // absorbed into a dashboard that looks exactly like a complete one.
+      setTruncatedTables([...tablesThatDidNotFit.current]);
       if (adminMode && (!rt?.data?.ok || rt?.data?.contract_version !== "13f-v1" || !rt?.data?.phase13f_applied)) {
         const contractError = new Error("Frontend/Database contract mismatch — Phase 13F production migration is required");
         setAccessError(contractError.message);
@@ -3647,6 +3618,18 @@ export default function App() {
 
       {/* Before anything else on the page: a fix nobody is running is a fix nobody has. */}
       <UpdateBanner lang={lang} />
+
+      {truncatedTables.length > 0 && (
+        <div role="alert" className="mx-4 md:mx-8 mt-3 rounded-[var(--r-sm)] px-4 py-3 text-[12px] leading-6"
+             style={{ background: "rgba(220,38,38,.12)", border: "1px solid var(--neg)", color: "var(--neg)" }}>
+          <b>{navSectionLabel("ژمارەکان تەواو نین", "The figures are incomplete", "الأرقام غير مكتملة")}</b>
+          {" — "}
+          {navSectionLabel(
+            `تۆمارەکانی ${truncatedTables.join("، ")} زۆرترن لەوەی بتوانرێت لە وێبگەڕدا بارببرێن. پەیوەندی بە پشتگیرییەوە بکە پێش ئەوەی پشت بەم ژمارانە ببەستیت.`,
+            `${truncatedTables.join(", ")} holds more rows than the browser can load. Contact support before relying on these figures.`,
+            `${truncatedTables.join("، ")} يحتوي على صفوف أكثر مما يمكن تحميله. تواصل مع الدعم قبل الاعتماد على هذه الأرقام.`)}
+        </div>
+      )}
 
       {!portalUser && <DeferredPanel compact><MarketPulse currencies={data.currencies} lang={lang} online={online} /></DeferredPanel>}
 
