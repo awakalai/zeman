@@ -1746,6 +1746,10 @@ export default function App() {
   const [accessEpoch, setAccessEpoch] = useState(0);
   const [accessError, setAccessError] = useState("");
   const [page, setPage] = useState("dash");
+  // What the global search was pointing at when it sent us here — the batch a receipt belongs
+  // to. Landing on the receipts page with two hundred batches on it and leaving the person to
+  // find theirs is not a search result, it is a page change.
+  const [searchFocus, setSearchFocus] = useState("");
   // The manager does not land on an exchange's dashboard. They maintain this installation and
   // sell it; they are not a party to anybody's trades, and the first screen they see should be
   // the businesses running on it rather than a set of totals belonging to one of them.
@@ -3354,6 +3358,30 @@ export default function App() {
   const va = viewAs ? usr(viewAs) : null;
   const portalUser = !isAdmin ? profile : va;
   const navSectionLabel = (ku, en, ar) => lang === "en" ? en : lang === "ar" ? ar : ku;
+
+  /**
+   * Open whatever a notification is about.
+   *
+   * A batch is a place on the receipts screen, so it opens there with the batch already found.
+   * A receipt belongs to whoever is looking: staff review it, and the person who sent it is
+   * already looking at their own list, so for them there is nowhere else to go and the panel
+   * simply closes. Returning false leaves the panel open, which is the honest answer when there
+   * is no screen for the thing.
+   */
+  const openNotification = (item) => {
+    if (!item?.subjectId) return false;
+    if (item.subjectKind === "batch") {
+      if (portalUser) return false;
+      setSearchFocus(item.subjectId);
+      setPage("receipts");
+      return true;
+    }
+    if (item.subjectKind === "receipt" && isAdmin && !portalUser) {
+      setPage("receipt-review");
+      return true;
+    }
+    return false;
+  };
   const systemNeedsAttention = !online || !!stale || !!data?.runtime?.maintenance_mode;
   const systemStatusLabel = systemNeedsAttention
     ? (!online
@@ -3500,7 +3528,7 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-1.5 shrink-0">
-            {!portalUser && isAdmin && <React.Suspense fallback={null}><OperationalPalette client={supabase} lang={lang} onNavigate={(path) => setPage(path.slice(2))} /></React.Suspense>}
+            {!portalUser && isAdmin && <React.Suspense fallback={null}><OperationalPalette client={supabase} lang={lang} onNavigate={(path, focus) => { setPage(path.slice(2)); setSearchFocus(focus || ""); }} /></React.Suspense>}
             {isAdmin && va && (
               <button onClick={() => setViewAs(null)}
                 className="flex items-center gap-1.5 text-[12px] font-semibold px-3 py-2 rounded-full tap"
@@ -3593,7 +3621,7 @@ export default function App() {
             </button>}
             {/* Both sides of a receipt hear about it here: the owner that a batch arrived, the
                 person who sent it that it was accepted or refused and why. */}
-            <NotificationBell client={supabase} />
+            <NotificationBell client={supabase} onOpen={openNotification} />
             <button onClick={signOut} aria-label={navSectionLabel("چوونەدەرەوە", "Sign out", "تسجيل الخروج")} className="w-9 h-9 rounded-full tap flex items-center justify-center"
               style={{ background: "var(--glass)", border: "1px solid var(--line)", color: "var(--txt-2)" }}>
               <LogOut className="w-4 h-4" />
@@ -3663,7 +3691,7 @@ export default function App() {
               ? <TxForm {...shared} onSave={saveTx} editing={editTx} onCancel={() => setEditTx(null)} />
               : <TxList {...shared} onEdit={setEditTx} onDel={delTx} settle={settle} unsettle={unsettle} />)}
             {page === "receipts" && <ReceiptsHub {...shared} batches={batches} batchLoadError={batchLoadError} reloadBatches={reloadBatches} flash={flash} profile={profile}
-              onMakeTx={(b) => { setPendingBatch(b); setPage("newtx"); }} />}
+              searchFocus={searchFocus} onMakeTx={(b) => { setPendingBatch(b); setPage("newtx"); }} />}
             {page === "people" && <PeopleHub {...shared} accountMove={accountMove} accountTransfer={accountTransfer} profile={profile} detailId={detailId} setDetailId={setDetailId} onSave={saveTx} transfer={transfer} officePay={officePay} settle={settle} createUser={createUser} deleteUser={deleteUser} setUserRate={setUserRate} flash={flash} />}
             {page === "report" && <Report {...shared} />}
             {/* The admin centre is one business's world. A manager belongs to no business, so
@@ -7839,7 +7867,7 @@ function ReceiptUploader({ customerId, customerName, partnerId, uploaderId, dire
 }
 
 /* ─────────── ناوەندی فیشەکان (ئەدمین) ─────────── */
-function ReceiptsHub({ data, usr, batches, batchLoadError, reloadBatches, flash, onMakeTx, profile, calc, cur }) {
+function ReceiptsHub({ data, usr, batches, batchLoadError, reloadBatches, flash, onMakeTx, profile, calc, cur, searchFocus = "" }) {
   const initialReceiptQuery = useMemo(() => new URLSearchParams(window.location.search), []);
   const [tab, setTab] = useState(initialReceiptQuery.get("receiptTab") || "inbox");
   const [sel, setSel] = useState(null);
@@ -7848,6 +7876,15 @@ function ReceiptsHub({ data, usr, batches, batchLoadError, reloadBatches, flash,
   const [addTxId, setAddTxId] = useState("");
   const [addReason, setAddReason] = useState("");
   const [batchSearch, setBatchSearch] = useState(initialReceiptQuery.get("receiptSearch") || "");
+  // Arriving here from the global search: open on the batch the result was about, with the
+  // control tab showing, rather than at the top of a list of two hundred.
+  useEffect(() => {
+    if (!searchFocus) return;
+    setBatchSearch(searchFocus);
+    setTab("control");
+    setStageFilter("all");
+    setBatchPage(1);
+  }, [searchFocus]);
   const [stageFilter, setStageFilter] = useState(initialReceiptQuery.get("receiptStage") || "all");
   const [batchSort, setBatchSort] = useState(initialReceiptQuery.get("receiptSort") || "newest");
   const [batchPage, setBatchPage] = useState(1);

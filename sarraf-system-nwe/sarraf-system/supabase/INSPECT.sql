@@ -1,21 +1,9 @@
--- Which rule refused them, and did the browser send the field at all?
+-- Are the three things actually there, on the live database?
 --
--- Every one of the four was refused with rule_code 'server_rejected' and the reason
--- "فیشەکە یاساکانی ناردنی نەبڕیوە", which is the command's DEFAULT — the text it uses when the
--- browser named no reason of its own. So this was not the duplicate test: nothing has ever been
--- accepted for them to duplicate, and all four images and all four references are distinct.
---
--- v_accept is a single conjunction of six things, and the command records which row it refused
--- without recording WHICH of the six failed:
---
---   intake_status = 'accepted'
---   status = 'ok'
---   counted in (true,t,1)
---   amount > 0 and amount <= 1000000000000
---   fee >= 0 and fee <= amount
---   currency ~ '^[A-Z]{3,8}$' and currency = the batch's currency
---
--- The audit event keeps the raw row the browser sent. That answers it outright.
+-- The gates run against a database built from these same migration files, so they prove the SQL
+-- is right. They cannot prove it was applied HERE. This asks the live database directly, and
+-- asks it the way the owner would: is there a name on a receipt, can a rejection be followed to
+-- what replaced it, and is anything being told to anybody.
 
 \pset format aligned
 \pset border 2
@@ -23,43 +11,98 @@
 \pset pager off
 
 \echo ''
-\echo '════════ 1. Exactly what the browser sent for each refused receipt ════════'
-\echo ''
-\echo 'intake_status is the field added this morning. If it is ⟨absent⟩ the phone was still'
-\echo 'running the previous bundle when it sent — a service worker serves the cached app until'
-\echo 'it updates, so a deploy five minutes earlier does not mean the phone had it.'
+\echo '════════ 1. کۆدی تایبەت — every receipt has a name, on both tables ════════'
 \echo ''
 
-select e.receipt_id,
-       coalesce(e.metadata->>'intake_status','⟨absent⟩') as intake_status,
-       coalesce(e.metadata->>'status','⟨absent⟩')        as status,
-       coalesce(e.metadata->>'counted','⟨absent⟩')       as counted,
-       coalesce(e.metadata->>'amount','⟨absent⟩')        as amount,
-       coalesce(e.metadata->>'fee','⟨absent⟩')           as fee,
-       coalesce(e.metadata->>'currency','⟨absent⟩')      as currency
-  from public.receipt_audit_events e
- where e.event_type = 'rejected'
- order by e.created_at desc limit 8;
+select 'receipt_documents' as "table",
+       count(*)                                   as "rows",
+       count(tracking_code)                       as "named",
+       count(*) - count(tracking_code)            as "unnamed",
+       count(distinct tracking_code)              as "distinct names"
+  from public.receipt_documents
+union all
+select 'receipts',
+       count(*), count(tracking_code), count(*) - count(tracking_code), count(distinct tracking_code)
+  from public.receipts;
 
 \echo ''
-\echo '════════ 2. The batch''s own currency, which every row must match ════════'
-\echo ''
-\echo 'v_row_currency = v_currency is the one test that compares a row against the batch. A batch'
-\echo 'that fell back to UNKNOWN refuses every CNY receipt in it.'
+\echo 'The four most recent, and whether the two sides agree on the name:'
 \echo ''
 
-select b.id, b.currency as batch_currency, b.n, b.rejected_n, b.status, b.receipt_stage,
-       to_char(b.created_at,'HH24:MI:SS') as at
-  from public.receipt_batches b order by b.created_at desc limit 5;
-
-select i.batch_id, i.id, i.intake_status, i.counted, i.rule_code,
-       i.amount, i.currency, i.fee
-  from public.receipt_intake_items i order by i.created_at desc limit 8;
+select d.tracking_code                                  as "document name",
+       coalesce(r.tracking_code, '⟨no receipt row⟩')    as "receipt name",
+       case when r.id is null then '—'
+            when r.tracking_code is not distinct from d.tracking_code then 'یەک دەگرنەوە ✓'
+            else 'ناکۆکن ✗' end                          as "agree",
+       d.state::text                                     as "state",
+       d.received_at
+  from public.receipt_documents d
+  left join public.receipts r on r.id = d.id
+ order by d.received_at desc
+ limit 4;
 
 \echo ''
-\echo '════════ 3. Everything the browser put in the metadata, once, in full ════════'
+\echo '════════ 2. دووبارە بارکردنەوە — can a rejection be followed? ════════'
 \echo ''
 
-select jsonb_pretty(e.metadata) as sent
-  from public.receipt_audit_events e
- where e.event_type = 'rejected' order by e.created_at desc limit 1;
+select count(*) filter (where replaced_by_document_id is not null) as "replaced",
+       count(*) filter (where replaces_document_id is not null)    as "replacements",
+       count(*) filter (where state = 'rejected'
+                          and replaced_by_document_id is null)     as "refused, awaiting a new one"
+  from public.receipt_documents;
+
+\echo ''
+\echo 'And the command that is the only thing allowed to write those links:'
+\echo ''
+
+select p.proname                    as "function",
+       o.rolname                    as "runs as",
+       case when has_function_privilege('authenticated', p.oid, 'execute')
+            then 'کڕیار دەیبینێت ✓' else 'داخراوە' end as "reachable"
+  from pg_proc p
+  join pg_namespace n on n.oid = p.pronamespace and n.nspname = 'public'
+  join pg_roles o on o.oid = p.proowner
+ where p.proname in ('sarraf_receipt_replace', 'sarraf_my_receipt_intakes_v2')
+ order by p.proname;
+
+\echo ''
+\echo '════════ 3. ئاگادارکردنەوە — is anything being said, to anybody? ════════'
+\echo ''
+
+select kind                                  as "kind",
+       count(*)                              as "sent",
+       count(*) filter (where read_at is null) as "unread",
+       max(created_at)                       as "most recent"
+  from public.zeman_notifications
+ group by kind
+ order by 2 desc;
+
+\echo ''
+\echo 'The emitters, and whether realtime carries them:'
+\echo ''
+
+select t.tgname                                as "trigger",
+       c.relname                               as "on table",
+       case when t.tgenabled = 'D' then 'کوژاوەتەوە ✗' else 'کارا ✓' end as "state"
+  from pg_trigger t
+  join pg_class c on c.oid = t.tgrelid
+ where not t.tgisinternal
+   and t.tgname in ('receipt_documents_speaks', 'receipt_batches_arrives',
+                    'receipt_documents_tracking_code', 'receipts_tracking_code')
+ order by 1;
+
+select case when exists (
+         select 1 from pg_publication_tables
+          where pubname = 'supabase_realtime' and schemaname = 'public'
+            and tablename = 'zeman_notifications')
+       then 'realtime کارا ✓ — ئاگادارکردنەوە خێرا دەگات'
+       else 'realtime نییە — ئینباکس بە خۆی نوێ دەبێتەوە' end as "realtime";
+
+\echo ''
+\echo '════════ and the receipts that arrived today ════════'
+\echo ''
+
+select b.id, b.receipt_stage, b.status, b.n, b.rejected_n, b.created_at
+  from public.receipt_batches b
+ order by b.created_at desc
+ limit 5;

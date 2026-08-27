@@ -802,6 +802,119 @@ try {
     if (mine !== "unreadable") throw new Error(`the uploader's own reason became '${mine}'`);
   });
 
+  // A refusal at the door is the common one — seven of this morning's nine — and until now it
+  // was written on the intake item and nowhere the uploader can see. Their own screen called
+  // those receipts «چاوەڕوانی پشکنین», nobody was told, and the re-upload button never appeared
+  // on the receipts that needed it most.
+  check("a receipt refused as it is sent is refused on the uploader's screen too", () => {
+    const bid = "doorref-4753-ab10-4237115159b8";
+    const rid = "isodoor00001";
+    const p = `ingest/${bid}/${rid}.jpg`;
+    psql(`delete from public.receipt_intake_items where batch_id='${bid}'`);
+    psql(`delete from public.receipt_batches where id='${bid}'`);
+    psql(`delete from public.receipt_documents where id='${rid}'`);
+    psql(`delete from storage.objects where bucket_id='receipts' and name='${p}'`);
+    asUser(CUS_UID, `insert into storage.objects(bucket_id,name,owner_id,metadata)
+                     values ('receipts','${p}','${CUS_UID}','{}'::jsonb)`);
+    psql(`update storage.objects set metadata='{"size":264888,"mimetype":"image/jpeg"}'::jsonb
+           where bucket_id='receipts' and name='${p}'`);
+    // The document as the upload leaves it: read, waiting to be sent.
+    psql(`insert into public.receipt_documents(
+            id,flow,state,uploader_id,customer_id,storage_path,mime_type,tenant_id)
+          values ('${rid}','customer_sells_to_zeman','created','iso-cus','iso-cus',
+                  '${p}','image/jpeg','t-sarkhel')`);
+    for (const state of ["uploading", "uploaded", "ocr_pending", "ocr_processing", "parsed"]) {
+      psql(`update public.receipt_documents set state='${state}' where id='${rid}'`);
+    }
+
+    const key = `receipt-ingest:${bid}`;
+    const tok = "isoTokenaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    psql(`
+      begin;
+      select set_config('request.jwt.claim.role','service_role',true);
+      set local role service_role;
+      insert into public.receipt_ingestion_authorizations(command_key,actor_id,authorization_token,expires_at)
+      values ('${key}','iso-cus','${tok}', now() + interval '5 minutes')
+      on conflict (command_key) do update set expires_at = excluded.expires_at;
+      commit;`);
+    const b = JSON.stringify({ id: bid, customer_id: "iso-cus", customer_name: "کڕیار",
+      partner_id: null, direction: "in", currency: "CNY", _authorization_token: tok,
+      source: "app" }).replace(/'/g, "''");
+    // A currency that is not the batch's: refused at the door, by name.
+    const rows = JSON.stringify([{ id: rid, batch_id: bid, customer_id: "iso-cus",
+      direction: "in", amount: 1246.30, fee: 36.30, net_amount: 1210.00, currency: "USD",
+      ref_no: "ISODOOR1", image_hash: "d".repeat(64), image_path: p, status: "ok",
+      counted: true, intake_status: "accepted", raw: {} }]).replace(/'/g, "''");
+    asUser(CUS_UID, `select public.sarraf_ingest_receipt_batch('${b}'::jsonb,'${rows}'::jsonb,'${key}')`);
+
+    const doc = psql(`select state || ' / ' || coalesce(rule_code,'⟨none⟩')
+                        from public.receipt_documents where id='${rid}'`).trim();
+    if (!doc.startsWith("rejected")) {
+      throw new Error(`the uploader's own screen still shows this receipt as '${doc}'`);
+    }
+    if (!doc.includes("currency_not_the_batch")) {
+      throw new Error(`the rule that refused it was not carried across: ${doc}`);
+    }
+    const told = asUser(CUS_UID, `select coalesce(string_agg(kind, ', '), '<none>')
+                                    from public.zeman_notifications where subject_id='${rid}'`).trim();
+    if (!told.includes("receipt_rejected")) {
+      throw new Error(`the person who sent it was never told: ${told}`);
+    }
+  });
+
+  // ── and can the owner find it again ─────────────────────────────────────────
+  //
+  // A code exists so it can be quoted down a phone and typed in at the other end. Until today
+  // the search matched prefixes only, so a receipt could be found only by typing the first
+  // characters of its reference — and it did not know tracking codes existed at all.
+  check("the owner finds a receipt by the code its sender read out", () => {
+    const code = psql(`select tracking_code from public.receipts where id = '${SEND_DOC}'`).trim();
+    if (!code.startsWith("ZR-")) throw new Error(`the receipt has no code to search for: ${code}`);
+    const hit = asUser(A_UID,
+      `select coalesce(string_agg(type || '|' || label || '|' || coalesce(focus,'—'), ', '), '<none>')
+         from public.sarraf_operational_search('${code}', 20, null)`).trim();
+    if (!hit.includes(`receipt|${code}`)) throw new Error(`searching the code found: ${hit}`);
+    if (!hit.includes("416e99b0")) throw new Error(`the result does not say which batch to open: ${hit}`);
+  });
+
+  // The half of the code a person actually reads out is the end of it. Prefix matching made
+  // that useless.
+  check("the tail of a code finds it, not only the head", () => {
+    const code = psql(`select tracking_code from public.receipts where id = '${SEND_DOC}'`).trim();
+    const tail = code.slice(-6);
+    const hit = asUser(A_UID, `select coalesce(string_agg(label, ', '), '<none>')
+                                 from public.sarraf_operational_search('${tail}', 20, null)`).trim();
+    if (!hit.includes(code)) throw new Error(`searching '${tail}' found: ${hit}`);
+  });
+
+  check("a receipt is found by its amount", () => {
+    const hit = asUser(A_UID, `select coalesce(string_agg(type || '|' || label, ', '), '<none>')
+                                 from public.sarraf_operational_search('1246', 20, null)`).trim();
+    if (!hit.includes("receipt|ZR-")) throw new Error(`searching an amount found: ${hit}`);
+  });
+
+  check("the other business cannot search its way to it", () => {
+    const code = psql(`select tracking_code from public.receipts where id = '${SEND_DOC}'`).trim();
+    const hit = asUser(B_UID, `select coalesce(string_agg(label, ', '), '<none>')
+                                 from public.sarraf_operational_search('${code}', 20, null)`).trim();
+    if (hit !== "<none>") throw new Error(`the other business found it: ${hit}`);
+  });
+
+  // A customer of the same business must not be able to type a code and read a receipt that is
+  // not theirs. The tenant policy does not separate them — they are in the same business.
+  check("a customer searches their own receipts and nobody else's", () => {
+    psql(`update public.receipt_batches set customer_id = 'iso-a', partner_id = null
+           where id = '416e99b0-589f-4493-8a37-12d0bd414b56'`);
+    const code = psql(`select tracking_code from public.receipts where id = '${SEND_DOC}'`).trim();
+    const hit = asUser(CUS_UID, `select coalesce(string_agg(label, ', '), '<none>')
+                                   from public.sarraf_operational_search('${code}', 20, null)`).trim();
+    psql(`update public.receipt_batches set customer_id = 'iso-cus'
+           where id = '416e99b0-589f-4493-8a37-12d0bd414b56'`);
+    if (hit !== "<none>") {
+      throw new Error(`a customer read another customer's receipt out of the search: ${hit}`);
+    }
+  });
+
   // ── the server's own key, calling a definer function ────────────────────────
   //
   // /api/receipt-ocr downloads the stored original and records what the reader saw through

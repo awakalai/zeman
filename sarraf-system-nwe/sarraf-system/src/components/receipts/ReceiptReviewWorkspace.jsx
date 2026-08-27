@@ -4,7 +4,7 @@ import {
   Loader2, Minus, RefreshCw, XCircle, ZoomIn,
 } from "lucide-react";
 import {
-  correctExtraction, diffVersions, loadDocumentDetail, loadReviewQueue,
+  correctExtraction, diffVersions, loadDocumentDetail, loadReplacementChain, loadReviewQueue,
   finalizeReceipt, loadReceiptSummary, reviewEquation, reviewTotals,
   setReceiptDailyRate, transitionDocument,
 } from "../../services/receiptWorkspace";
@@ -35,6 +35,12 @@ const COPY = {
     setRate: "دانانی وەشانی نوێی نرخ", finalReason: "هۆکاری جێگیرکردن (لانیکەم ٨ پیت)",
     finalize: "جێگیرکردن و ئامادەکردن بۆ ناردن", mfa: "ئەم هەنگاوە MFA ـی ئەدمین پێویستە",
     frozen: "نرخ لەسەر خودی فیشەکە جێگیر دەکرێت و دوای ئەوە ناگۆڕدرێت",
+    code: "کۆدی فیش", copied: "کۆپی کرا",
+    replacesTitle: "ئەم فیشە جێگرەوەیە",
+    replacesBody: (code) => `لە جێگەی ${code} نێردراوە، کە پێشتر ڕەت کرابووەوە.`,
+    replacesWhy: "هۆکاری ڕەتکردنەوەی پێشوو",
+    replacedTitle: "ئەم فیشە گۆڕدراوە",
+    replacedBody: (code) => `${code} لە جێگەی ئەمە نێردراوە.`,
     treatments: {
       added_on_top: "لەسەر زیادکراوە", deducted_from_principal: "لە بڕی سەرەکی لابراوە",
       included_in_total: "لە کۆدا تێکەڵە", no_fee: "فی نییە", unknown: "نادیار",
@@ -58,6 +64,7 @@ export function ReceiptReviewWorkspace({ client, lang = "ku", signedUrlFor = nul
   const [queue, setQueue] = useState([]);
   const [index, setIndex] = useState(0);
   const [detail, setDetail] = useState(null);
+  const [chain, setChain] = useState(null);
   const [state, setState] = useState("loading");
   const [zoom, setZoom] = useState(1);
   const [imageUrl, setImageUrl] = useState(null);
@@ -88,7 +95,7 @@ export function ReceiptReviewWorkspace({ client, lang = "ku", signedUrlFor = nul
 
   useEffect(() => {
     let alive = true;
-    setDetail(null); setImageUrl(null); setZoom(1); setEditing(null); setAcceptText(""); setRejectText("");
+    setDetail(null); setChain(null); setImageUrl(null); setZoom(1); setEditing(null); setAcceptText(""); setRejectText("");
     setRateValue(""); setRateReason(""); setFinalReason("");
     if (!currentDoc) return;
     (async () => {
@@ -97,6 +104,11 @@ export function ReceiptReviewWorkspace({ client, lang = "ku", signedUrlFor = nul
         if (!alive) return;
         setDetail(d);
         setRateValue(d.summary?.availableRateValue == null ? "" : String(d.summary.availableRateValue));
+        // Best effort, and deliberately not awaited into the same failure: a reviewer who cannot
+        // be told the history must still be able to review the receipt in front of them.
+        loadReplacementChain(client, d.document)
+          .then((c) => { if (alive) setChain(c); })
+          .catch((e) => console.error("replacement chain", e));
         if (signedUrlFor && d.document.storagePath) {
           const url = await signedUrlFor(d.document.storagePath);
           if (alive) setImageUrl(url);
@@ -220,6 +232,41 @@ export function ReceiptReviewWorkspace({ client, lang = "ku", signedUrlFor = nul
             <section className="rrw-detail" aria-label={copy.current}>
               {!detail ? <div className="rrw-empty">{copy.loading}</div> : (
                 <>
+                  {/* The name of the thing being looked at. Two people on a phone need one word
+                      for it, and until today the only one was a random fourteen characters. */}
+                  {detail.document?.trackingCode && (
+                    <div className="rrw-code" dir="ltr">
+                      <span className="rrw-code-label">{copy.code}</span>
+                      <code>{detail.document.trackingCode}</code>
+                    </div>
+                  )}
+
+                  {/* Why this receipt exists. Without it a replacement reads as a second claim
+                      on money that was already refused once. */}
+                  {chain?.replaces && (
+                    <div className="rrw-chain">
+                      <History aria-hidden="true" />
+                      <div>
+                        <b>{copy.replacesTitle}</b>
+                        <p dir="auto">{copy.replacesBody(chain.replaces.trackingCode || chain.replaces.id)}</p>
+                        {chain.replaces.ruleReason && (
+                          <p className="rrw-chain-why" dir="auto">
+                            {copy.replacesWhy}: {chain.replaces.ruleReason}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                  {chain?.replacedBy && (
+                    <div className="rrw-chain is-closed">
+                      <History aria-hidden="true" />
+                      <div>
+                        <b>{copy.replacedTitle}</b>
+                        <p dir="auto">{copy.replacedBody(chain.replacedBy.trackingCode || chain.replacedBy.id)}</p>
+                      </div>
+                    </div>
+                  )}
+
                   {/* The arithmetic verdict, stated rather than left for the reviewer to compute. */}
                   {equation && (
                     <div className={`rrw-equation ${equation.reconciles === true ? "is-ok"
