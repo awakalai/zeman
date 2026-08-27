@@ -7318,7 +7318,15 @@ function ReceiptUploader({ customerId, customerName, partnerId, uploaderId, dire
       const acceptedCount = Number.isFinite(Number(commitData?.accepted_count)) ? Number(commitData.accepted_count) : good.length;
       const serverRejected = Number.isFinite(Number(commitData?.rejected_count)) ? Number(commitData.rejected_count) - bad.length : 0;
       const recordedRejects = sendRows.length - counted.length;
-      flash(`${acceptedCount} ${tr("فیش نێردرا")} ✓${recordedRejects ? ` — ${recordedRejects} ${tr("ڕەتکراو بە وێنە و هۆکارەوە تۆمار کران")}` : ""}${withoutFigures.length ? ` — ${withoutFigures.length} ${tr("وێنە نەخوێندرایەوە و بڕ و دراوی نییە؛ وەک بەڵگە پارێزراوە بەڵام نەنێردرا")}` : ""}${serverRejected > 0 ? ` — ⚠️ ${serverRejected} ${tr("لەوانەی وا دەرکەوت پشتڕاستکراوبن لەلایەن سێرڤەرەوە وەک دووبارە ڕەتکرانەوە؛ لیستی فیشە ڕەتکراوەکان ببینە")}` : ""}`);
+      flash(`${acceptedCount} ${tr("فیش نێردرا")} ✓${recordedRejects ? ` — ${recordedRejects} ${tr("ڕەتکراو بە وێنە و هۆکارەوە تۆمار کران")}` : ""}${withoutFigures.length ? ` — ${withoutFigures.length} ${tr("وێنە نەخوێندرایەوە و بڕ و دراوی نییە؛ وەک بەڵگە پارێزراوە بەڵام نەنێردرا")}` : ""}${serverRejected > 0 ? ` — ⚠️ ${serverRejected} ${tr("لەلایەن سێرڤەرەوە ڕەتکرانەوە؛ هۆکاری هەریەکەیان لەگەڵ فیشەکەدا نووسراوە")}` : ""}`);
+      // Never name a cause the server did not give. This said "rejected as duplicates" whatever
+      // the reason was, and four receipts refused for something else entirely were reported to
+      // the owner as duplicates of nothing — the server had never accepted a single receipt.
+      if (serverRejected > 0) setSendError({
+        code: "server_rejected",
+        message: `${serverRejected} ${tr("فیش لەلایەن سێرڤەرەوە وەرنەگیران")}`,
+        detail: tr("هۆکاری هەریەکەیان لەسەر خودی فیشەکە نووسراوە — لیستی فیشە ڕەتکراوەکان بکەرەوە"),
+      });
       forgetSend();
       commitRows([]); receiptCommandRef.current = null; setEditingId(null); setInspectorId(null);
       setSelectedRows([]); setReviewTab("all"); setReviewSearch(""); setReviewPlatform("all");
