@@ -826,6 +826,42 @@ try {
       eq(psql("select state from public.receipt_documents where id='f15-doc-1'").trim(), "submitted", "state");
     });
 
+    // The reader names the money and does not always name the fee. With no orderAmount on the
+    // receipt, "1210 with 36.30 added on top" and "1246.30 with 36.30 deducted" are the same
+    // three numbers, so the label is ambiguous where the arithmetic is not. Every receipt read
+    // on the morning of the 27th arrived this way and every one went to a person for it.
+    step("a fee that adds up needs no name, and one that does not still stops", () => {
+      be("customer");
+      const read = (doc, extraction) => {
+        j(`public.sarraf_receipt_intake_begin_v3(
+             '${doc}', null, 'f15-batch', 'image/jpeg', 'receipt-intake:receipt:${doc}')`);
+        psql(`select public.sarraf_receipt_record_server_extraction('${doc}','${doc.padEnd(64,"c").slice(0,64).replace(/[^0-9a-f]/g,"a")}',
+          24680,'image/jpeg',true,'${extraction}'::jsonb,'verify','flow',120,'flow-fee-${doc}')`);
+        return psql(`select state from public.receipt_documents where id='${doc}'`).trim();
+      };
+      const base = `"refNo":"F15FEE","payee":"ئەحمەد","txDate":"2026-08-01","txTime":"11:04",
+                    "platform":"wechat","transactionStatus":"success","confidence":0.93,
+                    "currency":"CNY","feeTreatment":"unknown"`;
+
+      // 1246.30 - 36.30 = 1210.00, to the cent.
+      eq(read("f15-fee-adds-up",
+        `{${base},"grossAmount":"1246.30","feeAmount":"36.30","netAmount":"1210.00"}`),
+        "validated", "a reconciled fee with no label");
+
+      // The same receipt with a net nobody can get to from the other two.
+      eq(read("f15-fee-does-not",
+        `{${base},"grossAmount":"1246.30","feeAmount":"36.30","netAmount":"999.00"}`),
+        "needs_manual_review", "a fee that cannot be reconciled");
+
+      // A fee of nothing is not an unknown treatment; that one the numbers settle outright.
+      eq(read("f15-fee-is-zero",
+        `{${base},"grossAmount":"1210.00","feeAmount":"0","netAmount":"1210.00"}`),
+        "validated", "a receipt that carried no fee");
+      eq(psql(`select fee_treatment from public.receipt_extractions
+                where document_id='f15-fee-is-zero' and is_original`).trim(),
+        "no_fee", "the treatment derived for a zero fee");
+    });
+
     step("another customer cannot send it, or see it", () => {
       be("other");
       if (!refused(`select public.sarraf_receipt_submit('["f15-doc-1"]'::jsonb,'receipt-submit:f15-theft')`)) {
