@@ -527,6 +527,54 @@ try {
     if (stage !== "verified") throw new Error(`the batch reached the owner as '${stage}'`);
   });
 
+  // ── and does the owner actually see it ──────────────────────────────────────
+  //
+  // Everything up to here proves the command committed. It does not prove the one thing the
+  // owner cares about: that the batch turns up on their screen. Their receipts page reads
+  //
+  //   supabase.from("receipt_batches").select("*").order("created_at", ...).limit(200)
+  //
+  // as `authenticated`, under the tenant policy, and lists `status = 'new'` under فیشی نوێ. So
+  // the batch must carry the customer's business — it is written by a command running as
+  // sarraf_definer on the customer's behalf, so sarraf_tenant() must have resolved to theirs —
+  // and it must have closed as new, which it only does when something was accepted.
+  //
+  // This is the last link that was never tested, and the whole question the owner has been
+  // asking all morning: does a receipt reach سەرخێڵ.
+  check("the owner sees the batch their customer sent", () => {
+    const seen = asUser(A_UID, `select coalesce(string_agg(id || ':' || status || ':' || receipt_stage, ', '), '<none>')
+                                  from public.receipt_batches
+                                 where id = '416e99b0-589f-4493-8a37-12d0bd414b56'`).trim();
+    if (!seen.includes("416e99b0")) {
+      throw new Error(`the owner cannot see the batch at all: ${seen}`);
+    }
+    if (!seen.includes(":new:")) {
+      throw new Error(`the batch is not waiting for the owner: ${seen}`);
+    }
+    if (!seen.includes("verified")) {
+      throw new Error(`the batch did not reach the owner verified: ${seen}`);
+    }
+  });
+
+  check("the owner can open it and read what was sent", () => {
+    // sarraf_batch_summary is what the batch screen calls; it is the owner's whole view of it.
+    const summary = asUser(A_UID,
+      `select public.sarraf_batch_summary('416e99b0-589f-4493-8a37-12d0bd414b56')::text`);
+    if (!summary.includes("accepted_count")) {
+      throw new Error(`the owner cannot open the batch: ${summary.slice(0, 200)}`);
+    }
+    if (/"accepted_count"\s*:\s*0/.test(summary)) {
+      throw new Error(`the owner opens it and finds nothing accepted: ${summary.slice(0, 240)}`);
+    }
+  });
+
+  check("the other business never sees it", () => {
+    const seen = asUser(B_UID, `select coalesce(string_agg(id, ', '), '<none>')
+                                  from public.receipt_batches
+                                 where id = '416e99b0-589f-4493-8a37-12d0bd414b56'`).trim();
+    if (seen !== "<none>") throw new Error(`the other business can see it: ${seen}`);
+  });
+
   // ── and when it refuses, it says which rule ─────────────────────────────────
   //
   // Every refusal was written down as 'server_rejected' / "فیشەکە یاساکانی ناردنی نەبڕیوە",
