@@ -3,6 +3,7 @@ import { supabase } from "./lib/supabase";
 import { createReceiptIngestionCommand, ingestReceiptBatch } from "./services/receiptIngestion";
 import { forgetSend, outcomeText, pendingSend, rememberSend, resolveSendOutcome, settleFailedSend, stageText } from "./services/receiptSendState";
 import { arithmeticObjection, receiptNetFrom, sendableSet, validateReceiptArithmetic } from "./services/receiptValidation";
+import { BuildStamp, UpdateBanner } from "./components/system/UpdateBanner";
 import { intakeReceipt, intakeStatusText, noteReceiptReadFailure, receiptReadFailureText, requestStoredReceiptOcr } from "./services/receiptIntake";
 import { DICT } from "./i18n/dictionary";
 import { computeInventoryPosition } from "./services/inventoryAccounting";
@@ -3592,9 +3593,16 @@ export default function App() {
               style={{ background: "var(--glass)", border: "1px solid var(--line)", color: "var(--txt-2)" }}>
               <LogOut className="w-4 h-4" />
             </button>
+            {/* Which build this screen is. Small enough to ignore, and there in every screenshot,
+                which is the whole point: three of this morning's reports were of behaviour that
+                had already been fixed and nobody could tell. */}
+            <BuildStamp />
           </div>
         </div>
       </header>
+
+      {/* Before anything else on the page: a fix nobody is running is a fix nobody has. */}
+      <UpdateBanner lang={lang} />
 
       {!portalUser && <DeferredPanel compact><MarketPulse currencies={data.currencies} lang={lang} online={online} /></DeferredPanel>}
 
