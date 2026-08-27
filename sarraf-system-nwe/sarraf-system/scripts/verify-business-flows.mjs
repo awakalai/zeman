@@ -1117,6 +1117,113 @@ try {
     });
   });
 
+  // The step that moves the money, run the way the browser runs it.
+  //
+  // Flow 2 proves the ledger writes — by inserting the transaction by hand and calling
+  // sarraf_ensure_transaction_ledger as the superuser. Neither of those is what happens in life.
+  // In life an administrator's request runs sarraf_convert_receipt_batch_to_transaction as
+  // `authenticated`, through a definer owned by sarraf_definer, which holds no BYPASSRLS — and
+  // then a SECOND call, sarraf_convert_receipt_batch_finish, is what actually confirms the money
+  // moved. No gate has ever run either of them, and the browser reports "مامەڵە تۆمار کرا ✓"
+  // whether the second one succeeds or not.
+  scenario(19, "converting a batch moves the money, and says so", () => {
+    // Everything the administrator does runs as the role a browser connects as, not as the
+    // superuser every other database gate has used.
+    const asAdmin = (sql) => {
+      const out = psql(`
+        begin;
+        select set_config('request.jwt.claim.aal','aal2',true);
+        set local role authenticated;
+        ${sql};
+        commit;`);
+      return String(out).split("\n").map((l) => l.trim()).filter(Boolean).pop() || "";
+    };
+
+    step("a verified batch of accepted receipts", () => {
+      be("admin");
+      psql(`delete from public.receipt_intake_items where batch_id='f19'`);
+      psql(`delete from public.receipt_batches where id='f19'`);
+      psql(`insert into public.receipt_batches(id,customer_id,customer_name,direction,status,currency,
+              uploaded_by,receipt_stage,tenant_id,n)
+            values ('f19','cus','کڕیار فرۆشیار','in','new','CNY','cus','verified','t-sarkhel',1)`);
+      // Everything the Type A rule insists on: who was paid, when, through which wallet, and
+      // whether a fee was taken. A fixture that skips them is refused exactly as a real batch
+      // missing them would be.
+      psql(`insert into public.receipt_intake_items(id,batch_id,submitted_by,customer_id,direction,
+              image_path,source_status,intake_status,counted,currency,amount,fee,net_amount,
+              payee,tx_date,platform,has_fee)
+            values ('f19-item','f19','cus','cus','in',
+                    'ingest/flow-nineteen-batch/receipt-f19-item.jpg','ok','accepted',true,
+                    'CNY',2000,0,2000,'ئەحمەد','2026-08-06','wechat',false)`);
+      // Buying yuan pays dollars out of the main cashbox, and a house with an empty cashbox is
+      // rightly refused. The refusal is a rule of its own and not what this flow is about, so
+      // the cashbox is funded first — the way it would be in life, before anybody buys anything.
+      psql(`insert into public.ledger(id,type,owner,cur_id,amount,note,date,created_by)
+            values ('f19-float','deposit','self','usd',5000,'قاسەی سەرەتایی',
+                    statement_timestamp(),'adm')
+            on conflict (id) do nothing`);
+    });
+
+    // Yuan is an external currency: the house does not hold it, a partner does. Placing the
+    // receipts with that partner is its own command, and no gate has run it either.
+    step("the receipts are placed with the partner who is holding the money", () => {
+      const out = asAdmin(`select public.sarraf_assign_receipt_custody('f19',
+        '[{"receipt_id":"f19-item","partner_id":"par"}]'::jsonb,
+        'پارەکە لای هاوبەشەکەیە','receipt-custody:f19:0123456789abcdef')::text`);
+      if (!out.includes("f19")) throw new Error(`custody returned: ${out.slice(0, 240)}`);
+      eq(psql(`select coalesce(partner_id,'⟨none⟩') from public.receipt_intake_items
+                where id='f19-item'`).trim(), "par", "the partner holding the receipt");
+    });
+
+    let txId = null;
+    step("an administrator converts it, exactly as the screen does", () => {
+      const tx = JSON.stringify({
+        id: "f19-tx", code: null, type: "buy", cp_id: "cus", cur_id: "cny",
+        amount: 2000, rate: 0.1388888889, against_id: "usd", total: 277.78,
+        partner_id: "par", status: "completed", date: "2026-08-06T09:00:00Z", note: "",
+      }).replace(/'/g, "''");
+      const out = asAdmin(`select public.sarraf_convert_receipt_batch_to_transaction(
+        'f19','["f19-item"]'::jsonb,'${tx}'::jsonb,
+        'فیشە پەسەندکراوەکان کرانە مامەڵە','receipt-convert:f19:0123456789abcdef')::text`);
+      if (!out.includes("transaction")) throw new Error(`the conversion returned: ${out.slice(0, 240)}`);
+      txId = psql(`select coalesce(tx_id,'⟨none⟩') from public.receipt_batches where id='f19'`).trim();
+      if (txId === "⟨none⟩") throw new Error("the batch was not bound to a transaction");
+    });
+
+    // The call the browser makes next, and whose failure it currently swallows. If the ledger
+    // cannot be written from a user's request — the exact way the receipt reader was dead for
+    // nine days — this is where it shows.
+    step("the second call confirms the money actually moved", () => {
+      const out = asAdmin(`select public.sarraf_convert_receipt_batch_finish('${txId}')::text`);
+      if (!/"ledger_rows"/.test(out)) throw new Error(`the confirmation returned: ${out.slice(0, 240)}`);
+    });
+
+    step("and the ledger holds both sides of it", () => {
+      const cny = psql(`select coalesce(sum(amount)::text,'⟨none⟩') from public.ledger
+                          where tx_id='${txId}' and cur_id='cny'`).trim();
+      const usd = psql(`select coalesce(sum(amount)::text,'⟨none⟩') from public.ledger
+                          where tx_id='${txId}' and cur_id='usd'`).trim();
+      if (cny === "⟨none⟩" || Number(cny) <= 0) throw new Error(`yuan moved by ${cny}`);
+      if (usd === "⟨none⟩" || Number(usd) >= 0) throw new Error(`dollars moved by ${usd}`);
+    });
+
+    step("running it twice does not move the money twice", () => {
+      asAdmin(`select public.sarraf_convert_receipt_batch_finish('${txId}')`);
+      const rows = psql(`select count(*) from public.ledger where tx_id='${txId}'`).trim();
+      eq(rows, 2, "ledger rows after confirming twice");
+    });
+
+    step("the receipts are held by that transaction and cannot be converted again", () => {
+      eq(psql(`select coalesce(transaction_id,'⟨none⟩') from public.receipt_intake_items
+                where id='f19-item'`).trim(), txId, "the transaction holding the receipt");
+      if (!refused(`select public.sarraf_convert_receipt_batch_to_transaction(
+        'f19','["f19-item"]'::jsonb,'{"type":"buy","cp_id":"cus","cur_id":"cny"}'::jsonb,
+        'دووبارە گۆڕین','receipt-convert:f19:fedcba98765432100')`)) {
+        throw new Error("the same receipts were converted into a second transaction");
+      }
+    });
+  });
+
   // ── the report ──────────────────────────────────────────────────────────────
   const failed = scenarios.filter((s) => !s.ok);
   for (const s of scenarios) {
