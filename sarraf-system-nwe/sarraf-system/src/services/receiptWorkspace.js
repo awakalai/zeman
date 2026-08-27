@@ -248,15 +248,37 @@ export function reviewEquation(v) {
     else if (treatment === "included_in_total") expectedGross = order;
     else if (treatment === "deducted_from_principal") expectedGross = order;
     else if (treatment === "no_fee") expectedGross = order;
+    else {
+      // An order amount, and no word for the fee. Both readings are real receipts; whichever the
+      // gross matches is the one the receipt is stating.
+      const onTop = minor(order + fee), inside = minor(order), g0 = minor(gross);
+      if (g0 != null && onTop != null && Math.abs(g0 - onTop) <= 1) expectedGross = order + fee;
+      else if (g0 != null && inside != null && Math.abs(g0 - inside) <= 1) expectedGross = order;
+    }
   }
+
   const g = minor(gross), e = minor(expectedGross);
+  const net = v.netAmount, n = minor(net), f = minor(fee);
+
+  // A receipt that prints no order amount — the ordinary Alipay layout — makes exactly one
+  // arithmetic claim: gross − fee = net. Reading that as "cannot be decided" told the reviewer
+  // the screen could not tell, on a receipt whose money adds up to the cent, and then the
+  // database accepted it anyway. The screen and the rule now say the same thing.
+  const byNet = order != null || g == null || n == null || f == null
+    ? null
+    : Math.abs(g - f - n) <= 1;
+
   return {
     treatment,
     gross, order, fee,
-    net: v.netAmount,
+    net,
     expectedGross,
+    // Which statement was checked, so the screen can say it in words rather than only in green.
+    basis: order != null ? "order" : byNet == null ? null : "net",
     // One minor unit of tolerance; the comparison is in integers, never floats.
-    reconciles: g == null || e == null ? null : Math.abs(g - e) <= 1,
+    reconciles: order != null
+      ? (g == null || e == null ? null : Math.abs(g - e) <= 1)
+      : byNet,
     currency: upper(v.currency) || null,
   };
 }
