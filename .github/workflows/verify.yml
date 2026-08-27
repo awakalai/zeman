@@ -64,7 +64,10 @@ jobs:
         # names is the no-undef rule this repository has no linter for. Three identifiers that
         # were read and never declared made receipt upload throw ReferenceError inside an event
         # handler — no message, no rows, nothing on the screen — and every other gate passed.
-        check: [brand, share, search, names]
+        # i18n is a ratchet, not a target: the count of sentences written in one language
+        # only is recorded, and this fails if it goes up. The hole cannot grow while it is
+        # being closed.
+        check: [brand, share, search, names, i18n]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
