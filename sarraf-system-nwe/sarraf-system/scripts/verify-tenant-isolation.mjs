@@ -428,6 +428,104 @@ try {
     }
   });
 
+  // ── the send, end to end, exactly as the browser makes it ───────────────────
+  //
+  // Reading works now and the send still refuses, with a message that says nothing:
+  //
+  //   وێنەکان گەیشتن، بەڵام داتابەیس تۆماری نەکردن — فیشەکان نەگەیشتن
+  //
+  // ReceiptIngestionError replaces whatever the database said with that sentence, so the reason
+  // exists and nobody can see it. This makes the same call the browser makes — same command key
+  // shape, same batch, same receipt fields, same staged object — and lets the database speak.
+  check("a customer can send the receipts they uploaded", () => {
+    const batchId = "416e99b0-589f-4493-8a37-12d0bd414b56";
+    const docId = "isosend0001aa";
+    const path = `ingest/${batchId}/${docId}.jpg`;
+    psql(`delete from public.receipts where batch_id='${batchId}'`);
+    psql(`delete from public.receipt_batches where id='${batchId}'`);
+    psql(`delete from public.receipt_ingestion_commands where batch_id='${batchId}'`);
+    psql(`delete from storage.objects where bucket_id='receipts' and name='${path}'`);
+
+    // A customer of this business, as the portal has one. Seeded with the triggers off and the
+    // auth_id cleared first, the way the cast at the top of this file is: creating an account is
+    // itself guarded, and `on conflict (id)` does not catch a collision on auth_id, which is its
+    // own unique key.
+    const CUS = "dddddddd-0000-0000-0000-000000000001";
+    psql(`
+      begin;
+      set local session_replication_role = replica;
+      delete from public.app_users where auth_id = '${CUS}' and id <> 'iso-cus';
+      insert into public.app_users(id,name,role,auth_id,tenant_id)
+      values ('iso-cus','کڕیار','customer','${CUS}','t-sarkhel')
+      on conflict (id) do update set auth_id = excluded.auth_id, tenant_id = excluded.tenant_id;
+      commit;`);
+
+    // The image, stored by the browser and completed by the storage service.
+    asUser(CUS, `insert into storage.objects(bucket_id,name,owner_id,metadata)
+                 values ('receipts','${path}','${CUS}','{}'::jsonb)`);
+    psql(`update storage.objects
+             set metadata='{"size":264888,"mimetype":"image/jpeg"}'::jsonb
+           where bucket_id='receipts' and name='${path}'`);
+    // The claim the upload made, which is what the read policy recognises.
+    psql(`insert into public.receipt_documents(
+            id,flow,state,uploader_id,customer_id,batch_id,storage_path,mime_type,tenant_id)
+          values ('${docId}','customer_sells_to_zeman','created','iso-cus','iso-cus',
+                  '${batchId}','${path}','image/jpeg','t-sarkhel')
+          on conflict (id) do nothing`);
+
+    const batch = JSON.stringify({
+      id: batchId, customer_id: "iso-cus", customer_name: "کڕیار", partner_id: null,
+      // The route puts the minted token on the batch; the RPC redeems it and deletes the row.
+      _authorization_token: "isoTokenaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      direction: "in", currency: "CNY", total_gross: 1246.30, total_fee: 36.30,
+      total_net: 1210.00, dup_n: 0, rejected_n: 0, source: "app",
+    }).replace(/'/g, "''");
+    const receipts = JSON.stringify([{
+      id: docId, batch_id: batchId, customer_id: "iso-cus", customer_name: "کڕیار",
+      direction: "in", amount: 1246.30, fee: 36.30, fee_original: 36.30, fee_discount: 0,
+      platform: "Alipay", net_amount: 1210.00, currency: "CNY", sender: null,
+      receiver: "**雷(个人)", ref_no: "2026082523001493341404720693",
+      tx_time: "01:52:18", tx_date: "2026-08-25", bank: null, note: null,
+      image_hash: "a".repeat(64), image_path: path, status: "ok", counted: true,
+      intake_status: "accepted",
+      reject_code: null, reject_reason: null, dup_of: null, dup_of_date: null, dup_of_who: null,
+      raw: { ocr_v: 6, confidence: 0.95, attestation: null },
+    }]).replace(/'/g, "''");
+
+    // The real two steps. The browser's own RPC call is REFUSED by design — "not authorized by
+    // the ingestion service" — and the client falls back to /api/receipt-ingestion, which mints
+    // an authorization with the service key and then runs the same RPC under the caller's token.
+    // Testing only the first step would be testing the refusal.
+    const commandKey = `receipt-ingest:${batchId}`;
+    psql(`
+      begin;
+      select set_config('request.jwt.claim.role','service_role',true);
+      select set_config('request.jwt.claim.sub','',true);
+      set local role service_role;
+      insert into public.receipt_ingestion_authorizations(
+        command_key, actor_id, authorization_token, expires_at)
+      values ('${commandKey}','iso-cus','isoTokenaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', now() + interval '5 minutes')
+      on conflict (command_key) do update set
+        actor_id = excluded.actor_id,
+        authorization_token = excluded.authorization_token,
+        expires_at = excluded.expires_at;
+      commit;`);
+
+    const out = asUser(CUS, `select public.sarraf_ingest_receipt_batch(
+      '${batch}'::jsonb, '${receipts}'::jsonb, '${commandKey}')::text`);
+    if (!out.includes("batch_id")) throw new Error(`the send returned: ${out.slice(0, 200)}`);
+    // Accepted, not merely stored. The command records a rejected receipt too — with its image
+    // and its reason — so counting rows would pass on a batch in which nothing was taken.
+    if (!out.includes('"accepted_count": 1')) {
+      throw new Error(`the send accepted nothing: ${out.slice(0, 200)}`);
+    }
+    const kept = psql(`select intake_status || ' ' || coalesce(rule_reason,'—')
+                         from public.receipt_intake_items where batch_id='${batchId}'`).trim();
+    if (!kept.startsWith("accepted")) throw new Error(`the receipt was recorded as: ${kept}`);
+    const stage = psql(`select receipt_stage from public.receipt_batches where id='${batchId}'`).trim();
+    if (stage !== "verified") throw new Error(`the batch reached the owner as '${stage}'`);
+  });
+
   // ── the server's own key, calling a definer function ────────────────────────
   //
   // /api/receipt-ocr downloads the stored original and records what the reader saw through

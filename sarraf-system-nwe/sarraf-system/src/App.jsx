@@ -7289,6 +7289,12 @@ function ReceiptUploader({ customerId, customerName, partnerId, uploaderId, dire
           currency: r.currency, sender: r.sender || null, receiver: r.receiver || null, ref_no: r.refNo || null,
           tx_time: r.txTime || null, tx_date: r.txDate || null, bank: r.bank || null, note: r.note || null,
           image_hash: r.hash, image_path: path, status: r.status === "dup" ? "rejected" : r.status, counted: r.counted !== false,
+          // The verdict this browser reached, which the command then checks for itself against
+          // the amount, the fee, the currency and every receipt already accepted. Without it
+          // `v_accept := coalesce(r->>'intake_status','')='accepted' and ...` is false for every
+          // row, so a send that reported success recorded every receipt as rejected with
+          // "فیشەکە یاساکانی ناردنی نەبڕیوە" and closed the batch with nothing in it.
+          intake_status: r.status === "ok" && r.counted !== false ? "accepted" : "rejected",
           reject_code: r.rejectCode || null, reject_reason: r.rejectReason || null, dup_of: r.dupOf || null,
           dup_of_date: r.dupOfDate || null, dup_of_who: r.dupOfWho || null,
           raw: { ...(r.raw || {}), ocr_v: 6, confidence: r.confidence ?? r.raw?.confidence ?? null,

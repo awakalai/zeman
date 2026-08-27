@@ -51,3 +51,24 @@ test("a receipt with no figures is left out of the batch rather than refusing it
   assert.match(source, /const sendRows = \[\.\.\.counted, \.\.\.evidence\.filter\(storable\)\]/,
     "the send still includes evidence rows the receipts table cannot store");
 });
+
+// A send that reported success and recorded every receipt as rejected.
+//
+// sarraf_ingest_receipt_batch decides what it keeps with
+//
+//   v_accept := coalesce(r->>'intake_status','')='accepted' and ...
+//
+// and makeReceipt has never sent that field. So v_accept was false for every row on every send
+// this installation has ever made: the batch committed, the browser said "n فیش نێردرا ✓", and
+// each receipt was written as rejected with "فیشەکە یاساکانی ناردنی نەبڕیوە" — a batch closed
+// with nothing in it.
+test("the send states the verdict the command asks for", () => {
+  assert.match(source, /intake_status: r\.status === "ok" && r\.counted !== false \? "accepted" : "rejected"/,
+    "makeReceipt does not send intake_status, so the command accepts nothing");
+});
+
+test("the verdict is the browser's claim, not a way past the command's own checks", () => {
+  // Only a row this browser counted may claim acceptance; everything else travels as evidence.
+  assert.ok(!/intake_status:\s*"accepted"\s*,/.test(source),
+    "a row is hard-coded as accepted rather than stating what was actually decided");
+});
