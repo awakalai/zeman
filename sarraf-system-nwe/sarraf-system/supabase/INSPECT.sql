@@ -1,17 +1,23 @@
--- Three more receipts, 10:22. Two complain the numbers do not add up; one asks for a person.
+-- The send reaches the server now, and the server keeps nothing.
 --
--- The complaint on screen is the browser's own:
+--   0 فیش نێردرا — 1 وێنە نەخوێندرایەوە و بڕ و دراوی نییە؛ وەک بەڵگە پارێزراوە بەڵام نەنێردرا
+--   ⚠️ 3 لەوانەی وا دەرکەوت پشتڕاستکراوبن لەلایەن سێرڤەرەوە وەک دووبارە ڕەتکرانەوە
 --
---   ژمارەکان یەک ناگرنەوە: 1,246.30 − 36.30 = 0.00، بەڵام 1,210.00 نووسراوە
+-- That sentence is mine, and it assumes the reason is duplication. The command writes the real
+-- reason on every row it refuses — rule_code and rule_reason — and it refuses for several
+-- different reasons:
 --
--- 1246.30 − 36.30 is 1210.00, not 0.00, so that arithmetic is the browser's and it is wrong.
--- validateReceiptArithmetic reads `expectedNet = order ?? (gross - fee)`, and ?? only falls
--- through on null — an orderAmount of 0 is kept as a real order of nothing. The reader returns
--- "orderAmount": "0" when a receipt states no separate order amount, so every such receipt is
--- told its net should be zero. That one is settled; this asks about the third.
+--   the row did not claim acceptance          intake_status <> 'accepted'
+--   the browser did not count it              status <> 'ok', or counted false
+--   the amount or fee is out of range         amount <= 0, fee > amount
+--   the currency is not the batch's           v_row_currency <> v_currency
+--   the image or reference is already kept    duplicate
 --
--- The third says needs_manual_review, which is the server's verdict, and seven of the eight
--- rules are visible in the reading itself.
+-- The last one is the only one my sentence describes. This asks which it actually was, and
+-- whether anything was ever accepted before that these could be duplicates OF.
+--
+-- The owner sees "هیچ کۆمەڵەیەکی نوێ نییە" because the command closes a batch that accepted
+-- nothing: status 'done', receipt_stage 'rejected'. The batch exists; it is simply not new.
 
 \pset format aligned
 \pset border 2
@@ -19,62 +25,50 @@
 \pset pager off
 
 \echo ''
-\echo '════════ 1. This morning''s receipts and where each stopped ════════'
+\echo '════════ 1. Every batch ever committed, and how it closed ════════'
 \echo ''
 
-select d.id, d.state, d.rule_code, to_char(d.received_at,'HH24:MI:SS') as at,
-       d.ocr_attempts, d.last_error_code
+select b.id, b.customer_id, b.currency, b.n, b.rejected_n, b.status, b.receipt_stage,
+       b.total_gross, to_char(b.created_at,'HH24:MI:SS') as at, b.tenant_id
+  from public.receipt_batches b order by b.created_at desc limit 10;
+
+\echo ''
+\echo '════════ 2. Every receipt the command kept, and the reason for each refusal ════════'
+\echo ''
+
+select i.batch_id, i.id, i.intake_status, i.counted, i.rule_code,
+       left(i.rule_reason, 60) as reason,
+       i.amount, i.currency, left(i.ref_no, 28) as ref_no,
+       to_char(i.created_at,'HH24:MI:SS') as at
+  from public.receipt_intake_items i
+ order by i.created_at desc limit 20;
+
+\echo ''
+\echo '════════ 3. Was there anything to be a duplicate OF? ════════'
+\echo ''
+\echo 'The duplicate test only looks at rows already accepted. If none was ever accepted, no'
+\echo 'receipt can be a duplicate and the refusal is something else wearing that name.'
+\echo ''
+
+select coalesce(intake_status,'⟨none⟩') as intake_status, count(*) as rows,
+       count(distinct image_hash) as distinct_images,
+       count(distinct upper(regexp_replace(coalesce(ref_no,''),'[^0-9A-Za-z]','','g'))) as distinct_refs
+  from public.receipt_intake_items group by 1 order by 1;
+
+\echo ''
+\echo '════════ 4. What the browser actually sent, as the audit recorded it ════════'
+\echo ''
+
+select e.event_type, e.batch_id, e.receipt_id,
+       left(e.metadata::text, 220) as metadata, to_char(e.created_at,'HH24:MI:SS') as at
+  from public.receipt_audit_events e
+ order by e.created_at desc limit 10;
+
+\echo ''
+\echo '════════ 5. The documents behind them, and whether the owner can reach any of it ════════'
+\echo ''
+
+select d.id, d.state, d.rule_code, to_char(d.received_at,'HH24:MI:SS') as at, d.tenant_id
   from public.receipt_documents d
- where d.received_at > now() - interval '4 hours'
+ where d.received_at > now() - interval '3 hours'
  order by d.received_at desc limit 10;
-
-\echo ''
-\echo '════════ 2. Every rule, per receipt, so the failing one names itself ════════'
-\echo ''
-
-select e.document_id,
-       round(e.confidence,2) as conf,
-       (coalesce(e.confidence,0) < 0.72)                             as f_confidence,
-       (e.gross_amount is null)                                      as f_amount,
-       (nullif(e.raw->>'refNo','') is null)                          as f_reference,
-       (coalesce(e.raw->>'platform','') !~* '(wechat|weixin|微信|alipay|ali[ -]?pay|支付宝)') as f_platform,
-       (coalesce(e.raw->>'txDate','') !~ '^\d{4}-\d{2}-\d{2}$')       as f_date,
-       (nullif(btrim(coalesce(e.raw->>'payee','')),'') is null
-        and nullif(btrim(coalesce(e.raw->>'recipientNote', e.raw->>'merchantName','')),'') is null) as f_receiver,
-       (coalesce(e.raw->>'transactionStatus','') !~* '(success|completed|successful)') as f_status,
-       -- the rule as it now stands: accounted for, not labelled
-       (coalesce(e.raw->>'feeTreatment','unknown')='unknown'
-        and coalesce(abs(public.receipt_json_numeric(e.raw,'grossAmount')),-1)
-            - coalesce(abs(public.receipt_json_numeric(e.raw,'feeAmount')),0)
-            is distinct from coalesce(abs(public.receipt_json_numeric(e.raw,'netAmount')),-2)) as f_fee
-  from public.receipt_extractions e
- where e.is_original and e.created_at > now() - interval '4 hours'
- order by e.created_at desc limit 10;
-
-\echo ''
-\echo '════════ 3. The figures the reader gave, including the order amount ════════'
-\echo ''
-\echo 'orderAmount of "0" is the reader saying the receipt states none. Anything that treats'
-\echo 'that as a real order of zero will conclude the net should be zero too.'
-\echo ''
-
-select e.document_id,
-       e.raw->>'grossAmount' as gross, e.raw->>'feeAmount' as fee,
-       e.raw->>'netAmount'   as net,   e.raw->>'orderAmount' as order_amount,
-       e.raw->>'feeTreatment' as fee_treatment,
-       left(coalesce(e.raw->>'payee','⟨none⟩'), 24) as payee,
-       e.raw->>'transactionStatus' as tx_status
-  from public.receipt_extractions e
- where e.is_original and e.created_at > now() - interval '4 hours'
- order by e.created_at desc limit 10;
-
-\echo ''
-\echo '════════ 4. Anything that reached a batch, and what the send did ════════'
-\echo ''
-
-select b.id, b.customer_id, b.currency, b.n, b.total_gross, b.status, b.created_at
-  from public.receipt_batches b order by b.created_at desc limit 5;
-
-select (select count(*) from public.receipts)                          as receipt_rows,
-       (select count(*) from public.receipt_batches)                   as batches,
-       (select count(*) from public.receipt_ingestion_commands)        as ingestion_commands;
