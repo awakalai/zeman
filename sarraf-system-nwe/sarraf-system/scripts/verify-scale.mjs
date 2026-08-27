@@ -229,6 +229,27 @@ try {
   `).trim();
   record(perRow === "", "no table is left asking the tenant question once per row", perRow.slice(0, 300));
 
+  // The tenant predicate was only half the filter. The permissive read policy is the other half,
+  // and on the tables the application reads WHOLE its cost is multiplied by every row of a
+  // business's history — `my_app_id()` appears twice in the ledger's, so reading it was up to
+  // three security-definer calls per row.
+  //
+  // Being `stable` does not help: stable promises the answer will not change during the
+  // statement, not that it does not depend on the row. Only `(select f())` says that.
+  const readPolicies = psql(`
+    select coalesce(string_agg(tablename || '.' || policyname, ', '), '')
+      from pg_policies
+     where schemaname = 'public'
+       and permissive = 'PERMISSIVE'
+       and tablename in ('ledger','txs','account_ledger','rate_history','app_users','audit')
+       -- a bare call, i.e. one that is not already wrapped in a scalar subquery
+       and coalesce(qual, '') ~ '(^|[^.[:alnum:]_])(is_admin|my_app_id|my_role)\\(\\)'
+       and coalesce(qual, '') !~ 'SELECT (is_admin|my_app_id|my_role)'
+  `).trim();
+  record(readPolicies === "",
+    "nor asking who you are once per row, on the tables it reads whole",
+    readPolicies.slice(0, 300));
+
   console.log(`\n${failures.length ? `${failures.length} of ${passed + failures.length}` : `All ${passed}`} opening queries ${failures.length ? "sort a whole table." : `scale, at ${LEDGER_ROWS.toLocaleString()} rows of history.`}`);
 } finally {
   db.stop();
