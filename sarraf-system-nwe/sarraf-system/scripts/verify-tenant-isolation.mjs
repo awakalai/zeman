@@ -575,6 +575,176 @@ try {
     if (seen !== "<none>") throw new Error(`the other business can see it: ${seen}`);
   });
 
+  // ── the three things the specification asked for and the schema did not have ─
+  //
+  //   ٥. کۆدی تایبەت (Unique Tracking ID)
+  //   ٤. دووبارە بارکردنەوە: بەستەر بە فیشە ڕەتکراوەکەی پێشوو
+  //   ٥. سیستەمی ئاگادارکردنەوە بۆ هەردولا
+  //
+  // All three are about two people agreeing on one receipt, so all three are tested from both
+  // sides: what the customer who sent it sees, and what the business that received it sees.
+  const SEND_BATCH = "416e99b0-589f-4493-8a37-12d0bd414b56";
+  const SEND_DOC = "isosend0001aa";
+
+  // A document may only be born at `created` and may only move one legal step at a time. A
+  // fixture that needs a refused receipt therefore has to walk one there, the way a real one
+  // walks: turning the guard off would turn off the emitters this section exists to test.
+  const REFUSAL_PATH = ["uploading", "uploaded", "ocr_pending", "ocr_processing",
+                        "parsed", "needs_manual_review"];
+  const walkToRejected = (id, why) => {
+    for (const state of REFUSAL_PATH) {
+      psql(`update public.receipt_documents set state = '${state}' where id = '${id}'`);
+    }
+    psql(`update public.receipt_documents
+             set state = 'rejected', counted = false,
+                 rule_code = 'manual_reject', rule_reason = '${why}'
+           where id = '${id}'`);
+  };
+
+  // A code nobody can quote is not an identifier. It must exist, it must read the way it was
+  // specified — the date and the time to the second — and, above all, the document the customer
+  // is looking at and the receipt row the owner is looking at must carry the SAME one. Two
+  // tables minting their own codes for one piece of paper would be worse than no code at all.
+  check("a receipt has one name, and both sides quote the same one", () => {
+    const doc = psql(`select coalesce(tracking_code,'<none>') from public.receipt_documents
+                       where id = '${SEND_DOC}'`).trim();
+    if (!/^ZR-\d{8}-\d{6}-[A-Z0-9]{6,}$/.test(doc)) {
+      throw new Error(`the intake document's name is '${doc}'`);
+    }
+    const row = psql(`select coalesce(tracking_code,'<none>') || ' ' || coalesce(document_id,'<unlinked>')
+                        from public.receipts where id = '${SEND_DOC}'`).trim();
+    if (row !== `${doc} ${SEND_DOC}`) {
+      throw new Error(`the owner's row says '${row}', the customer's document says '${doc}'`);
+    }
+  });
+
+  check("no two receipts can be given the same name", () => {
+    let raised = false;
+    try {
+      psql(`update public.receipts set tracking_code =
+              (select tracking_code from public.receipt_documents where id = '${SEND_DOC}')
+             where id <> '${SEND_DOC}' limit 1`);
+    } catch { raised = true; }
+    const clashes = psql(`select count(*) from (
+        select tracking_code from public.receipts where tracking_code is not null
+         group by tracking_code having count(*) > 1) t`).trim();
+    if (!raised && clashes !== "0") throw new Error(`${clashes} names are shared by more than one receipt`);
+  });
+
+  // The arrival. This is the notification the owner actually needs: somebody sent you receipts.
+  // It must reach the business's staff, it must not be sent to the customer who caused it, and
+  // it must never cross into the other business.
+  check("the business is told when a batch arrives", () => {
+    const mine = asUser(A_UID, `select coalesce(string_agg(kind || ':' || subject_id, ', '), '<none>')
+                                  from public.zeman_notifications
+                                 where subject_id = '${SEND_BATCH}'`).trim();
+    if (!mine.includes("batch_arrived")) {
+      throw new Error(`the owner was never told a batch arrived: ${mine}`);
+    }
+    const sender = asUser(CUS_UID, `select coalesce(string_agg(kind, ', '), '<none>')
+                                      from public.zeman_notifications
+                                     where subject_id = '${SEND_BATCH}'`).trim();
+    if (sender !== "<none>") {
+      throw new Error(`the customer was told about their own send: ${sender}`);
+    }
+  });
+
+  check("the other business is never told", () => {
+    const theirs = asUser(B_UID, `select coalesce(string_agg(kind, ', '), '<none>')
+                                    from public.zeman_notifications
+                                   where subject_id = '${SEND_BATCH}'`).trim();
+    if (theirs !== "<none>") throw new Error(`the other business was told: ${theirs}`);
+  });
+
+  // The refusal, and the way back out of it. A rejected receipt tells the person who sent it
+  // why, and the replacement they send is linked to it — in both directions, once, and only
+  // inside their own business.
+  check("a rejected receipt tells the person who sent it, and says why", () => {
+    walkToRejected(SEND_DOC, "وێنەکە ڕوون نییە");
+    const told = asUser(CUS_UID, `select coalesce(string_agg(kind || ' | ' || body, ' ;; '), '<none>')
+                                    from public.zeman_notifications
+                                   where subject_id = '${SEND_DOC}'`).trim();
+    if (!told.includes("receipt_rejected")) throw new Error(`the uploader was never told: ${told}`);
+    if (!told.includes("وێنەکە ڕوون نییە")) throw new Error(`the reason was not passed on: ${told}`);
+  });
+
+  check("an accepted receipt tells the person who sent it too", () => {
+    psql(`delete from public.receipt_documents where id = 'isoacc00001dd'`);
+    psql(`insert into public.receipt_documents(
+            id,flow,state,uploader_id,customer_id,storage_path,mime_type,tenant_id)
+          values ('isoacc00001dd','customer_sells_to_zeman','created','iso-cus','iso-cus',
+                  'ingest/${SEND_BATCH}/isoacc00001dd.jpg','image/jpeg','t-sarkhel')`);
+    // `validated` is refused unless a reading exists that names the recipient, the date, the
+    // platform and whether there was a fee. That guard is not what is under test here, so the
+    // fixture supplies what it asks for rather than working around it.
+    psql(`insert into public.receipt_extractions(
+            document_id,version,is_original,provider,model,raw,
+            gross_amount,fee_amount,net_amount,currency,ref_no,payee,tx_date,tx_time,
+            platform,has_fee,tenant_id)
+          values ('isoacc00001dd',1,true,'verify','iso','{}'::jsonb,
+                  1246.30,36.30,1210.00,'CNY','ISOACC1','**لەیلا','2026-08-25','01:52',
+                  'alipay',true,'t-sarkhel')
+          on conflict do nothing`);
+    for (const state of ["uploading", "uploaded", "ocr_pending", "ocr_processing",
+                         "parsed", "validated", "submitted", "accepted"]) {
+      psql(`update public.receipt_documents set state = '${state}' where id = 'isoacc00001dd'`);
+    }
+    const told = asUser(CUS_UID, `select coalesce(string_agg(kind, ', '), '<none>')
+                                    from public.zeman_notifications
+                                   where subject_id = 'isoacc00001dd'`).trim();
+    if (!told.includes("receipt_accepted")) throw new Error(`the uploader was never told: ${told}`);
+  });
+
+  const REPLACEMENT = "isosend0002bb";
+  check("the uploader may send a replacement, and it is linked to the rejection", () => {
+    psql(`delete from public.receipt_documents where id = '${REPLACEMENT}'`);
+    psql(`insert into public.receipt_documents(
+            id,flow,state,uploader_id,customer_id,storage_path,mime_type,tenant_id)
+          values ('${REPLACEMENT}','customer_sells_to_zeman','created','iso-cus','iso-cus',
+                  'ingest/${SEND_BATCH}/${REPLACEMENT}.jpg','image/jpeg','t-sarkhel')`);
+    const out = asUser(CUS_UID,
+      `select public.sarraf_receipt_replace('${SEND_DOC}','${REPLACEMENT}')::text`);
+    if (!out.includes('"replayed": false')) throw new Error(`the replacement was refused: ${out.slice(0, 200)}`);
+    const links = psql(`select coalesce((select replaced_by_document_id from public.receipt_documents where id='${SEND_DOC}'),'<none>')
+                        || ' / ' ||
+                        coalesce((select replaces_document_id from public.receipt_documents where id='${REPLACEMENT}'),'<none>')`).trim();
+    if (links !== `${REPLACEMENT} / ${SEND_DOC}`) throw new Error(`the chain reads: ${links}`);
+  });
+
+  check("pressing it twice changes nothing", () => {
+    const again = asUser(CUS_UID,
+      `select public.sarraf_receipt_replace('${SEND_DOC}','${REPLACEMENT}')::text`);
+    if (!again.includes('"replayed": true')) throw new Error(`a second press was not a replay: ${again.slice(0, 200)}`);
+  });
+
+  check("a receipt may be replaced only once", () => {
+    psql(`delete from public.receipt_documents where id = 'isosend0003cc'`);
+    psql(`insert into public.receipt_documents(
+            id,flow,state,uploader_id,customer_id,storage_path,mime_type,tenant_id)
+          values ('isosend0003cc','customer_sells_to_zeman','created','iso-cus','iso-cus',
+                  'ingest/${SEND_BATCH}/isosend0003cc.jpg','image/jpeg','t-sarkhel')`);
+    refused(CUS_UID, `select public.sarraf_receipt_replace('${SEND_DOC}','isosend0003cc')`,
+      "replacing a receipt that already has a replacement");
+  });
+
+  check("a receipt still under review cannot be quietly replaced", () => {
+    // isosend0003cc is where every new upload starts: nobody has refused it, so nothing about
+    // it may be replaced away.
+    refused(CUS_UID, `select public.sarraf_receipt_replace('isosend0003cc','${REPLACEMENT}')`,
+      "replacing a receipt nobody has refused");
+  });
+
+  check("a replacement cannot cross into another business", () => {
+    psql(`delete from public.receipt_documents where id = 'isootherbiz1'`);
+    psql(`insert into public.receipt_documents(
+            id,flow,state,uploader_id,customer_id,storage_path,mime_type,tenant_id)
+          values ('isootherbiz1','customer_sells_to_zeman','created','iso-b','iso-b',
+                  'ingest/other/isootherbiz1.jpg','image/jpeg','t-watan')`);
+    walkToRejected("isootherbiz1", "هی بزنسێکی تر");
+    refused(CUS_UID, `select public.sarraf_receipt_replace('isootherbiz1','isosend0003cc')`,
+      "replacing another business's receipt");
+  });
+
   // ── and when it refuses, it says which rule ─────────────────────────────────
   //
   // Every refusal was written down as 'server_rejected' / "فیشەکە یاساکانی ناردنی نەبڕیوە",
