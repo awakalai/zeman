@@ -17,6 +17,8 @@ const COPY = {
     refresh: "نوێکردنەوە", prev: "پێشوو", next: "دواتر",
     original: "خوێندنەوەی ڕەسەن", current: "دوایین وەشان", version: "وەشان",
     equation: "پشکنینی ژمارەکان", reconciles: "ژمارەکان یەک دەگرنەوە", mismatch: "ژمارەکان یەک ناگرنەوە",
+    reconcilesByNet: "فی لە بڕەکە کەم کراوەتەوە و ژمارەکان یەک دەگرنەوە",
+    mismatchByNet: "کۆی گشتی کە فی لێ کەم بکرێتەوە، ئەوەی نووسراوە نادات",
     undecidable: "ناتوانرێت بڕیار بدرێت — فیشەکە بڕی بنەڕەتی نەنووسیوە",
     gross: "کۆی گشتی", order: "بڕی بنەڕەتی", fee: "فی", net: "نەت", expected: "پێویستە بێت",
     treatment: "شێوازی فی", currency: "دراو", ref: "ژمارەی مامەڵە", payee: "وەرگر",
@@ -274,8 +276,11 @@ export function ReceiptReviewWorkspace({ client, lang = "ku", signedUrlFor = nul
                       {equation.reconciles === true ? <CheckCircle2 aria-hidden="true" />
                         : <AlertTriangle aria-hidden="true" />}
                       <span>
-                        {equation.reconciles === true ? copy.reconciles
-                          : equation.reconciles === false ? copy.mismatch : copy.undecidable}
+                        {equation.reconciles === true
+                          ? (equation.basis === "net" ? copy.reconcilesByNet : copy.reconciles)
+                          : equation.reconciles === false
+                            ? (equation.basis === "net" ? copy.mismatchByNet : copy.mismatch)
+                            : copy.undecidable}
                         {equation.expectedGross != null && equation.reconciles === false && (
                           <> — {copy.expected} {money(equation.expectedGross)}</>
                         )}

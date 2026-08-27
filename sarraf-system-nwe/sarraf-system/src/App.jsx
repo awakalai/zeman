@@ -6684,35 +6684,58 @@ function ReceiptUploader({ customerId, customerName, partnerId, uploaderId, dire
     // and recipient, with no identifier matching — is a suspicion for a person to settle, because
     // it is also the shape of a genuine second payment to the same supplier on a busy day.
     let suspect = null;
-    if (rn || merchantRn || (d?.currency && amountV != null && d?.txDate && (d?.receiver || d?.sender))) {
+    // The image itself is always a key, so this always runs. It used to run only when the
+    // reading had produced a reference — and `p_hash` was hard-coded to null, so the one rule
+    // that catches the same photograph sent twice never ran at all. An unreadable receipt could
+    // be uploaded five times and become five receipts, with the hash that would have caught
+    // every one of them computed, stored, and thrown away at the call.
+    if (img.hash || rn || merchantRn || (d?.currency && amountV != null && d?.txDate && (d?.receiver || d?.sender))) {
       const local = rowsRef.current.find((r) => r.id !== id && r.status !== "error" && (
+        (img.hash && r.hash === img.hash) ||
         (rn && r.refNo && normRef(r.refNo) === rn) ||
         (merchantRn && r.merchantOrderNo && normRef(r.merchantOrderNo) === merchantRn)
       ));
       let old = null;
       try {
         const { data: hit } = await supabase.rpc("check_receipt_dupe", {
-          p_hash: null,
+          p_hash: img.hash || null,
           p_ref: rn,
           p_merchant_ref: merchantRn,
           p_currency: d?.currency || null,
           p_amount: amountV ?? null,
           p_tx_date: d?.txDate || null,
           p_payee: d?.receiver || d?.sender || null,
+          // The document row is written before the image is read, so by now the receipt in hand
+          // is already in the table it is being compared against.
+          p_exclude_id: id,
         });
         if (hit?.length) old = hit[0];
       } catch {}
       // A suspicion is never a refusal: it goes to review with the reason attached.
       if (old?.kind === "suspect" && !local) { suspect = old; old = null; }
       if (local || old) {
+        // Say which receipt, by the name both sides can read out, and say what actually matched.
+        // "ژمارەی مامەڵەی … پێشتر تۆمار کراوە" named a reference the person cannot look up, and
+        // said "reference" even when it was the image that repeated.
         const repeatedIdentifier = rn && local?.refNo && normRef(local.refNo) === rn ? d.refNo : d.merchantOrderNo;
+        const sameImage = (local && img.hash && local.hash === img.hash) || old?.matched_key === "image";
+        const earlier = old?.tracking_code || old?.ref || null;
+        const when = old?.d ? new Date(old.d).toLocaleString("en-GB") : null;
         const reason = local
-          ? `هەمان ناسنامەی مامەڵە (${repeatedIdentifier}) لەم کۆمەڵەیەدا دووبارە بووەتەوە`
-          : `ژمارەی مامەڵەی ${d.refNo} پێشتر تۆمار کراوە لە ${old?.d ? new Date(old.d).toLocaleString("en-GB") : "پێشتر"}${old?.who ? ` لەلایەن ${old.who}` : ""}`;
+          ? (sameImage
+            ? "هەمان وێنە لەم کۆمەڵەیەدا دووبارە بووەتەوە"
+            : `هەمان ناسنامەی مامەڵە (${repeatedIdentifier}) لەم کۆمەڵەیەدا دووبارە بووەتەوە`)
+          : [
+            sameImage ? "هەمان وێنە پێشتر نێردراوە" : `ژمارەی مامەڵەی ${d.refNo} پێشتر تۆمار کراوە`,
+            earlier ? `— ${earlier}` : null,
+            when ? `لە ${when}` : null,
+            old?.who ? `لەلایەن ${old.who}` : null,
+          ].filter(Boolean).join(" ");
         return {
           id, url: img.url, blob: img.blob, hash: img.hash, ocrImage: img.b64 || img.ocrImage, mediaType: img.mediaType,
           status: "dup", counted: false, reviewRequired: false,
-          rejectCode: local ? "same_batch" : "same_ref", rejectReason: reason, note: reason,
+          rejectCode: local ? "same_batch" : sameImage ? "same_image" : "same_ref",
+          rejectReason: reason, note: reason,
           dupOf: old?.id || local?.id || null, dupOfDate: old?.d || null, dupOfWho: old?.who || null,
           amount: amountV, fee: feeV, feeOriginal: feeOrig, feeDiscount: feeDisc, net: netV,
           orderAmount: d?.orderAmount ?? null,

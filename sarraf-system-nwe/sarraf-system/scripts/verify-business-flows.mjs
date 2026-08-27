@@ -871,6 +871,157 @@ try {
     });
   });
 
+  // «ئاگاداربە، ئەکرێت فیشەکە ئەلیپەی بێت ئەکرێت ویچات بێت»
+  //
+  // The two platforms print the same transfer differently. WeChat states 订单金额 / Order amount;
+  // Alipay often states no order amount at all, and the reader says so rather than inventing one.
+  // Acceptance used to require that order amount twice over — once as a fee treatment it could
+  // not name without it, and once in an arithmetic test whose every branch began
+  // `order_amount is null or …` — so an honest Alipay receipt was refused, refused again when a
+  // reviewer named the treatment to fix it, and had no third move.
+  scenario(16, "the same transfer is accepted whether it is Alipay or WeChat", () => {
+    // The review command is MFA-gated, and `set_config(..., true)` is local to its transaction,
+    // so the claim and the call have to travel together.
+    const review = (doc, action, reason) => {
+      const out = psql(`
+        begin;
+        select set_config('request.jwt.claim.aal','aal2',true);
+        select public.sarraf_receipt_review_command(
+          '${doc}','${action}','{}'::jsonb,'${reason}','rev-${doc}-${action}-${Date.now()}')::text;
+        commit;`);
+      return String(out).split("\n").map((l) => l.trim()).filter(Boolean).pop() || "";
+    };
+    const read = (doc, sha, extraction) => {
+      be("customer");
+      j(`public.sarraf_receipt_intake_begin_v3(
+           '${doc}', null, 'f16-batch', 'image/jpeg', 'receipt-intake:receipt:${doc}')`);
+      psql(`select public.sarraf_receipt_record_server_extraction('${doc}','${sha}',24680,'image/jpeg',
+        true,'${extraction}'::jsonb,'verify','flow',120,'flow-request-${doc}')`);
+      be("admin");
+      return psql(`select state from public.receipt_documents where id='${doc}'`).trim();
+    };
+    const common = `"payee":"ئەحمەد","txDate":"2026-08-02","txTime":"09:11",
+                    "transactionStatus":"success","confidence":0.94,"currency":"CNY"`;
+
+    // Alipay: the top charge, the international card fee, and what arrived. No order amount is
+    // printed, so the fee's treatment is genuinely ambiguous and the reader leaves it unnamed.
+    step("an Alipay receipt with no order amount is read and validated", () => {
+      eq(read("f16-alipay", "a".repeat(64),
+        `{${common},"refNo":"F16ALI","platform":"alipay","feeTreatment":"unknown",
+          "grossAmount":"1246.30","feeAmount":"36.30","netAmount":"1210.00"}`),
+        "validated", "the state the reading left it in");
+      eq(psql(`select coalesce(order_amount::text,'⟨none⟩') from public.receipt_extractions
+                where document_id='f16-alipay' and is_original`).trim(),
+        "⟨none⟩", "an order amount was invented for a receipt that prints none");
+    });
+
+    // WeChat: the same money, with 订单金额 printed, so the fee is plainly on top.
+    step("a WeChat receipt for the same transfer is read and validated", () => {
+      eq(read("f16-wechat", "b".repeat(64),
+        `{${common},"refNo":"F16WX","platform":"wechat","feeTreatment":"added_on_top",
+          "grossAmount":"1246.30","orderAmount":"1210.00","feeAmount":"36.30","netAmount":"1210.00"}`),
+        "validated", "the state the reading left it in");
+    });
+
+    step("the owner accepts both, and is stopped by neither", () => {
+      const wechat = review("f16-wechat", "accept", "پشکنین تەواو بوو و ژمارەکان یەک دەگرنەوە");
+      if (!wechat.includes('"state": "accepted"')) throw new Error(`WeChat: ${wechat.slice(0, 200)}`);
+      const alipay = review("f16-alipay", "accept", "پشکنین تەواو بوو و ژمارەکان یەک دەگرنەوە");
+      if (!alipay.includes('"state": "accepted"')) throw new Error(`Alipay: ${alipay.slice(0, 200)}`);
+    });
+
+    step("both are counted, and each one only once", () => {
+      eq(psql(`select count(*) from public.receipt_documents
+                where id in ('f16-alipay','f16-wechat') and state='accepted' and counted`).trim(),
+        2, "receipts counted");
+    });
+
+    // The rule was relaxed, not removed. A receipt whose three numbers cannot be got to from one
+    // another is still not a receipt anybody may accept.
+    step("a receipt whose numbers do not add up is still refused", () => {
+      eq(read("f16-wrong", "c".repeat(64),
+        `{${common},"refNo":"F16BAD","platform":"alipay","feeTreatment":"unknown",
+          "grossAmount":"1246.30","feeAmount":"36.30","netAmount":"999.00"}`),
+        "needs_manual_review", "a fee that cannot be reconciled still stops for a person");
+      let refusedIt = false;
+      try {
+        const out = review("f16-wrong", "accept", "با تێپەڕێت بۆ ئەم جارە");
+        refusedIt = !out.includes('"state": "accepted"');
+      } catch { refusedIt = true; }
+      if (!refusedIt) throw new Error("a receipt that does not reconcile was accepted");
+    });
+
+    // The customer-seller's receipt names no transaction — that is the flow — and acceptance
+    // used to require one, so every such receipt reached somebody who could only reject it.
+    step("a receipt that names no transaction can still be accepted", () => {
+      eq(psql(`select coalesce(transaction_id,'⟨none⟩') from public.receipt_documents
+                where id='f16-alipay'`).trim(), "⟨none⟩", "a transaction was attached");
+    });
+  });
+
+  // «سیستەمی پێشگرتن لە دووبارەبوونەوە (Hash)»
+  //
+  // The rule that catches the same photograph sent twice has never run: the browser passed
+  // `p_hash: null` on every call, and only called at all when the reading had produced a
+  // reference. An unreadable receipt could therefore be uploaded any number of times.
+  scenario(17, "the same image is caught the second time, and named", () => {
+    const sha = "e".repeat(64);
+
+    step("a receipt is uploaded, read and sent", () => {
+      be("customer");
+      j(`public.sarraf_receipt_intake_begin_v3(
+           'f17-first', null, 'f17-batch', 'image/jpeg', 'receipt-intake:receipt:f17-first')`);
+      psql(`select public.sarraf_receipt_record_server_extraction('f17-first','${sha}',24680,'image/jpeg',
+        true,'{"grossAmount":"800.00","feeAmount":"0","netAmount":"800.00","currency":"CNY",
+          "refNo":"F17REF","payee":"ئەحمەد","txDate":"2026-08-03","txTime":"08:20",
+          "platform":"alipay","feeTreatment":"no_fee","transactionStatus":"success",
+          "confidence":0.95}'::jsonb,'verify','flow',120,'flow-request-f17')`);
+      eq(psql("select state from public.receipt_documents where id='f17-first'").trim(),
+        "validated", "the state the reading left it in");
+      be("admin");
+    });
+
+    step("the same bytes uploaded again are recognised, by the image alone", () => {
+      be("customer");
+      // No reference, no amount, no date — the shape of a receipt the reader could not read.
+      // Everything except the image is withheld, so only the hash can find anything.
+      const hits = psql(`select count(*) from public.check_receipt_dupe(
+                           '${sha}', null, null, null, null, null, null, 'f17-second')`).trim();
+      eq(hits, 1, "matches for an image that has certainly been seen before");
+    });
+
+    step("it says which receipt, by the name its sender can read out", () => {
+      const row = psql(`select matched_key || '|' || kind || '|' || coalesce(tracking_code,'⟨none⟩') || '|' || source
+                          from public.check_receipt_dupe('${sha}', null, null, null, null, null, null, 'f17-second')`).trim();
+      const [key, kind, code, source] = row.split("|");
+      eq(key, "image", "what matched");
+      eq(kind, "duplicate", "how sure it is");
+      eq(source, "uploaded", "where the earlier copy is");
+      if (!/^ZR-\d{8}-\d{6}-[A-Z0-9]{6,}$/.test(code)) {
+        throw new Error(`the answer names the earlier receipt as '${code}', which nobody can quote`);
+      }
+    });
+
+    // The receipt being uploaded is written to the table before its image is read, so without
+    // this it would find itself and refuse every first upload as a duplicate of itself.
+    step("a receipt is never a duplicate of itself", () => {
+      const own = psql(`select count(*) from public.check_receipt_dupe(
+                          '${sha}', null, null, null, null, null, null, 'f17-first')`).trim();
+      eq(own, 0, "matches found against the receipt itself");
+    });
+
+    // A rejected receipt is not a reason to refuse the replacement sent in its place.
+    step("a refused receipt does not block the one sent to replace it", () => {
+      psql(`update public.receipt_documents set state='needs_manual_review' where id='f17-first'`);
+      psql(`update public.receipt_documents set state='rejected', counted=false,
+              rule_code='manual_reject', rule_reason='وێنەکە ڕوون نییە' where id='f17-first'`);
+      const still = psql(`select count(*) from public.check_receipt_dupe(
+                            '${sha}', null, null, null, null, null, null, 'f17-second')`).trim();
+      eq(still, 0, "a refused receipt still blocking its own replacement");
+      be("admin");
+    });
+  });
+
   // ── the report ──────────────────────────────────────────────────────────────
   const failed = scenarios.filter((s) => !s.ok);
   for (const s of scenarios) {
