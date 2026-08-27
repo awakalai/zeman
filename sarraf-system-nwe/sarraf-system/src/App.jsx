@@ -8,7 +8,7 @@ import { loadNotifications, markAllNotificationsRead, markNotificationRead, subs
 import { loadWholeTable } from "./services/tableLoader";
 import { setActiveLanguage } from "./services/activeLanguage";
 import { currencyDecimals as currencyDecimalsOf, formatMoney, formatNumber, roundToCurrency } from "./services/money";
-import { errorText } from "./services/userFacingError";
+import { errorText, errorTextOr } from "./services/userFacingError";
 import { MyReceipts } from "./components/portal/MyReceipts";
 import { intakeReceipt, intakeStatusText, loadMyReceipts, noteReceiptReadFailure, receiptReadFailureText, replaceReceipt, requestStoredReceiptOcr } from "./services/receiptIntake";
 import { DICT } from "./i18n/dictionary";
@@ -2149,7 +2149,7 @@ export default function App() {
       }
       // The server answered. The command did not run, so the key is spent on nothing.
       if (intent) keyBook.current.release(intent);
-      flash(err?.message || "هەڵەیەک ڕوویدا — دووبارە هەوڵ بدەوە");
+      flash(errorTextOr(err, "هەڵەیەک ڕوویدا — دووبارە هەوڵ بدەوە"));
       return false;
     }
     finally { lockRef.current = false; setBusy(false); intentRef.current = null; }
@@ -3160,7 +3160,7 @@ export default function App() {
       return result;
     } catch (e) {
       console.error("maintenance-mode", e);
-      flash(e?.message || "نەتوانرا Emergency Freeze بگۆڕدرێت");
+      flash(errorTextOr(e, "نەتوانرا Emergency Freeze بگۆڕدرێت"));
       return false;
     } finally {
       setBusy(false);
@@ -3941,7 +3941,7 @@ function MfaGate({ profile, onReady, onSignOut }) {
       setMode("enroll");
     } catch (e) {
       console.error("MFA prepare", e);
-      setErr(e?.message || "هەڵە لە ئامادەکردنی پاراستنی دوو هەنگاوی");
+      setErr(errorTextOr(e, "هەڵە لە ئامادەکردنی پاراستنی دوو هەنگاوی"));
     } finally {
       setBusy(false);
     }
@@ -4553,7 +4553,7 @@ function MarketWatch({ compact = false }) {
       try { localStorage.setItem(MARKET_CACHE_KEY, JSON.stringify({ at: Date.now(), data: body })); } catch {}
     } catch (e) {
       console.error("market-watch", e);
-      setErr(e?.message || "نەتوانرا نرخی بازاڕ بار بکرێت");
+      setErr(errorTextOr(e, "نەتوانرا نرخی بازاڕ بار بکرێت"));
     } finally {
       setBusy(false);
     }
@@ -8669,7 +8669,7 @@ function BatchDetail({ id, back, usr, data, profile, onMakeTx, flash, reloadBatc
       reloadBatches && reloadBatches();
     } catch (error) {
       console.error("receipt match", error);
-      flash(`بەستنەوە سەرکەوتوو نەبوو — ${error?.message || "هەڵە"}`);
+      flash(`بەستنەوە سەرکەوتوو نەبوو — ${errorTextOr(error, "هەڵە")}`);
     } finally {
       setMatchBusy(null);
     }
@@ -8691,7 +8691,7 @@ function BatchDetail({ id, back, usr, data, profile, onMakeTx, flash, reloadBatc
       reloadBatches && reloadBatches();
     } catch (error) {
       console.error("receipt decision", error);
-      flash(error?.message || "بڕیاری فیش جێبەجێ نەکرا");
+      flash(errorTextOr(error, "بڕیاری فیش جێبەجێ نەکرا"));
     } finally {
       setDecisionBusy(null);
     }
@@ -8728,7 +8728,7 @@ function BatchDetail({ id, back, usr, data, profile, onMakeTx, flash, reloadBatc
         await load();
         flash(STALE_MESSAGE);
       } else {
-        flash(error?.message || "پشکنینی کۆتایی سەرکەوتوو نەبوو");
+        flash(errorTextOr(error, "پشکنینی کۆتایی سەرکەوتوو نەبوو"));
       }
     } finally {
       setFinalizationBusy(false);
@@ -11272,7 +11272,7 @@ function ApprovalCenter({
       else flash(`${out?.failures || 0} کێشە لە یەکسانکردنەوە دۆزرایەوە`);
     } catch (e) {
       console.error(e);
-      flash(e?.message || "یەکسانکردنەوە سەرکەوتوو نەبوو");
+      flash(errorTextOr(e, "یەکسانکردنەوە سەرکەوتوو نەبوو"));
     } finally {
       setReconBusy(false);
     }

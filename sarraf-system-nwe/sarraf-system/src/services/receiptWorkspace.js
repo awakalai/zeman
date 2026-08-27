@@ -7,6 +7,8 @@
  * what a human decided it meant.
  */
 
+import { zemanRule } from "./userFacingError.js";
+
 const upper = (v) => String(v ?? "").trim().toUpperCase();
 const num = (v) => {
   if (v == null || v === "") return null;
@@ -190,10 +192,10 @@ export async function setReceiptDailyRate(client, {
   const day = String(effectiveDate ?? "").trim();
   const value = Number(rate);
   const why = String(reason ?? "").normalize("NFKC").trim();
-  if (!/^[A-Z]{3,8}$/.test(code)) throw new Error("دراوی نرخ دروست نییە");
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) throw new Error("بەرواری کاری نرخ دروست نییە");
-  if (!Number.isFinite(value) || value <= 0) throw new Error("نرخ دەبێت ژمارەیەکی گەورەتر لە سفر بێت");
-  if (why.length < 8) throw new Error("هۆکاری دانانی نرخ دەبێت لانیکەم ٨ پیت بێت");
+  if (!/^[A-Z]{3,8}$/.test(code)) throw zemanRule("دراوی نرخ دروست نییە");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) throw zemanRule("بەرواری کاری نرخ دروست نییە");
+  if (!Number.isFinite(value) || value <= 0) throw zemanRule("نرخ دەبێت ژمارەیەکی گەورەتر لە سفر بێت");
+  if (why.length < 8) throw zemanRule("هۆکاری دانانی نرخ دەبێت لانیکەم ٨ پیت بێت");
   const { data, error } = await client.rpc("sarraf_set_receipt_daily_rate", {
     p_currency: code,
     p_effective_date: day,
@@ -208,8 +210,8 @@ export async function setReceiptDailyRate(client, {
 /** Freeze the latest rate for this receipt. The server derives its business date and currency. */
 export async function finalizeReceipt(client, { documentId, reason, commandKey }) {
   const why = String(reason ?? "").normalize("NFKC").trim();
-  if (!documentId) throw new Error("فیش هەڵنەبژێردراوە");
-  if (why.length < 8) throw new Error("هۆکاری کۆتایی‌کردن دەبێت لانیکەم ٨ پیت بێت");
+  if (!documentId) throw zemanRule("فیش هەڵنەبژێردراوە");
+  if (why.length < 8) throw zemanRule("هۆکاری کۆتایی‌کردن دەبێت لانیکەم ٨ پیت بێت");
   const { data, error } = await client.rpc("sarraf_receipt_finalize_command", {
     p_document_id: documentId,
     p_reason: why.slice(0, 700),
@@ -291,9 +293,9 @@ export function reviewEquation(v) {
 /** Run one bounded, MFA-protected review decision; direct table updates are never used. */
 export async function transitionDocument(client, { documentId, toState, reason, commandKey }) {
   const action = ({ accepted: "accept", validated: "accept", rejected: "reject", needs_manual_review: "reopen" })[toState];
-  if (!action) throw new Error("بڕیاری پشکنین ناسراو نییە");
+  if (!action) throw zemanRule("بڕیاری پشکنین ناسراو نییە");
   const why = String(reason ?? "").normalize("NFKC").trim();
-  if (why.length < 8) throw new Error("بڕیارەکە پێویستی بە هۆکارێکی لانیکەم ٨ پیتی هەیە");
+  if (why.length < 8) throw zemanRule("بڕیارەکە پێویستی بە هۆکارێکی لانیکەم ٨ پیتی هەیە");
   const { data, error } = await client.rpc("sarraf_receipt_review_command", {
     p_document_id: documentId,
     p_action: action,
@@ -319,8 +321,8 @@ export async function transitionDocument(client, { documentId, toState, reason, 
  */
 export async function enterReadingByHand(client, { documentId, reading, reason, commandKey }) {
   const why = String(reason ?? "").normalize("NFKC").trim();
-  if (why.length < 8) throw new Error("نووسینی خوێندنەوە پێویستی بە هۆکارێکی لانیکەم ٨ پیتی هەیە");
-  if (!reading || typeof reading !== "object") throw new Error("هیچ خوێندنەوەیەک نەنووسراوە");
+  if (why.length < 8) throw zemanRule("نووسینی خوێندنەوە پێویستی بە هۆکارێکی لانیکەم ٨ پیتی هەیە");
+  if (!reading || typeof reading !== "object") throw zemanRule("هیچ خوێندنەوەیەک نەنووسراوە");
   const { data, error } = await client.rpc("sarraf_receipt_enter_reading", {
     p_document_id: documentId,
     p_reading: reading,
@@ -337,15 +339,15 @@ export async function enterReadingByHand(client, { documentId, reading, reason, 
  */
 export async function correctExtraction(client, { documentId, base, changes, reason, commandKey }) {
   const why = String(reason ?? "").normalize("NFKC").trim();
-  if (why.length < 8) throw new Error("هۆکاری ڕاستکردنەوە دەبێت لانیکەم ٨ پیت بێت");
-  if (!base) throw new Error("وەشانی بنەڕەتی نەدۆزرایەوە");
-  if (!changes || Object.keys(changes).length === 0) throw new Error("هیچ گۆڕانکارییەک نییە");
+  if (why.length < 8) throw zemanRule("هۆکاری ڕاستکردنەوە دەبێت لانیکەم ٨ پیت بێت");
+  if (!base) throw zemanRule("وەشانی بنەڕەتی نەدۆزرایەوە");
+  if (!changes || Object.keys(changes).length === 0) throw zemanRule("هیچ گۆڕانکارییەک نییە");
 
   const allowed = new Set([
     "grossAmount", "orderAmount", "feeAmount", "feeTreatment", "netAmount", "currency",
     "refNo", "merchantOrderNo", "payee", "platform", "txDate", "txTime",
   ]);
-  if (Object.keys(changes).some((key) => !allowed.has(key))) throw new Error("خانەی ڕاستکردنەوە ناسراو نییە");
+  if (Object.keys(changes).some((key) => !allowed.has(key))) throw zemanRule("خانەی ڕاستکردنەوە ناسراو نییە");
   const { data, error } = await client.rpc("sarraf_receipt_review_command", {
     p_document_id: documentId,
     p_action: "correct",

@@ -211,6 +211,34 @@ const INTERNAL = /schema cache|could not find the function|relation ".*" does no
 const normalise = (value) => String(value || "").trim().replace(/\s+/g, " ").toLowerCase();
 
 /**
+ * A rule this system states on the client, before the server is ever asked.
+ *
+ * The server's refusals arrive carrying one of the eight SQLSTATEs above, and that code is how
+ * this module knows the sentence was written to be read. A refusal raised HERE has no code:
+ *
+ *     throw new Error("بڕیارەکە پێویستی بە هۆکارێکی لانیکەم ٨ پیتی هەیە");
+ *
+ * is, to a catch block, indistinguishable from a TypeError thrown by a bug. Fifteen of this
+ * system's clearest sentences are raised that way — the reason that is too short, the correction
+ * with nothing in it, the receipt that was never selected. Passing those through the translator
+ * unmarked would answer every one of them with "something went wrong", which is the exact
+ * sentence the person cannot act on, in place of the one they could.
+ *
+ * So they are marked. `zemanRule` is not an error type with behaviour; it is a promise that the
+ * words inside were written for the person who is about to read them.
+ */
+export class ZemanRule extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "ZemanRule";
+    this.code = "ZE_RULE";
+  }
+}
+
+/** Raise a rule this system states itself. `throw zemanRule("...")`. */
+export const zemanRule = (message) => new ZemanRule(message);
+
+/**
  * What happened, in one sentence, plus a code worth quoting.
  *
  * @returns {{ code: string, category: string|null, text: string, deliberate: boolean }}
@@ -231,6 +259,12 @@ export function describeError(cause, lang = activeLanguage()) {
   }
   if (rawCode === "PGRST301" || status === 401 || /jwt expired|invalid (jwt|token)|session required/i.test(message)) {
     return { code: "ZE-SESSION", category: "session", text: TRANSPORT.session[key], deliberate: false };
+  }
+
+  // Ours, and written for this reader. Shown exactly as written — translating it would be
+  // translating a sentence that is already in the language it was meant to be read in.
+  if (rawCode === "ZE_RULE") {
+    return { code: "ZE-RULE", category: "rule", text: message, deliberate: true };
   }
 
   const category = CATEGORY[rawCode];
@@ -273,3 +307,13 @@ export function errorText(cause, lang = activeLanguage(), fallback) {
 export function userFacingServiceError(cause, lang = activeLanguage(), fallback) {
   return errorText(cause, lang, fallback);
 }
+
+/**
+ * `errorText` for the common shape at a call site: a screen that has its own sentence for the
+ * case nobody recognises, and no opinion about the language — because the language is whichever
+ * one the person is reading in.
+ *
+ * The fallback is used ONLY where the failure is unrecognised. A refusal the system wrote, on
+ * either side of the line, still says what it came to say.
+ */
+export const errorTextOr = (cause, fallback) => errorText(cause, activeLanguage(), fallback);

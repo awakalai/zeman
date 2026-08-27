@@ -6,6 +6,8 @@
  * server OCR route downloads and attests the stored original before recording any extraction.
  */
 
+import { zemanRule } from "./userFacingError.js";
+
 const newId = () =>
   (globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`)
     .replace(/[^A-Za-z0-9-]/g, "").slice(0, 60);
@@ -258,7 +260,7 @@ export async function intakeReceipt({
 /** Submit only durable document identities; the server decides each legal next state. */
 export async function submitReceiptDocuments(client, documentIds, commandKey = null) {
   const ids = [...new Set((documentIds || []).filter(Boolean))];
-  if (!ids.length) throw new Error("هیچ فیشێکی پارێزراو نییە بۆ ناردن");
+  if (!ids.length) throw zemanRule("هیچ فیشێکی پارێزراو نییە بۆ ناردن");
   const { data, error } = await client.rpc("sarraf_receipt_submit", {
     p_document_ids: ids,
     p_command_key: commandKey || receiptSubmitCommandKey(),
