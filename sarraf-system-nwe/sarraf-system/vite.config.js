@@ -1,8 +1,28 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
+// The build's own name, written into the bundle and into a file the running app can ask for.
+//
+// Every fix shipped this morning was invisible on the owner's phone: the code was on the server,
+// the screen kept showing sentences that no longer exist in the source, and neither of us could
+// tell. A build nobody can name is a build nobody can confirm.
+const BUILD_ID = new Date().toISOString().replace(/[-:]/g, "").slice(0, 15);
+
+// Written into dist/ so the running app can compare it against its own, with no cache in the way.
+const buildStamp = () => ({
+  name: "zeman-build-stamp",
+  generateBundle() {
+    this.emitFile({
+      type: "asset",
+      fileName: "version.json",
+      source: JSON.stringify({ build: BUILD_ID }),
+    });
+  },
+});
+
 export default defineConfig({
-  plugins: [react()],
+  define: { __BUILD_ID__: JSON.stringify(BUILD_ID) },
+  plugins: [react(), buildStamp()],
   build: {
     // esbuild left the application chunk just over the 500 kB production budget that
     // scripts/verify-production-readiness.mjs enforces. Terser compresses meaningfully
@@ -21,6 +41,10 @@ export default defineConfig({
           if (id.includes("/src/components/receipts/")) return "receipts-ui";
           if (id.includes("/src/components/portal/")) return "portal-ui";
           if (id.includes("/src/components/market/")) return "market-ui";
+          // The shell's own pieces — the error boundary and the update banner — are small and
+          // are not part of the screen anybody is looking at. Keeping them out of the main
+          // chunk keeps it under the production budget verify:production enforces.
+          if (id.includes("/src/components/system/")) return "system-ui";
           if (!id.includes("node_modules")) return undefined;
           if (id.includes("@supabase") || id.includes("iceberg-js")) return "supabase-vendor";
           if (id.includes("lucide-react")) return "icons-vendor";

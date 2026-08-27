@@ -48,6 +48,8 @@ const AMBIENT = new Set([
   "removeEventListener", "OffscreenCanvas", "createImageBitmap", "Worker", "BroadcastChannel",
   // Node
   "process", "Buffer", "__dirname", "__filename", "require", "module", "exports",
+  // Replaced at build time by Vite's define, so it is a real value in every build.
+  "__BUILD_ID__",
   "URLPattern", "AbortSignal", "TransformStream", "ReadableStream", "WritableStream",
   // Typed arrays and binary helpers, used for hashing and file bytes.
   "Uint8Array", "Uint16Array", "Uint32Array", "Int8Array", "Int16Array", "Int32Array",
