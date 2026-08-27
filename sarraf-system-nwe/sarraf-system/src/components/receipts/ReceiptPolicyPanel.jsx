@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { LockKeyhole, RefreshCw, Save, ShieldCheck } from "lucide-react";
 import { createReceiptReviewCommand, loadReceiptPolicy, updateReceiptPolicy } from "../../services/receiptReview";
+import { errorTextOr } from "../../services/userFacingError.js";
 import "./receipt-policy.css";
 
 const defaults = { min_match_score: 80, require_reason_below: 90, allow_reject: true, allow_correction: true, require_finalization: true, require_separate_finalizer: true, version: 0 };
@@ -27,7 +28,7 @@ export function ReceiptPolicyPanel({ client, isOwner, flash = () => {}, lang = "
     try {
       await updateReceiptPolicy(client, { policy: { min_match_score: min, require_reason_below: below, allow_reject: !!policy.allow_reject, allow_correction: !!policy.allow_correction, require_finalization: !!policy.require_finalization, require_separate_finalizer: !!policy.require_separate_finalizer }, updateReason: reason, commandKey: command.current });
       command.current = null; setReason(""); await load(); flash(copy.saved);
-    } catch (error) { console.error("receipt policy update", error); setState("ready"); flash(error?.message || copy.failed); }
+    } catch (error) { console.error("receipt policy update", error); setState("ready"); flash(errorTextOr(error, copy.failed)); }
   };
   return <section className="receipt-policy-panel" aria-labelledby="receipt-policy-title"><header><span className="receipt-policy-icon"><ShieldCheck aria-hidden="true" /></span><div><h2 id="receipt-policy-title">{copy.title}</h2><p>{copy.subtitle}</p></div><span className="receipt-policy-version">v{policy.version || "—"}</span></header>
     {state === "error" ? <div className="receipt-policy-error" role="alert">{copy.loadFailed} <button type="button" onClick={load}><RefreshCw aria-hidden="true" /> {copy.retry}</button></div> : <>

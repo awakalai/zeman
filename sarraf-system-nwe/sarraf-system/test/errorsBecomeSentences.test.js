@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { describeError, errorText, userFacingServiceError } from "../src/services/userFacingError.js";
+import { describeError, errorText, errorTextOr, userFacingServiceError, zemanRule } from "../src/services/userFacingError.js";
 import { activeLanguage, setActiveLanguage, SUPPORTED_LANGUAGES } from "../src/services/activeLanguage.js";
 
 /**
@@ -109,4 +109,60 @@ test("no screen prints a raw error object any more", () => {
     if (/String\((e|error)\?\.message \|\| \1\)/.test(text)) offenders.push(file);
   }
   assert.deepEqual(offenders, [], "these screens still show the database's own words");
+});
+
+// ── the rules this system states on its own side of the line ──────────────────
+//
+// Fifteen of the clearest sentences in this system are raised in the browser, before the server
+// is asked at all: the reason that is too short, the correction with nothing in it, the receipt
+// that was never selected. They carry no SQLSTATE, so to a catch block they look exactly like a
+// TypeError from a bug — and answering them with "something went wrong" replaces the one sentence
+// the person could act on with the one they cannot.
+
+test("a rule this system states itself reaches the reader in the words it was written in", () => {
+  const said = "بڕیارەکە پێویستی بە هۆکارێکی لانیکەم ٨ پیتی هەیە";
+  const shown = errorTextOr(zemanRule(said), "بڕیاری فیش جێبەجێ نەکرا");
+  assert.ok(shown.includes(said), `the rule's own words were lost: ${shown}`);
+  assert.ok(!shown.includes("بڕیاری فیش جێبەجێ نەکرا"), "the fallback replaced a sentence that was not missing");
+  assert.ok(/\(ZE-RULE\)/.test(shown), "there is nothing to quote");
+});
+
+test("a refusal from the server is still translated, not passed through", () => {
+  const shown = errorTextOr(
+    { code: "23514", message: "receipt gross, fee, order and net amounts do not reconcile" },
+    "بڕیاری فیش جێبەجێ نەکرا");
+  assert.ok(!/reconcile/i.test(shown), `the database's own English reached the reader: ${shown}`);
+  assert.ok(/\(ZE-23514\)/.test(shown), "there is nothing to quote");
+});
+
+test("a failure nobody recognises uses the screen's own sentence, never the raw one", () => {
+  const shown = errorTextOr(new TypeError("t.forEach is not a function"), "بڕیاری فیش جێبەجێ نەکرا");
+  assert.ok(!/forEach/.test(shown), `an internal fault was shown verbatim: ${shown}`);
+  assert.ok(shown.startsWith("بڕیاری فیش جێبەجێ نەکرا"), shown);
+});
+
+test("every Kurdish rule in the receipt services is marked as one", () => {
+  const offenders = [];
+  for (const file of ["../src/services/receiptWorkspace.js", "../src/services/receiptIntake.js"]) {
+    const text = readFileSync(new URL(file, import.meta.url), "utf8");
+    for (const line of text.split("\n")) {
+      if (/throw new Error\("[^"]*[؀-ۿ]/.test(line)) offenders.push(`${file}: ${line.trim()}`);
+    }
+  }
+  assert.deepEqual(offenders, [], "these rules would be shown as 'something went wrong'");
+});
+
+test("no screen puts a raw message in front of the reader any more", () => {
+  const offenders = [];
+  for (const file of ["../src/App.jsx", "../src/components/receipts/ReceiptPolicyPanel.jsx"]) {
+    const text = readFileSync(new URL(file, import.meta.url), "utf8");
+    for (const line of text.split("\n")) {
+      // `err.message` on a ReceiptIngestionError is that class's own bilingual sentence, which is
+      // written for a reader and deliberately kept; anything reached through `?.` is not.
+      if (/(flash|setErr|toast)\((?:`[^`]*)?\$?\{?\s*\w+\?\.message/.test(line)) {
+        offenders.push(`${file}: ${line.trim()}`);
+      }
+    }
+  }
+  assert.deepEqual(offenders, [], "these screens still show whatever the failure happened to say");
 });
