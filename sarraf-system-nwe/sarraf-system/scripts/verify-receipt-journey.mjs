@@ -44,6 +44,12 @@ const PORT = Number(process.env.ZEMAN_JOURNEY_PORT || 5211);
 const BASE = `http://localhost:${PORT}`;
 const envFile = path.join(root, ".env.e2e.local");
 
+// The one receipt this journey carries. The reader returns these figures and the owner's screen
+// must show them; keeping them in one place is what makes the owner-side check a real comparison
+// rather than a second copy of the same guess.
+const READING = { gross: "1246.30", fee: "36.30", net: "1210.00", currency: "CNY" };
+const grouped = (n) => Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
 const CUSTOMER = "cccccccc-1111-1111-1111-111111111111";
 const OWNER = "aaaaaaaa-1111-1111-1111-111111111111";
 
@@ -230,7 +236,7 @@ try {
   let signedInAs = CUSTOMER;
   const storedObjects = [];
 
-  await page.route("**/stub.supabase.co/**", async (route) => {
+  const routeSupabase = async (route) => {
     const request = route.request();
     const url = request.url();
     const method = request.method();
@@ -304,14 +310,17 @@ try {
       shimFailures.push(`${method} ${new URL(url).pathname}: ${String(e.message || e).slice(0, 160)}`);
       return json({ code: "P0001", message: String(e.message || e) }, 400);
     }
-  });
+  };
+
+  await page.route("**/stub.supabase.co/**", (route) => routeSupabase(route));
 
   // The reader. Not this repository's provider, but the recording IS this repository's command,
   // so the route calls it exactly as api/receipt-ocr does — with the service key and no user.
   await page.route("**/api/receipt-ocr", async (route) => {
     const { documentId } = JSON.parse(route.request().postData() || "{}");
     const extraction = {
-      grossAmount: "1246.30", feeAmount: "36.30", netAmount: "1210.00", currency: "CNY",
+      grossAmount: READING.gross, feeAmount: READING.fee, netAmount: READING.net,
+      currency: READING.currency,
       refNo: "JOURNEY0001", payee: "لەیلا", txDate: new Date().toISOString().slice(0, 10), txTime: "10:15",
       platform: "alipay", feeTreatment: "unknown", transactionStatus: "success", confidence: 0.96,
     };
@@ -477,6 +486,68 @@ try {
       `select coalesce(string_agg(kind, ','), '<none>') from public.zeman_notifications`);
     record(told.includes("batch_arrived"), "and is told about it without asking",
       `notifications: ${told}`);
+  }
+
+  // ── and now the owner opens the same system ────────────────────────────────
+  //
+  // Everything above proves the receipt reached the database. It does not prove the one thing
+  // the owner actually asked for all week: that it turns up on THEIR screen. Both halves of the
+  // journey run in the same browser against the same database, which is the only way to know
+  // that what one person sent is what the other person sees.
+  if (inputCount > 0) {
+    signedInAs = OWNER;
+    const ownerCtx = await browser.newContext({ locale: "ckb", viewport: { width: 430, height: 900 } });
+    const ownerPage = await ownerCtx.newPage();
+    const ownerCrashes = [];
+    ownerPage.on("pageerror", (e) => ownerCrashes.push(String(e)));
+    await ownerPage.route("**/stub.supabase.co/**", (route) => routeSupabase(route));
+    await ownerPage.goto(BASE, { waitUntil: "networkidle", timeout: 60000 });
+
+    let ownerScreen = "";
+    try {
+      await ownerPage.waitForSelector('input[type="password"]', { timeout: 30000 });
+      await ownerPage.locator("input").first().fill("07500000001");
+      await ownerPage.locator('input[type="password"]').first().fill("journey-password");
+      await ownerPage.keyboard.press("Enter");
+      await ownerPage.waitForTimeout(9000);
+      // The receipts screen is where a batch waiting for a decision appears. The nav entry is
+      // «پشکنینی فیش»; its own subtitle says «فیشەکان», so an exact-text match on the subtitle
+      // finds a label and clicks nothing.
+      for (const label of ["پشکنینی فیش", "فیشەکان"]) {
+        const tab = ownerPage.getByText(label, { exact: true }).first();
+        if (await tab.count().catch(() => 0)) {
+          await tab.click({ timeout: 5000 }).catch(() => {});
+          await ownerPage.waitForTimeout(4000);
+          break;
+        }
+      }
+      ownerScreen = await ownerPage.innerText("body").catch(() => "");
+    } catch (e) {
+      ownerScreen = `⟨the owner could not sign in: ${String(e).slice(0, 160)}⟩`;
+    }
+    if (process.env.ZEMAN_JOURNEY_DUMP) console.log(`\n===== the owner's screen =====\n${ownerScreen.slice(0, 1200)}\n=====`);
+
+    // Not "some receipts word appeared" — the batch is listed as one still awaiting a decision,
+    // and the figures on it are the figures the customer's receipt actually carried.
+    record(/فیشی نوێ\s*\(\s*[1-9]/.test(ownerScreen),
+      "the owner's own screen lists the batch as still awaiting their decision",
+      ownerScreen.replace(/\s+/g, " ").slice(0, 220));
+
+    record(ownerScreen.includes(grouped(READING.net)) && ownerScreen.includes(READING.currency),
+      "the amount the customer sent is the amount the owner is shown",
+      `looking for ${grouped(READING.net)} ${READING.currency}`);
+
+    record(ownerScreen.includes(grouped(READING.gross)),
+      "and the with-fee figure the customer was quoted is there too",
+      `looking for ${grouped(READING.gross)}`);
+
+    const ownerCrashesReal = ownerCrashes.filter(
+      (e) => !/supabaseUrl|Failed to load resource|net::ERR|realtime/i.test(e));
+    record(ownerCrashesReal.length === 0, "nothing throws on the owner's side either",
+      ownerCrashesReal.slice(0, 2).join(" | "));
+
+    await ownerCtx.close();
+    signedInAs = CUSTOMER;
   }
 
   // A ReferenceError inside an event handler leaves no message on the screen at all, which is
