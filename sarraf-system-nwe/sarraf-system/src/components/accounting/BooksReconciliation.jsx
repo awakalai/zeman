@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { AlertTriangle, CheckCircle2, Loader2, RefreshCw, Scale } from "lucide-react";
 import { loadBooksReconciliation, loadGaps } from "../../services/booksReconciliation";
 import "./debt-center.css";
+import { errorText } from "../../services/userFacingError";
 
 const COPY = {
   ku: {
@@ -38,7 +39,7 @@ export function BooksReconciliation({ client, lang = "ku", flash = () => {} }) {
       setState("ready");
     } catch (e) {
       console.error("books reconciliation", e);
-      flashRef.current(String(e?.message || e));
+      flashRef.current(errorText(e));
       setState("error");
     }
   }, [client]);

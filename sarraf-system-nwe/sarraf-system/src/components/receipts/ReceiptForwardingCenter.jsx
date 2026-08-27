@@ -7,6 +7,7 @@ import {
   partitionForForwarding, recipientRoleFor, skipReasonText,
 } from "../../services/receiptForwarding";
 import "./receipt-forwarding.css";
+import { errorText } from "../../services/userFacingError";
 
 const COPY = {
   ku: {
@@ -67,7 +68,7 @@ export function ReceiptForwardingCenter({
       setRecon(await loadForwardingReconciliation(client).catch(() => null));
     } catch (e) {
       console.error("forwarding queue", e);
-      flashRef.current(String(e?.message || e));
+      flashRef.current(errorText(e));
       setState("error");
     }
   }, [client]);
@@ -111,7 +112,7 @@ export function ReceiptForwardingCenter({
       await load();
     } catch (e) {
       console.error("forward", e);
-      flash(String(e?.message || e));
+      flash(errorText(e));
     } finally {
       setBusy(false);
     }
@@ -122,7 +123,7 @@ export function ReceiptForwardingCenter({
     try {
       const url = await signedUrlFor(path);
       if (url) window.open(url, "_blank", "noopener,noreferrer");
-    } catch (e) { flash(String(e?.message || e)); }
+    } catch (e) { flash(errorText(e)); }
   };
 
   const nameOf = (id) => (people || []).find((p) => p.id === id)?.name || id || "—";

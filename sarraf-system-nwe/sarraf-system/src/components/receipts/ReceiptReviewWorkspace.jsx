@@ -9,6 +9,7 @@ import {
   setReceiptDailyRate, transitionDocument,
 } from "../../services/receiptWorkspace";
 import "./receipt-review.css";
+import { errorText } from "../../services/userFacingError";
 
 const COPY = {
   ku: {
@@ -96,7 +97,7 @@ export function ReceiptReviewWorkspace({ client, lang = "ku", signedUrlFor = nul
       setQueue(rows);
       setIndex((i) => Math.min(i, Math.max(0, rows.length - 1)));
       setState("ready");
-    } catch (e) { console.error("review queue", e); flashRef.current(String(e?.message || e)); setState("error"); }
+    } catch (e) { console.error("review queue", e); flashRef.current(errorText(e)); setState("error"); }
   }, [client]);
 
   useEffect(() => { loadQueue(); }, [loadQueue]);
@@ -124,7 +125,7 @@ export function ReceiptReviewWorkspace({ client, lang = "ku", signedUrlFor = nul
           const url = await signedUrlFor(d.document.storagePath);
           if (alive) setImageUrl(url);
         }
-      } catch (e) { if (alive) { console.error("review detail", e); flashRef.current(String(e?.message || e)); } }
+      } catch (e) { if (alive) { console.error("review detail", e); flashRef.current(errorText(e)); } }
     })();
     return () => { alive = false; };
   }, [client, currentDoc, signedUrlFor]);
@@ -147,7 +148,7 @@ export function ReceiptReviewWorkspace({ client, lang = "ku", signedUrlFor = nul
       flashRef.current(typeof message === "function" ? message(result) : message);
       if (reloadQueue) { await loadQueue(); setDetail(null); }
     }
-    catch (e) { console.error("review action", e); flashRef.current(String(e?.message || e)); }
+    catch (e) { console.error("review action", e); flashRef.current(errorText(e)); }
     finally { setBusy(false); }
   };
 

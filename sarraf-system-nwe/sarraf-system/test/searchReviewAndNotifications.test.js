@@ -16,7 +16,6 @@ import { loadReplacementChain } from "../src/services/receiptWorkspace.js";
 const app = readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8");
 const palette = readFileSync(new URL("../src/components/operations/OperationalPalette.jsx", import.meta.url), "utf8");
 const workspace = readFileSync(new URL("../src/components/receipts/ReceiptReviewWorkspace.jsx", import.meta.url), "utf8");
-const bell = readFileSync(new URL("../src/components/system/NotificationBell.jsx", import.meta.url), "utf8");
 
 // ── find it ──────────────────────────────────────────────────────────────────
 
@@ -81,10 +80,27 @@ test("the reviewer is shown the code and the reason a replacement exists", () =>
 
 // ── act on it ────────────────────────────────────────────────────────────────
 
+// Two bells in one header, each with its own unread count, and nobody could tell which was
+// which. The receipt events belong in the notification centre that already existed.
+test("there is one bell, and it carries both sources", () => {
+  assert.ok(!/NotificationBell/.test(app), "a second notification bell is back in the header");
+  assert.match(app, /loadNotifications\(supabase, \{ limit: 60 \}\)/,
+    "the one panel does not read the receipt events at all");
+  assert.match(app, /source: "receipt"/, "the two sources cannot be told apart once merged");
+  assert.match(app, /\.sort\(\(a, b\) => String\(b\.created_at/,
+    "the merged list is not in time order, so the newest thing is not at the top");
+});
+
+test("marking read reaches whichever table the notification came from", () => {
+  assert.match(app, /if \(n\.source === "receipt"\) await markNotificationRead\(supabase, n\.id\);/,
+    "a receipt event is marked read against the notes table, where it does not exist");
+  assert.match(app, /if \(anyReceipt\) await markAllNotificationsRead\(supabase\);/,
+    "«hemuwi binraw» leaves every receipt event unread");
+});
+
 test("a notification opens what it is about", () => {
-  assert.match(bell, /const openOne = async \(item\) => \{\s*if \(onOpen\)/,
-    "opening a notification only marks it read");
-  assert.match(app, /onOpen=\{openNotification\}/, "the bell is given nowhere to send anybody");
+  assert.match(app, /openNotification\(\{ subjectKind: n\.subject_kind, subjectId: n\.ref_id \}\)/,
+    "opening a receipt notification only marks it read");
   assert.match(app, /if \(item\.subjectKind === "batch"\)/, "a batch notification leads nowhere");
 });
 
@@ -93,6 +109,6 @@ test("a notification opens what it is about", () => {
 test("a notification with nowhere to go leaves the panel where it was", () => {
   assert.match(app, /if \(!item\?\.subjectId\) return false;/,
     "a notification with no subject still closes the panel as though it did something");
-  assert.match(bell, /if \(handled\) setOpen\(false\);/,
+  assert.match(app, /if \(openNotification\(\{[^)]*\}\)\) setNoteOpen\(false\);/,
     "the panel closes whether or not anything was opened");
 });

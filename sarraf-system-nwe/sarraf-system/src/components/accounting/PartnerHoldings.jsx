@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Boxes, Loader2, RefreshCw } from "lucide-react";
 import { detailRows, loadBatchDetail, loadHoldings, platformName } from "../../services/partnerBatches.js";
 import "./debt-center.css";
+import { errorText } from "../../services/userFacingError";
 
 /**
  * What a partner is holding for the house, and the receipts behind it.
@@ -82,7 +83,7 @@ export function PartnerHoldings({ client, lang = "ku", isStaff = false, partners
     if (openBatch === batchId) { setOpenBatch(null); setDetail(null); return; }
     setOpenBatch(batchId); setDetail(null); setDetailError("");
     try { setDetail(await loadBatchDetail(client, batchId)); }
-    catch (error) { setDetailError(String(error?.message || error).slice(0, 200)); }
+    catch (error) { setDetailError(errorText(error).slice(0, 200)); }
   }, [client, openBatch]);
 
   const batches = held?.batches || [];

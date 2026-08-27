@@ -5,6 +5,7 @@ import {
   loadDebts, loadPartnerAccounts,
 } from "../../services/accounting";
 import "./debt-center.css";
+import { errorText } from "../../services/userFacingError";
 
 const COPY = {
   ku: {
@@ -91,7 +92,7 @@ export function PartnerAccounts({ client, partners = [], lang = "ku", flash = ()
       await load();
     } catch (error) {
       console.error("partner command", error);
-      flash(String(error?.message || error));
+      flash(errorText(error));
     } finally { setBusy(false); }
   };
 

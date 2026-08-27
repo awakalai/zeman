@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { AlertTriangle, Building2, CheckCircle2, Clock, Eye, FileUp, Loader2, RefreshCw, Send, ShieldCheck } from "lucide-react";
 import "./debt-center.css";
+import { errorText } from "../../services/userFacingError";
 
 const COPY = {
   ku: {
@@ -86,7 +87,7 @@ export function OfficePayments({ client, lang = "ku", flash = () => {}, canConfi
       setState("ready");
     } catch (e) {
       console.error("office payments", e);
-      flash(String(e?.message || e));
+      flash(errorText(e));
       setState("error");
     }
   }, [client, flash]);
@@ -145,7 +146,7 @@ export function OfficePayments({ client, lang = "ku", flash = () => {}, canConfi
       const { data, error } = await client.storage.from("receipts").createSignedUrl(row.evidencePath, 300);
       if (error) throw error;
       if (data?.signedUrl) window.open(data.signedUrl, "_blank", "noopener,noreferrer");
-    } catch (error) { flash(String(error?.message || error)); }
+    } catch (error) { flash(errorText(error)); }
   };
 
   const report = async (row, status) => {
@@ -174,7 +175,7 @@ export function OfficePayments({ client, lang = "ku", flash = () => {}, canConfi
       await load();
     } catch (e) {
       console.error("office report", e);
-      flash(String(e?.message || e));
+      flash(errorText(e));
     } finally { setBusy(false); }
   };
 
@@ -196,7 +197,7 @@ export function OfficePayments({ client, lang = "ku", flash = () => {}, canConfi
       await load();
     } catch (e) {
       console.error("office confirmation", e);
-      flash(String(e?.message || e));
+      flash(errorText(e));
     } finally { setBusy(false); }
   };
 

@@ -75,10 +75,16 @@ export function UpdateBanner({ lang = "ku" }) {
   );
 }
 
-/** The running build, for a corner of the screen and for a screenshot. */
+/**
+ * Which build this screen is.
+ *
+ * It rides under the brand name rather than among the action buttons: it is information about
+ * the application, not something to press, and eight buttons in one phone header had it sitting
+ * on top of the name. `block` and `leading-none` so it costs the header no extra height.
+ */
 export function BuildStamp() {
   return (
-    <span className="text-[10px] tabular-nums" style={{ color: "var(--txt-3)" }}
-      title={RUNNING_BUILD}>{shortBuild()}</span>
+    <span className="block text-[10px] leading-none tabular-nums truncate"
+      style={{ color: "var(--txt-3)" }} title={RUNNING_BUILD}>{shortBuild()}</span>
   );
 }

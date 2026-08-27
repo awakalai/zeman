@@ -63,11 +63,15 @@ test("subscribing without realtime returns an unsubscribe rather than throwing",
   stop();
 });
 
-test("the bell is actually mounted, not merely written", () => {
-  assert.match(app, /import \{ NotificationBell \}/,
-    "the notification bell is not imported by the application");
-  assert.match(app, /<NotificationBell client=\{supabase\}/,
-    "the notification bell exists but no screen renders it");
+// Originally: a bell of its own. That was wrong — the application already had a notification
+// centre, and a second bell beside it meant two unread counts in one header with nothing to say
+// which was which. The receipt events now arrive in the one panel that already existed.
+test("the receipt events reach the notification centre that already existed", () => {
+  assert.match(app, /import \{ loadNotifications, markAllNotificationsRead, markNotificationRead, subscribeToNotifications \}/,
+    "the application does not read the receipt notifications at all");
+  assert.match(app, /loadNotifications\(supabase/, "nothing loads them");
+  assert.match(app, /subscribeToNotifications\(supabase/, "they are never heard as they happen");
+  assert.ok(!/NotificationBell/.test(app), "a second bell is back beside the first");
 });
 
 test("the uploader's own receipts are actually shown, and can be replaced", () => {
