@@ -121,12 +121,15 @@ port = ${PORT}
       -- rimg_insert is the project's own permissive grant, reproduced here by name.
       grant select, insert, update, delete on storage.objects to authenticated;
       grant select on storage.buckets to authenticated;
+      -- Exactly what the live project has, and nothing more. An earlier version of this fixture
+      -- also created a permissive for-all policy, which the live database does not have — and
+      -- a check written against that invention passes for a reason production cannot supply.
+      -- The live policy list is one permissive INSERT and four restrictive ones; a restrictive
+      -- policy only takes rows away, so with no permissive SELECT nobody reads this table at all.
+      drop policy if exists rimg_rest on storage.objects;
       drop policy if exists rimg_insert on storage.objects;
       create policy rimg_insert on storage.objects
         for insert to authenticated with check (bucket_id = 'receipts');
-      drop policy if exists rimg_rest on storage.objects;
-      create policy rimg_rest on storage.objects
-        for all to authenticated using (bucket_id = 'receipts') with check (bucket_id = 'receipts');
     `);
     psqlFile(prereq);
 

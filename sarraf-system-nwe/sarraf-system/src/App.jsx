@@ -6616,9 +6616,13 @@ function ReceiptUploader({ customerId, customerName, partnerId, uploaderId, dire
     const amountV = Math.abs(Number(d?.amount) || 0);
     const feeOrig = d?.feeOriginal != null ? Math.abs(Number(d.feeOriginal) || 0) : feeV;
     const feeDisc = Math.abs(Number(d?.feeDiscount) || 0);
-    const orderAmountV = d?.orderAmount != null && Number.isFinite(Number(d.orderAmount))
+    // Zero means the receipt states no separate order amount, not an order of nothing. Carried
+    // through as a real figure it makes the expected net zero and every reconciled receipt looks
+    // wrong; it also drove `netV` to 0 whenever the reader gave no net of its own.
+    const orderAmountRead = d?.orderAmount != null && Number.isFinite(Number(d.orderAmount))
       ? Math.abs(Number(d.orderAmount))
       : null;
+    const orderAmountV = orderAmountRead ? orderAmountRead : null;
     const netV = d?.netAmount != null && Number.isFinite(Number(d.netAmount))
       ? Math.abs(Number(d.netAmount))
       : (orderAmountV != null ? orderAmountV : Math.max(0, amountV - feeV));

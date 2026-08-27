@@ -346,9 +346,13 @@ try {
   });
 
   check("the storage service may then record what it stored", () => {
-    asUpload(A_UID, `update storage.objects
-                        set metadata='{"size":240641,"mimetype":"image/jpeg"}'::jsonb
-                      where bucket_id='receipts' and name='${claimPath}'`);
+    // Made by the storage service on its own connection, not by the browser. The live project
+    // has no permissive UPDATE policy for authenticated at all, and the objects in the bucket
+    // nevertheless carry their size and type — so running this as the user would be the fixture
+    // inventing a permission production does not grant.
+    psql(`update storage.objects
+             set metadata='{"size":240641,"mimetype":"image/jpeg"}'::jsonb
+           where bucket_id='receipts' and name='${claimPath}'`);
     const size = psql(`select coalesce(metadata->>'size','⟨none⟩') from storage.objects
                         where bucket_id='receipts' and name='${claimPath}'`).trim();
     if (size !== "240641") throw new Error(`the size was never recorded (${size})`);
@@ -386,6 +390,42 @@ try {
     const size = psql(`select coalesce(metadata->>'size','⟨none⟩') from storage.objects
                         where bucket_id='receipts' and name='${claimPath}'`).trim();
     if (size !== "240641") throw new Error(`claimed evidence was swapped; the size is now ${size}`);
+  });
+
+  // ── the send, which reads back the object it is about to account for ────────
+  //
+  // sarraf_ingest_receipt_batch refuses a receipt whose staged object it cannot find:
+  //
+  //   if not exists (select 1 from storage.objects o where o.bucket_id='receipts'
+  //     and o.name=v_path and o.owner_id=auth.uid()::text and ... ) then
+  //     raise exception 'invalid staged object';
+  //
+  // That is a SELECT on storage.objects, made from a SECURITY DEFINER function owned by
+  // sarraf_definer. Every policy this repository writes over that table is RESTRICTIVE, and a
+  // restrictive policy can only take rows away — a role with no PERMISSIVE policy for SELECT
+  // sees nothing at all, however true the restrictive ones are.
+  //
+  // The live database has exactly one permissive policy on storage.objects, rimg_insert, and it
+  // is for INSERT. Nothing grants a read. Which would mean the send has never once been able to
+  // confirm the image it was about to write a receipt for.
+  check("the send can find the image it is about to account for", () => {
+    const path = "ingest/iso-send-1/iso-send-000001.jpg";
+    psql(`delete from storage.objects where bucket_id='receipts' and name='${path}'`);
+    asUser(A_UID, `insert into storage.objects(bucket_id,name,owner_id,metadata)
+                   values ('receipts','${path}','${A_UID}','{}'::jsonb)`);
+    psql(`update storage.objects
+             set metadata='{"size":147262,"mimetype":"image/jpeg"}'::jsonb
+           where bucket_id='receipts' and name='${path}'`);
+    // Exactly the existence test the ingestion command makes, as the role it makes it as.
+    const seen = asDefiner(A_UID, `select count(*) from storage.objects o
+      where o.bucket_id='receipts' and o.name='${path}'
+        and o.owner_id=auth.uid()::text
+        and coalesce((o.metadata->>'size')::bigint,0) between 1 and 10485760
+        and lower(coalesce(o.metadata->>'mimetype','')) in
+            ('image/jpeg','image/png','image/webp','image/heic','image/heif')`).trim();
+    if (seen !== "1") {
+      throw new Error(`the staged object is invisible to the command that must verify it (saw ${seen})`);
+    }
   });
 
   // ── the server's own key, calling a definer function ────────────────────────
