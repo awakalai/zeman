@@ -959,6 +959,69 @@ try {
     });
   });
 
+  // «سیستەمی پێشگرتن لە دووبارەبوونەوە (Hash)»
+  //
+  // The rule that catches the same photograph sent twice has never run: the browser passed
+  // `p_hash: null` on every call, and only called at all when the reading had produced a
+  // reference. An unreadable receipt could therefore be uploaded any number of times.
+  scenario(17, "the same image is caught the second time, and named", () => {
+    const sha = "e".repeat(64);
+
+    step("a receipt is uploaded, read and sent", () => {
+      be("customer");
+      j(`public.sarraf_receipt_intake_begin_v3(
+           'f17-first', null, 'f17-batch', 'image/jpeg', 'receipt-intake:receipt:f17-first')`);
+      psql(`select public.sarraf_receipt_record_server_extraction('f17-first','${sha}',24680,'image/jpeg',
+        true,'{"grossAmount":"800.00","feeAmount":"0","netAmount":"800.00","currency":"CNY",
+          "refNo":"F17REF","payee":"ئەحمەد","txDate":"2026-08-03","txTime":"08:20",
+          "platform":"alipay","feeTreatment":"no_fee","transactionStatus":"success",
+          "confidence":0.95}'::jsonb,'verify','flow',120,'flow-request-f17')`);
+      eq(psql("select state from public.receipt_documents where id='f17-first'").trim(),
+        "validated", "the state the reading left it in");
+      be("admin");
+    });
+
+    step("the same bytes uploaded again are recognised, by the image alone", () => {
+      be("customer");
+      // No reference, no amount, no date — the shape of a receipt the reader could not read.
+      // Everything except the image is withheld, so only the hash can find anything.
+      const hits = psql(`select count(*) from public.check_receipt_dupe(
+                           '${sha}', null, null, null, null, null, null, 'f17-second')`).trim();
+      eq(hits, 1, "matches for an image that has certainly been seen before");
+    });
+
+    step("it says which receipt, by the name its sender can read out", () => {
+      const row = psql(`select matched_key || '|' || kind || '|' || coalesce(tracking_code,'⟨none⟩') || '|' || source
+                          from public.check_receipt_dupe('${sha}', null, null, null, null, null, null, 'f17-second')`).trim();
+      const [key, kind, code, source] = row.split("|");
+      eq(key, "image", "what matched");
+      eq(kind, "duplicate", "how sure it is");
+      eq(source, "uploaded", "where the earlier copy is");
+      if (!/^ZR-\d{8}-\d{6}-[A-Z0-9]{6,}$/.test(code)) {
+        throw new Error(`the answer names the earlier receipt as '${code}', which nobody can quote`);
+      }
+    });
+
+    // The receipt being uploaded is written to the table before its image is read, so without
+    // this it would find itself and refuse every first upload as a duplicate of itself.
+    step("a receipt is never a duplicate of itself", () => {
+      const own = psql(`select count(*) from public.check_receipt_dupe(
+                          '${sha}', null, null, null, null, null, null, 'f17-first')`).trim();
+      eq(own, 0, "matches found against the receipt itself");
+    });
+
+    // A rejected receipt is not a reason to refuse the replacement sent in its place.
+    step("a refused receipt does not block the one sent to replace it", () => {
+      psql(`update public.receipt_documents set state='needs_manual_review' where id='f17-first'`);
+      psql(`update public.receipt_documents set state='rejected', counted=false,
+              rule_code='manual_reject', rule_reason='وێنەکە ڕوون نییە' where id='f17-first'`);
+      const still = psql(`select count(*) from public.check_receipt_dupe(
+                            '${sha}', null, null, null, null, null, null, 'f17-second')`).trim();
+      eq(still, 0, "a refused receipt still blocking its own replacement");
+      be("admin");
+    });
+  });
+
   // ── the report ──────────────────────────────────────────────────────────────
   const failed = scenarios.filter((s) => !s.ok);
   for (const s of scenarios) {

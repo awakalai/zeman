@@ -74,3 +74,42 @@ test("the net a receipt contributes is the same on both layouts", () => {
   assert.equal(receiptNetFrom({ amount: 1246.30, fee: 36.30 }), 1210);
   assert.equal(receiptNetFrom({ amount: 1246.30, fee: 36.30, orderAmount: 1210 }), 1210);
 });
+
+/**
+ * «سیستەمی پێشگرتن لە دووبارەبوونەوە (Hash)»
+ *
+ * The duplicate check has always accepted an image hash and the browser has always sent null, so
+ * the rule that catches the same photograph twice has never once run. The database half is gated
+ * by flow 17; what is here is that the browser sends the hash at all, and that it says which
+ * receipt the image repeats.
+ */
+import { readFileSync as read } from "node:fs";
+const appSource = read(new URL("../src/App.jsx", import.meta.url), "utf8");
+
+test("the image hash is sent to the duplicate check", () => {
+  assert.ok(!/p_hash: null/.test(appSource),
+    "the browser still passes a null hash, so the same photograph twice is never caught");
+  assert.match(appSource, /p_hash: img\.hash \|\| null/, "no hash reaches the duplicate check");
+});
+
+test("the check runs even when the reading found no reference", () => {
+  assert.match(appSource, /if \(img\.hash \|\| rn \|\| merchantRn \|\|/,
+    "an unreadable receipt is never checked for being a duplicate at all");
+});
+
+test("a receipt is not compared against itself", () => {
+  assert.match(appSource, /p_exclude_id: id/,
+    "the document is written before the image is read, so every first upload would match itself");
+});
+
+test("the refusal names the earlier receipt and what actually matched", () => {
+  assert.match(appSource, /old\?\.tracking_code/, "the earlier receipt is named by nothing quotable");
+  assert.match(appSource, /"هەمان وێنە پێشتر نێردراوە"/,
+    "a repeated image is still reported as a repeated reference number");
+  assert.match(appSource, /sameImage \? "same_image"/, "a repeated image is recorded under the wrong rule");
+});
+
+test("a repeat inside the same batch is caught by its image too", () => {
+  assert.match(appSource, /\(img\.hash && r\.hash === img\.hash\) \|\|/,
+    "the same photograph chosen twice in one batch is only caught if the reading found a reference");
+});
