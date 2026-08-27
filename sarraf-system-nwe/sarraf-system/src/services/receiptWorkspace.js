@@ -56,7 +56,44 @@ const mapDocument = (d) => ({
   counted: !!d.counted,
   ruleCode: d.rule_code,
   ruleReason: d.rule_reason,
+  // The name the person who sent it can read out, and both ends of the replacement chain. A
+  // reviewer looking at a replacement with none of this sees an unexplained second receipt for
+  // money that was already refused once — which is the exact hole the chain was added to close.
+  trackingCode: d.tracking_code || null,
+  replacesDocumentId: d.replaces_document_id || null,
+  replacedByDocumentId: d.replaced_by_document_id || null,
+  replacementLinkedBy: d.replacement_linked_by || null,
+  replacementLinkedAt: d.replacement_linked_at || null,
 });
+
+/**
+ * The receipt this one was sent in place of, and what became of it.
+ *
+ * Read separately rather than joined, because the reviewer needs the OLD receipt's refusal
+ * reason — the reason this replacement exists — and that lives on a row the detail query never
+ * fetches. Returns null when there is no chain, which is the ordinary case.
+ */
+export async function loadReplacementChain(client, doc) {
+  const wanted = [doc?.replacesDocumentId, doc?.replacedByDocumentId].filter(Boolean);
+  if (!wanted.length) return null;
+  const { data, error } = await client
+    .from("receipt_documents")
+    .select("id,tracking_code,state,rule_code,rule_reason,received_at")
+    .in("id", wanted);
+  if (error) throw error;
+  const by = Object.fromEntries((data || []).map((r) => [r.id, {
+    id: r.id,
+    trackingCode: r.tracking_code || null,
+    state: r.state,
+    ruleCode: r.rule_code || null,
+    ruleReason: r.rule_reason || null,
+    receivedAt: r.received_at,
+  }]));
+  return {
+    replaces: doc.replacesDocumentId ? by[doc.replacesDocumentId] || { id: doc.replacesDocumentId } : null,
+    replacedBy: doc.replacedByDocumentId ? by[doc.replacedByDocumentId] || { id: doc.replacedByDocumentId } : null,
+  };
+}
 
 export async function loadDocumentDetail(client, documentId) {
   const [doc, extractions, transitions, summary] = await Promise.all([

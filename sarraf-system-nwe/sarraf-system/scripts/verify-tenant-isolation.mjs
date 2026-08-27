@@ -862,6 +862,59 @@ try {
     }
   });
 
+  // ── and can the owner find it again ─────────────────────────────────────────
+  //
+  // A code exists so it can be quoted down a phone and typed in at the other end. Until today
+  // the search matched prefixes only, so a receipt could be found only by typing the first
+  // characters of its reference — and it did not know tracking codes existed at all.
+  check("the owner finds a receipt by the code its sender read out", () => {
+    const code = psql(`select tracking_code from public.receipts where id = '${SEND_DOC}'`).trim();
+    if (!code.startsWith("ZR-")) throw new Error(`the receipt has no code to search for: ${code}`);
+    const hit = asUser(A_UID,
+      `select coalesce(string_agg(type || '|' || label || '|' || coalesce(focus,'—'), ', '), '<none>')
+         from public.sarraf_operational_search('${code}', 20, null)`).trim();
+    if (!hit.includes(`receipt|${code}`)) throw new Error(`searching the code found: ${hit}`);
+    if (!hit.includes("416e99b0")) throw new Error(`the result does not say which batch to open: ${hit}`);
+  });
+
+  // The half of the code a person actually reads out is the end of it. Prefix matching made
+  // that useless.
+  check("the tail of a code finds it, not only the head", () => {
+    const code = psql(`select tracking_code from public.receipts where id = '${SEND_DOC}'`).trim();
+    const tail = code.slice(-6);
+    const hit = asUser(A_UID, `select coalesce(string_agg(label, ', '), '<none>')
+                                 from public.sarraf_operational_search('${tail}', 20, null)`).trim();
+    if (!hit.includes(code)) throw new Error(`searching '${tail}' found: ${hit}`);
+  });
+
+  check("a receipt is found by its amount", () => {
+    const hit = asUser(A_UID, `select coalesce(string_agg(type || '|' || label, ', '), '<none>')
+                                 from public.sarraf_operational_search('1246', 20, null)`).trim();
+    if (!hit.includes("receipt|ZR-")) throw new Error(`searching an amount found: ${hit}`);
+  });
+
+  check("the other business cannot search its way to it", () => {
+    const code = psql(`select tracking_code from public.receipts where id = '${SEND_DOC}'`).trim();
+    const hit = asUser(B_UID, `select coalesce(string_agg(label, ', '), '<none>')
+                                 from public.sarraf_operational_search('${code}', 20, null)`).trim();
+    if (hit !== "<none>") throw new Error(`the other business found it: ${hit}`);
+  });
+
+  // A customer of the same business must not be able to type a code and read a receipt that is
+  // not theirs. The tenant policy does not separate them — they are in the same business.
+  check("a customer searches their own receipts and nobody else's", () => {
+    psql(`update public.receipt_batches set customer_id = 'iso-a', partner_id = null
+           where id = '416e99b0-589f-4493-8a37-12d0bd414b56'`);
+    const code = psql(`select tracking_code from public.receipts where id = '${SEND_DOC}'`).trim();
+    const hit = asUser(CUS_UID, `select coalesce(string_agg(label, ', '), '<none>')
+                                   from public.sarraf_operational_search('${code}', 20, null)`).trim();
+    psql(`update public.receipt_batches set customer_id = 'iso-cus'
+           where id = '416e99b0-589f-4493-8a37-12d0bd414b56'`);
+    if (hit !== "<none>") {
+      throw new Error(`a customer read another customer's receipt out of the search: ${hit}`);
+    }
+  });
+
   // ── the server's own key, calling a definer function ────────────────────────
   //
   // /api/receipt-ocr downloads the stored original and records what the reader saw through

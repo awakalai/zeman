@@ -37,7 +37,7 @@ const when = (iso) => {
   return d.toLocaleDateString("en-GB");
 };
 
-export function NotificationBell({ client, enabled = true }) {
+export function NotificationBell({ client, enabled = true, onOpen = null }) {
   const [items, setItems] = useState(null);
   const [open, setOpen] = useState(false);
   const [error, setError] = useState("");
@@ -89,10 +89,20 @@ export function NotificationBell({ client, enabled = true }) {
 
   const unread = (items || []).filter((x) => x.unread).length;
 
+  // A notification that only marks itself read is a note, not a notification. Whatever it is
+  // about, this opens it — the batch that arrived, the receipt that was refused — and the panel
+  // gets out of the way. Marking read happens either way, and its failure is not the person's
+  // problem: they have already seen it.
   const openOne = async (item) => {
-    if (!item.unread) return;
-    setItems((prev) => (prev || []).map((x) => (x.id === item.id ? { ...x, unread: false, readAt: new Date().toISOString() } : x)));
-    try { await markNotificationRead(client, item.id); } catch { refresh(); }
+    if (onOpen) {
+      let handled = false;
+      try { handled = onOpen(item) !== false; } catch (e) { console.error("notification target", e); }
+      if (handled) setOpen(false);
+    }
+    if (item.unread) {
+      setItems((prev) => (prev || []).map((x) => (x.id === item.id ? { ...x, unread: false, readAt: new Date().toISOString() } : x)));
+      try { await markNotificationRead(client, item.id); } catch { refresh(); }
+    }
   };
 
   const clearAll = async () => {
