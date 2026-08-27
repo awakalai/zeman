@@ -4,7 +4,7 @@ import { createReceiptIngestionCommand, ingestReceiptBatch } from "./services/re
 import { forgetSend, outcomeText, pendingSend, rememberSend, resolveSendOutcome, settleFailedSend, stageText } from "./services/receiptSendState";
 import { arithmeticObjection, receiptNetFrom, sendableSet, validateReceiptArithmetic } from "./services/receiptValidation";
 import { BuildStamp, UpdateBanner } from "./components/system/UpdateBanner";
-import { NotificationBell } from "./components/system/NotificationBell";
+import { loadNotifications, markAllNotificationsRead, markNotificationRead, subscribeToNotifications } from "./services/notifications";
 import { loadWholeTable } from "./services/tableLoader";
 import { MyReceipts } from "./components/portal/MyReceipts";
 import { intakeReceipt, intakeStatusText, loadMyReceipts, noteReceiptReadFailure, receiptReadFailureText, replaceReceipt, requestStoredReceiptOcr } from "./services/receiptIntake";
@@ -325,6 +325,13 @@ const NOTE_ICON = {
   rate:     { Ic: TrendingUp,     bg: "rgba(var(--ac-gl),.14)", fg: "var(--ac)" },
   close:    { Ic: ClipboardCheck, bg: "var(--warn-bg)", fg: "var(--warn)" },
   system:   { Ic: Bell,           bg: "var(--glass-2)", fg: "var(--txt-2)" },
+  // What happens to a receipt, from the database itself. Read in the same panel as everything
+  // else — one bell, or nobody can tell which of two counts is which.
+  batch_arrived:    { Ic: ScanLine,     bg: "rgba(var(--ac-gl),.14)", fg: "var(--ac)" },
+  receipt_received: { Ic: ScanLine,     bg: "rgba(var(--ac-gl),.14)", fg: "var(--ac)" },
+  receipt_accepted: { Ic: CheckCircle2, bg: "var(--pos-bg)",  fg: "var(--pos)" },
+  receipt_rejected: { Ic: XCircle,      bg: "var(--neg-bg)",  fg: "var(--neg)" },
+  receipt_replaced: { Ic: History,      bg: "var(--warn-bg)", fg: "var(--warn)" },
 };
 
 /* کاتی نزیک — «٥ خولەک لەمەوبەر» */
@@ -1822,7 +1829,13 @@ export default function App() {
     if (!profile || accessState !== "ready") return;
     loadNotes();
     const id = setInterval(loadNotes, 45000);   // هەر ٤٥ چرکە
-    return () => clearInterval(id);
+    // Heard as it happens where the project supports it; the poll above is what makes that a
+    // courtesy rather than the mechanism. An installed app can sit in the background for a day
+    // with its socket long since dropped.
+    const stop = subscribeToNotifications(supabase, () => loadNotes());
+    const onVisible = () => { if (document.visibilityState === "visible") loadNotes(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { clearInterval(id); stop(); document.removeEventListener("visibilitychange", onVisible); };
   }, [profile, accessState]);
   useEffect(() => { if (online && stale && session && accessState === "ready") { setStale(null); loadAll(); } }, [online, stale, session, accessState]);
   useEffect(() => {
@@ -3272,12 +3285,33 @@ export default function App() {
   const [notes, setNotes] = useState([]);
   const [noteOpen, setNoteOpen] = useState(false);
 
+  /**
+   * One bell, both sources.
+   *
+   * `notes` has always been the notification centre. The receipt events added in 202608280009
+   * arrived in a table of their own and were given a SECOND bell beside the first — two bells in
+   * one header, each with its own unread count, and nobody could tell which was which. That was
+   * my mistake and this is the correction: one panel, one count, merged newest first.
+   *
+   * They are shaped differently on purpose — a note carries `seen`, a receipt event carries
+   * `read_at` — so they are mapped to one shape here rather than either table being changed.
+   */
   const loadNotes = async () => {
-    try {
-      const { data: n, error } = await supabase.from("notes").select("*").order("created_at", { ascending: false }).limit(60);
-      if (error) throw error;
-      setNotes(n || []);
-    } catch (e) { console.error("loadNotes", e); setNotes([]); }
+    const [own, receipts] = await Promise.all([
+      supabase.from("notes").select("*").order("created_at", { ascending: false }).limit(60),
+      loadNotifications(supabase, { limit: 60 }).catch((e) => { console.error("receipt notifications", e); return []; }),
+    ]);
+    if (own.error) console.error("loadNotes", own.error);
+    const asNote = (r) => ({
+      id: r.id, source: "receipt", kind: r.kind, title: r.title, body: r.body,
+      link: null, ref_id: r.subjectId, subject_kind: r.subjectKind,
+      seen: !r.unread, created_at: r.createdAt,
+    });
+    const merged = [
+      ...(own.data || []).map((n) => ({ ...n, source: "note" })),
+      ...(receipts || []).map(asNote),
+    ].sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
+    setNotes(merged.slice(0, 80));
   };
 
   // ناردنی ئاگاداری بۆ کەسێک (یان بۆ ئەدمین گەر userId = null)
@@ -3301,15 +3335,24 @@ export default function App() {
   };
 
   const seeNote = async (n) => {
-    try { await supabase.from("notes").update({ seen: true }).eq("id", n.id); } catch {}
     setNotes((x) => x.map((y) => (y.id === n.id ? { ...y, seen: true } : y)));
+    try {
+      if (n.source === "receipt") await markNotificationRead(supabase, n.id);
+      else await supabase.from("notes").update({ seen: true }).eq("id", n.id);
+    } catch (e) { console.error("mark read", e); }
+    // A notification that leads nowhere is a note, not a notification.
+    if (n.source === "receipt") { if (openNotification({ subjectKind: n.subject_kind, subjectId: n.ref_id })) setNoteOpen(false); return; }
     if (n.link) { setPage(n.link); setNoteOpen(false); }
   };
   const seeAll = async () => {
-    const ids = notes.filter((n) => !n.seen).map((n) => n.id);
-    if (!ids.length) return;
-    try { await supabase.from("notes").update({ seen: true }).in("id", ids); } catch {}
+    const ids = notes.filter((n) => !n.seen && n.source !== "receipt").map((n) => n.id);
+    const anyReceipt = notes.some((n) => !n.seen && n.source === "receipt");
+    if (!ids.length && !anyReceipt) return;
     setNotes((x) => x.map((y) => ({ ...y, seen: true })));
+    try {
+      if (ids.length) await supabase.from("notes").update({ seen: true }).in("id", ids);
+      if (anyReceipt) await markAllNotificationsRead(supabase);
+    } catch (e) { console.error("mark all read", e); }
   };
   const unseen = notes.filter((n) => !n.seen).length;
 
@@ -3485,9 +3528,14 @@ export default function App() {
         style={{ paddingTop: "env(safe-area-inset-top)", borderInline: 0, borderTop: 0, borderBottom: "1px solid var(--line)" }}>
         <div className={`px-4 md:px-7 py-3 flex items-center justify-between gap-3 mx-auto ${portalUser ? "max-w-[920px]" : "max-w-[1600px] md:ml-[260px]"}`}>
           <div className="flex items-center gap-3 min-w-0">
-            <div className="flex md:hidden items-center gap-2.5 me-2">
-              <BrandLogo variant="symbol" decorative className="w-9 h-9" />
-              <div className="text-[15px] font-extrabold tracking-tight" style={{color:"var(--txt)"}}>{BRAND.shortName}</div>
+            {/* min-w-0 and a truncate, or eight action buttons push the name off its own
+                header and sit on top of it. */}
+            <div className="flex md:hidden items-center gap-2.5 me-1 min-w-0">
+              <BrandLogo variant="symbol" decorative className="w-9 h-9 shrink-0" />
+              <div className="min-w-0">
+                <div className="text-[15px] font-extrabold tracking-tight truncate" style={{color:"var(--txt)"}}>{BRAND.shortName}</div>
+                <BuildStamp />
+              </div>
             </div>
             <div className="hidden md:flex w-10 h-10 rounded-full items-center justify-center shrink-0"
               style={{ background: "linear-gradient(155deg, var(--ac), var(--ac-2))",
@@ -3601,17 +3649,10 @@ export default function App() {
               style={{ background: "var(--glass)", border: "1px solid var(--line)", color: "var(--txt-2)" }}>
               {theme === "dark" ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
             </button>}
-            {/* Both sides of a receipt hear about it here: the owner that a batch arrived, the
-                person who sent it that it was accepted or refused and why. */}
-            <NotificationBell client={supabase} onOpen={openNotification} />
             <button onClick={signOut} aria-label={navSectionLabel("چوونەدەرەوە", "Sign out", "تسجيل الخروج")} className="w-9 h-9 rounded-full tap flex items-center justify-center"
               style={{ background: "var(--glass)", border: "1px solid var(--line)", color: "var(--txt-2)" }}>
               <LogOut className="w-4 h-4" />
             </button>
-            {/* Which build this screen is. Small enough to ignore, and there in every screenshot,
-                which is the whole point: three of this morning's reports were of behaviour that
-                had already been fixed and nobody could tell. */}
-            <BuildStamp />
           </div>
         </div>
       </header>
