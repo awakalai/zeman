@@ -44,7 +44,7 @@ import {
   LayoutDashboard, Vault, ArrowLeftRight, ListOrdered, Users, Handshake, Boxes,
   TrendingUp, Building2, UserCog, PieChart, History, Plus, Trash2, Pencil,
   CheckCircle2, AlertTriangle, Eye, LogOut, Wallet, ChevronLeft, Coins,
-  Receipt, TrendingDown, ScanLine, Scale, Upload, XCircle, SlidersHorizontal, Search, MoreHorizontal, Zap, ArrowDownLeft, ArrowUpRight, X, Share2, Database, Download, ClipboardCheck, RotateCcw, MessageCircle, Moon, Sun, WifiOff, Wifi, EyeOff, Bell, QrCode, Camera, Fingerprint, ShieldCheck, KeyRound, Inbox, ShieldAlert, FileCheck2, Send
+  Receipt, TrendingDown, ScanLine, Scale, Upload, XCircle, SlidersHorizontal, Search, MoreHorizontal, Zap, ArrowDownLeft, ArrowUpRight, X, Share2, Database, Download, ClipboardCheck, RotateCcw, MessageCircle, Moon, Sun, WifiOff, Wifi, EyeOff, Bell, QrCode, Camera, Fingerprint, ShieldCheck, KeyRound, Inbox, ShieldAlert, FileCheck2, Send, Clock
 } from "lucide-react";
 
 const lazyNamed = (loader, name) => React.lazy(() => loader().then((module) => ({ default: module[name] })));
@@ -671,93 +671,235 @@ const Back = ({ onClick, t }) => (
   </button>
 );
 
-function AdminCenterHub({ lang = "ku", onNavigate }) {
+/* ══════════════════ ئەمڕۆ ══════════════════
+ *
+ * What stood here was a wall of fifteen cards under five headings, and its own subtitle said what
+ * it was: «هەموو ئامرازەکانی ئەدمین لە یەک شوێن؛ هیچ بەشێک لابراو نییە». That is a filing
+ * cabinet's promise. It is arranged by what the code contains rather than by what the owner does,
+ * it is a menu reached from a menu, and it says exactly the same thing on the busiest morning of
+ * the year as it does on a Friday with nothing in it.
+ *
+ * The owner was asked what their day is actually made of and answered: «بە گشتی فیشەکان» —
+ * receipts, and turning receipts into transactions, and setting the day's rates.
+ *
+ * So the screen is that day, in that order, and every number on it is real. Receipts first and
+ * largest. Rates second, because nothing can be valued until they are set. Then whatever is
+ * waiting on a decision — and a line with nothing waiting is not shown at all, because a screen
+ * that prints four zeroes every morning is a screen that teaches you not to read it. The rest of
+ * the tools are still all here, at the bottom, small, where tools belong.
+ */
+
+// Chromium has no month names for Kurdish: `toLocaleDateString("ckb", …)` comes back as
+// "M08 28, Fri", which is worse than no date at all on a screen whose whole job is to say what
+// day it is. Node's ICU does have them, so this cannot be caught anywhere but in a browser.
+// The names are written here, as the rest of the interface's Kurdish is.
+const LONG_DATE = {
+  ku: { days: ["یەکشەممە", "دووشەممە", "سێشەممە", "چوارشەممە", "پێنجشەممە", "هەینی", "شەممە"], months: ["کانوونی دووەم", "شوبات", "ئازار", "نیسان", "ئایار", "حوزەیران", "تەمووز", "ئاب", "ئەیلوول", "تشرینی یەکەم", "تشرینی دووەم", "کانوونی یەکەم"] },
+};
+const longDate = (lang, at = new Date()) => (lang === "en" || lang === "ar"
+  ? at.toLocaleDateString(lang === "en" ? "en-GB" : "ar", { weekday: "long", day: "numeric", month: "long" })
+  : `${LONG_DATE.ku.days[at.getDay()]}، ${at.getDate()}ی ${LONG_DATE.ku.months[at.getMonth()]}`);
+
+const TodayTile = ({ label, value, unit, tone, onClick, sub }) => {
+  const colour = tone === "warn" ? "var(--warn)" : tone === "neg" ? "var(--neg)"
+    : tone === "pos" ? "var(--pos)" : "var(--txt)";
+  return (
+    <button type="button" onClick={onClick} disabled={!onClick}
+      className={`fin-card metric-card p-4 md:p-5 min-w-0 text-start ${onClick ? "tap hov" : ""}`}
+      style={onClick ? undefined : { cursor: "default" }}>
+      <div className="text-[11px] md:text-[12px] font-medium" style={{ color: "var(--txt-3)" }}>{label}</div>
+      <div className="mt-2 text-[23px] md:text-[27px] font-bold tracking-tight" style={{ ...num, color: colour }}>
+        {value}{unit && <span className="text-[13px] font-semibold ms-1" style={{ color: "var(--txt-3)" }}>{unit}</span>}
+      </div>
+      {sub && <div className="mt-1 text-[10px] md:text-[11px]" style={{ color: "var(--txt-3)" }}>{sub}</div>}
+    </button>
+  );
+};
+
+// A line of the day: a sentence, a number, and the way to deal with it. Shown only when the
+// number is not zero.
+const TodayLine = ({ icon: Ic, title, detail, count, unit, tone = "warn", action, onClick }) => (
+  <button type="button" onClick={onClick}
+    className="card tap hov w-full p-4 text-start flex items-center gap-3.5 min-h-[72px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ac)]">
+    <span className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
+      style={{ background: tone === "neg" ? "var(--neg-bg)" : tone === "pos" ? "var(--pos-bg)" : "var(--warn-bg)",
+               color: tone === "neg" ? "var(--neg)" : tone === "pos" ? "var(--pos)" : "var(--warn)" }}>
+      <Ic className="w-[18px] h-[18px]" aria-hidden="true" />
+    </span>
+    <span className="min-w-0 flex-1">
+      <span className="block text-[13.5px] font-bold" style={{ color: "var(--txt)" }}>{title}</span>
+      {detail && <span className="block text-[11px] mt-1" style={{ color: "var(--txt-3)" }}>{detail}</span>}
+    </span>
+    {count != null && (
+      <span className="text-[19px] font-bold shrink-0" style={{ ...num, color: "var(--txt)" }}>
+        {count}{unit && <span className="text-[11px] font-semibold ms-0.5" style={{ color: "var(--txt-3)" }}>{unit}</span>}
+      </span>
+    )}
+    <span className="text-[11px] font-semibold shrink-0 hidden sm:block" style={{ color: "var(--ac)" }}>{action}</span>
+    <ChevronLeft className="w-4 h-4 shrink-0" style={{ color: "var(--txt-3)" }} aria-hidden="true" />
+  </button>
+);
+
+function AdminCenterHub({ lang = "ku", onNavigate, data, calc, cur, batches }) {
   const label = (ku, en, ar) => lang === "en" ? en : lang === "ar" ? ar : ku;
-  // Five groups of three or four, not three groups where the middle one holds eleven.
+  const go = (id) => () => onNavigate(id);
+
+  // ── the receipts, which is most of the day ───────────────────────────────
   //
-  // A list of eleven is not a list, it is a wall — nobody scans it, they hunt through it, and
-  // hunting through the same wall every day is how a tool that has everything comes to feel like
-  // a tool that has nothing. The grouping below is the work itself: what you do today, the
-  // receipts, the money owed and held, the checking, and the protecting.
-  //
-  // Nothing is removed. Every screen that was reachable is still reachable, and the two that
-  // moved out went to the manager's own navigation, where they belong: an owner is the top of
-  // their own business and no part of the installation that sells it to them.
-  const sections = [
-    {
-      title: label("کاری ڕۆژانە", "Daily operations", "العمليات اليومية"),
-      items: [
-        ["action-inbox", label("ئینباکسی کارەکان", "Action Inbox", "صندوق الإجراءات"), label("کار و فیش و بڕیارە چاوەڕوانەکان", "Pending work, receipts, and decisions", "الأعمال والإيصالات والقرارات المعلّقة"), Inbox],
-        ["approvals", label("کۆنترۆڵ و پەسەندکردن", "Controls & Approvals", "التحكم والموافقات"), label("پەسەندکردنی دوو-ئەدمین و کۆنترۆڵی مەترسی", "Two-admin approval and risk controls", "موافقات إدارية مزدوجة وضوابط المخاطر"), ShieldCheck],
-        ["close", label("بەستنی ڕۆژ", "Day Close", "إغلاق اليوم"), label("ژماردن، جیاوازی و تۆماری کۆتایی ڕۆژ", "Counts, differences, and end-of-day records", "الجرد والفروقات وسجل نهاية اليوم"), ClipboardCheck],
-      ],
-    },
-    {
-      title: label("فیشەکان", "Receipts", "الإيصالات"),
-      items: [
-        ["receipt-review", label("پشکنینی وردی فیش", "Receipt Review", "مراجعة الإيصالات"), label("وێنەی ڕەسەن، ژمارەکان و مێژووی ڕاستکردنەوە", "Original image, figures, and correction history", "الصورة الأصلية والأرقام وسجل التصحيح"), ClipboardCheck],
-        ["receipt-forwarding", label("ناردنی فیش", "Receipt Forwarding", "إرسال الإيصالات"), label("ناردنی فیشی پەسەندکراو بۆ خاوەنەکەی و پێکهاتنەوەی گەیاندن", "Send accepted receipts to their owner and reconcile delivery", "إرسال الإيصالات المعتمدة إلى أصحابها ومطابقة التسليم"), Send],
-        ["partner-holdings", label("ئەوەی لای هاوبەش دانراوە", "Placed With Partners", "المودع لدى الشركاء"), label("کۆمەڵە فیشەکان بەپێی ئەو هاوبەشەی پارەکەی لای دانراوە — وەرگر، بەروار، پلاتفۆرم و فی", "Receipt batches by the partner holding the money — receiver, date, platform and fee", "دفعات الإيصالات حسب الشريك الذي يحتفظ بالمال"), Boxes],
-      ],
-    },
-    {
-      title: label("پارە و قەرز", "Money & debt", "الأموال والديون"),
-      items: [
-        ["debt-center", label("قەرز و قاسە", "Debt & Cashbox", "الديون والخزنة"), label("قەرز بە ئاڕاستەی ڕوون، تەمەن و قاسەی کڕیاران", "Debts by explicit direction, aging, and customer cashboxes", "الديون باتجاه واضح والأعمار وخزائن الزبائن"), Scale],
-        ["cashbox", label("قاسەی کڕیاران", "Customer Cashbox", "خزنة الزبائن"), label("دانان، دەرهێنان و تسویەی قەرز لە قاسە", "Deposit, withdraw, and settle debt from the cashbox", "إيداع وسحب وتسوية الديون"), Wallet],
-        ["partner-accounts", label("حسابی هاوبەشان", "Partner Accounts", "حسابات الشركاء"), label("کریدیت، دابەشکردن و waterfall ـی قەرز", "Credit, disbursement, and debt waterfall", "الائتمان والصرف وتسوية الديون"), Handshake],
-        ["office-payments", label("پارەدانی نووسینگە", "Office Payments", "مدفوعات المكتب"), label("ئەرکی پارەدان و بەڵگە", "Payment assignments and evidence", "مهام الدفع والإثباتات"), Building2],
-      ],
-    },
-    {
-      title: label("شیکاری و دڵنیایی", "Analysis & assurance", "التحليل والضمان"),
-      items: [
-        ["insights", label("ڕەوت و شیکاری", "Trends & Insights", "الاتجاهات والتحليلات"), label("ڕەوتی قازانج، مامەڵە و دۆخی دارایی", "Profit, transaction, and financial trends", "اتجاهات الربح والمعاملات والوضع المالي"), TrendingUp],
-        ["integrity", label("ناوەندی یەکپارچەیی", "Integrity Center", "مركز سلامة البيانات"), label("پشکنینی ناکۆکی، دووبارە و پەیوەندیی شکێنراو", "Checks for inconsistencies, duplicates, and broken links", "فحص التعارض والتكرار والروابط المقطوعة"), ShieldAlert],
-        ["audit", label("تۆماری گۆڕانکاری", "Change Log", "سجل التغييرات"), label("مێژووی کردار و گۆڕانکارییەکانی سیستەم", "History of system actions and changes", "سجل إجراءات النظام وتغييراته"), History],
-        ["export-audit", label("هەناردە و وردبینی", "Export & Audit", "التصدير والتدقيق"), label("هەناردەی سنووردار، timeline و checksum", "Bounded exports, timeline, and checksum", "تصدير محدود وخط زمني وبصمة تحقق"), FileCheck2],
-      ],
-    },
-    {
-      title: label("پاراستن", "Protection", "الحماية"),
-      items: [
-        ["backup", label("پاراستنی داتا", "Data Protection", "حماية البيانات"), label("backup، health check و کۆنترۆڵی maintenance", "Backup, health checks, and maintenance controls", "النسخ الاحتياطي وفحوصات الصحة وضوابط الصيانة"), Database],
-      ],
-    },
+  // Read the same way the receipts screen reads them, from the same helper, so the count here and
+  // the list there can never disagree — a summary that says four when the list shows three is
+  // worse than no summary.
+  const stageOf = (b) => b.receipt_stage || (b.tx_id ? "matched" : b.status === "new" ? "needs_review" : "verified");
+  const rows = batches || [];
+  const waiting = rows.filter((b) => ["received", "reading", "needs_review", "verified"].includes(stageOf(b)));
+  const waitingReceipts = waiting.reduce((sum, b) => sum + (Number(b.n) || 0), 0);
+  const needsPerson = rows.filter((b) => stageOf(b) === "needs_review").length;
+  const refused = rows.reduce((sum, b) => sum + (Number(b.rejected_n) || 0), 0);
+  const duplicates = rows.reduce((sum, b) => sum + (Number(b.dup_n) || 0), 0);
+
+  // ── the rates, without which nothing can be valued ───────────────────────
+  const unpriced = unpricedCurrencies(data?.currencies || []);
+
+  // ── what is waiting on a decision ────────────────────────────────────────
+  const approvals = (data?.approvals || []).filter((r) => r.status === "pending").length;
+  const unpaid = (data?.txs || []).filter((t) => !t.deleted && t.status === "pending").length;
+  const officesOwed = (data?.users || [])
+    .filter((u) => u.role === "office" && !u.deleted)
+    .map((u) => ({ u, owed: Object.entries(calc?.acctCash?.[u.id] || {}).filter(([, v]) => v > 0) }))
+    .filter((x) => x.owed.length);
+
+  const attention = waiting.length + unpriced.length + approvals + unpaid + officesOwed.length;
+
+  // Everything the centre used to list. Still all here, still one press away — but small, and
+  // below the work, because a tool you reach for twice a month should not be the size of the
+  // thing you do forty times a day.
+  const tools = [
+    ["action-inbox", label("ئینباکسی کارەکان", "Action inbox", "صندوق الإجراءات"), Inbox],
+    ["receipt-review", label("پشکنینی وردی فیش", "Receipt review", "مراجعة الإيصالات"), ClipboardCheck],
+    ["receipt-forwarding", label("ناردنی فیش", "Receipt forwarding", "إرسال الإيصالات"), Send],
+    ["partner-holdings", label("ئەوەی لای هاوبەش دانراوە", "Placed with partners", "المودع لدى الشركاء"), Boxes],
+    ["debt-center", label("قەرز و قاسە", "Debt & cashbox", "الديون والخزنة"), Scale],
+    ["cashbox", label("قاسەی کڕیاران", "Customer cashbox", "خزنة الزبائن"), Wallet],
+    ["partner-accounts", label("حسابی هاوبەشان", "Partner accounts", "حسابات الشركاء"), Handshake],
+    ["office-payments", label("پارەدانی نووسینگە", "Office payments", "مدفوعات المكتب"), Building2],
+    ["approvals", label("کۆنترۆڵ و پەسەندکردن", "Controls & approvals", "التحكم والموافقات"), ShieldCheck],
+    ["insights", label("ڕەوت و شیکاری", "Trends & insights", "الاتجاهات والتحليلات"), TrendingUp],
+    ["integrity", label("ناوەندی یەکپارچەیی", "Integrity centre", "مركز سلامة البيانات"), ShieldAlert],
+    ["audit", label("تۆماری گۆڕانکاری", "Change log", "سجل التغييرات"), History],
+    ["export-audit", label("هەناردە و وردبینی", "Export & audit", "التصدير والتدقيق"), FileCheck2],
+    ["backup", label("پاراستنی داتا", "Data protection", "حماية البيانات"), Database],
   ];
 
   return (
     <div className="space-y-6">
-      <H sub={label("هەموو ئامرازەکانی ئەدمین لە یەک شوێن؛ هیچ بەشێک لابراو نییە.", "Every admin tool in one place; no feature is removed.", "جميع أدوات الإدارة في مكان واحد؛ لم تتم إزالة أي قسم.")}>
-        {label("ناوەندی بەڕێوەبردن", "Admin Center", "مركز الإدارة")}
-      </H>
-      {sections.map((section) => (
-        <section key={section.title} aria-labelledby={`admin-center-${section.items[0][0]}`}>
-          <h3 id={`admin-center-${section.items[0][0]}`} className="text-[12px] font-semibold mb-3" style={{ color: "var(--txt-2)" }}>
-            {section.title}
-          </h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
-            {section.items.map(([id, title, description, Icon]) => (
-              <button key={id} type="button" onClick={() => onNavigate(id)}
-                className="card tap hov min-h-[118px] p-4 text-start flex items-start gap-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ac)]">
-                <span className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0"
-                  style={{ background: "var(--surf-2)", color: "var(--ac)", border: "1px solid var(--line)" }}>
-                  <Icon className="w-5 h-5" aria-hidden="true" />
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block text-[13px] font-bold" style={{ color: "var(--txt)" }}>{title}</span>
-                  <span className="block text-[11px] leading-relaxed mt-1.5" style={{ color: "var(--txt-3)" }}>{description}</span>
-                </span>
-                <ChevronLeft className="w-4 h-4 shrink-0 mt-1" style={{ color: "var(--txt-3)", transform: lang === "en" ? "rotate(180deg)" : undefined }} aria-hidden="true" />
-              </button>
-            ))}
+      <div className="dashboard-page-head flex items-end justify-between gap-4">
+        <div>
+          <div className="dashboard-eyebrow">{longDate(lang)}</div>
+          <h1 className="dashboard-title">{label("کاری ئەمڕۆ", "Today's work", "عمل اليوم")}</h1>
+          <div className="dashboard-subtitle">
+            {attention
+              ? label("ئەمانە چاوەڕێی تۆن", "These are waiting for you", "هذه بانتظارك")
+              : label("هیچ شتێک چاوەڕێی تۆ نییە ✓", "Nothing is waiting for you ✓", "لا شيء بانتظارك ✓")}
           </div>
+        </div>
+      </div>
+
+      <section aria-labelledby="today-receipts">
+        <h2 id="today-receipts" className="text-[12px] font-semibold mb-3" style={{ color: "var(--txt-2)" }}>
+          {label("فیشەکان", "Receipts", "الإيصالات")}
+        </h2>
+        <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 mb-3">
+          <TodayTile label={label("کۆمەڵەی چاوەڕوان", "Batches waiting", "دفعات بانتظار")}
+            value={waiting.length} tone={waiting.length ? "warn" : undefined} onClick={go("receipts")}
+            sub={waitingReceipts ? `${waitingReceipts} ${label("فیش", "receipts", "إيصال")}` : label("هیچ نییە", "None", "لا شيء")} />
+          <TodayTile label={label("پێویستی بە پشکنینە", "Needs a person", "بحاجة إلى مراجعة")}
+            value={needsPerson} tone={needsPerson ? "warn" : undefined} onClick={go("receipt-review")}
+            sub={label("پشکنینی وردی فیش", "Receipt review", "مراجعة الإيصالات")} />
+          <TodayTile label={label("ڕەتکراو", "Rejected", "مرفوض")}
+            value={refused} tone={refused ? "neg" : undefined} onClick={go("receipt-review")}
+            sub={label("بە هۆکارەوە تۆمار کراون", "Recorded with a reason", "مسجّلة مع السبب")} />
+          <TodayTile label={label("دووبارە", "Duplicates", "مكرر")}
+            value={duplicates} onClick={go("receipt-review")}
+            sub={label("سیستەمەکە گرتوونی", "Caught by the system", "أوقفها النظام")} />
+        </div>
+        {waiting.length > 0 && (
+          <TodayLine icon={ScanLine} tone="warn"
+            title={label("کۆمەڵەکان بکەرەوە و مامەڵەیان لێ دروست بکە", "Open the batches and turn them into transactions", "افتح الدفعات وحوّلها إلى معاملات")}
+            detail={label("ئەمە زۆرترین کاری ڕۆژە", "This is most of the day", "هذا معظم عمل اليوم")}
+            count={waiting.length} action={label("بکەرەوە", "Open", "افتح")} onClick={go("receipts")} />
+        )}
+      </section>
+
+      <section aria-labelledby="today-rates">
+        <h2 id="today-rates" className="text-[12px] font-semibold mb-3" style={{ color: "var(--txt-2)" }}>
+          {label("نرخی ئەمڕۆ", "Today's rates", "أسعار اليوم")}
+        </h2>
+        {unpriced.length ? (
+          <TodayLine icon={AlertTriangle} tone="neg"
+            title={label("نرخی هەموو دراوەکان دانەنراوە", "Rates are not set for every currency", "لم تُحدَّد أسعار جميع العملات")}
+            detail={`${unpriced.join("، ")} — ${label("بەبێ ئەمە هیچ بەهایەک ناژمێردرێت", "nothing can be valued without them", "لا يمكن تقييم شيء بدونها")}`}
+            count={unpriced.length} action={label("دایبنێ", "Set", "حدّد")} onClick={go("rates")} />
+        ) : (
+          <TodayLine icon={CheckCircle2} tone="pos"
+            title={label("نرخی هەموو دراوەکان دانراوە ✓", "Every currency has today's rate ✓", "لكل عملة سعر اليوم ✓")}
+            detail={label("گۆڕینیان لە شاشەی نرخەکاندا", "Change them on the rates screen", "غيّرها من شاشة الأسعار")}
+            action={label("بینین", "View", "عرض")} onClick={go("rates")} />
+        )}
+      </section>
+
+      {(approvals > 0 || unpaid > 0 || officesOwed.length > 0) && (
+        <section aria-labelledby="today-decisions" className="space-y-2.5">
+          <h2 id="today-decisions" className="text-[12px] font-semibold mb-3" style={{ color: "var(--txt-2)" }}>
+            {label("چاوەڕێی بڕیاری تۆن", "Waiting on your decision", "بانتظار قرارك")}
+          </h2>
+          {approvals > 0 && (
+            <TodayLine icon={ShieldCheck} tone="warn"
+              title={label("پەسەندکردنی چاوەڕوان", "Approvals waiting", "موافقات معلّقة")}
+              detail={label("کردارێک پێویستی بە پەسەندکردنی دووەم هەیە", "An action needs a second approval", "إجراء يحتاج موافقة ثانية")}
+              count={approvals} action={label("بڕیار بدە", "Decide", "قرّر")} onClick={go("approvals")} />
+          )}
+          {unpaid > 0 && (
+            <TodayLine icon={Clock} tone="warn"
+              title={label("مامەڵەی پارەنەدراو", "Unpaid transactions", "معاملات غير مدفوعة")}
+              detail={label("کڕیارەکە هێشتا پارەکەی وەرنەگرتووە", "The customer has not been paid yet", "لم يستلم الزبون المبلغ بعد")}
+              count={unpaid} action={label("بینین", "View", "عرض")} onClick={go("txs")} />
+          )}
+          {officesOwed.map(({ u, owed }) => (
+            <TodayLine key={u.id} icon={Building2} tone="warn"
+              title={`${label("قەرزی ZEMAN بۆ", "ZEMAN owes", "زيمان مدين لـ")} ${u.name}`}
+              detail={owed.map(([cid, v]) => `${fmt(v, cur(cid).dec ?? 0)} ${cur(cid).code}`).join(" · ")}
+              action={label("حساب بدەوە", "Settle", "سوِّ الحساب")} onClick={go("office-payments")} />
+          ))}
         </section>
-      ))}
+      )}
+
+      <section aria-labelledby="today-day" className="space-y-2.5">
+        <h2 id="today-day" className="text-[12px] font-semibold mb-3" style={{ color: "var(--txt-2)" }}>
+          {label("ڕۆژەکە", "The day", "اليوم")}
+        </h2>
+        <TodayLine icon={ClipboardCheck} tone="warn"
+          title={label("بەستنی ڕۆژ", "Close the day", "إقفال اليوم")}
+          detail={label("پارەی ڕاستەقینە بژمێرە و بەراوردی بکە لەگەڵ حیسابی سیستەم", "Count the cash and compare it with the system", "عُدّ النقد وقارنه بالنظام")}
+          action={label("بیبەستەوە", "Close", "أقفل")} onClick={go("close")} />
+      </section>
+
+      <section aria-labelledby="today-tools">
+        <h2 id="today-tools" className="text-[12px] font-semibold mb-3" style={{ color: "var(--txt-2)" }}>
+          {label("ئامرازەکان", "Tools", "الأدوات")}
+        </h2>
+        <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-2">
+          {tools.map(([id, title, Icon]) => (
+            <button key={id} type="button" onClick={go(id)}
+              className="card tap hov px-3 py-3 text-start flex items-center gap-2.5 min-h-[48px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ac)]">
+              <Icon className="w-4 h-4 shrink-0" style={{ color: "var(--txt-3)" }} aria-hidden="true" />
+              <span className="text-[12px] font-semibold truncate" style={{ color: "var(--txt-2)" }}>{title}</span>
+            </button>
+          ))}
+        </div>
+      </section>
     </div>
   );
 }
-
 const Pill = ({ tone = "slate", children }) => {
   const t = {
     slate: { bg: "var(--glass-2)", fg: "var(--txt-2)" },
@@ -2807,9 +2949,9 @@ export default function App() {
       ],
     },
     {
-      label: navSectionLabel("سیستەم", "System", "النظام"),
+      label: navSectionLabel("کارەکان", "Work", "الأعمال"),
       items: [
-        ["admin-center", navSectionLabel("ناوەندی بەڕێوەبردن", "Admin Center", "مركز الإدارة"), SlidersHorizontal],
+        ["admin-center", navSectionLabel("کاری ئەمڕۆ", "Today's work", "عمل اليوم"), Inbox],
       ],
     },
   ];
@@ -3062,7 +3204,8 @@ export default function App() {
             {page === "report" && <Report {...shared} />}
             {/* The admin centre is one business's world. A manager belongs to no business, so
                 for them it is not a page they should not open — it is a page with no meaning. */}
-            {page === "admin-center" && !isSystemManager && <AdminCenterHub lang={lang} onNavigate={setPage} />}
+            {page === "admin-center" && !isSystemManager && <AdminCenterHub lang={lang} onNavigate={setPage}
+              data={data} calc={calc} cur={cur} batches={batches} />}
 
             {/* The way back, and the door the manager fell through. Integrity, the change log
                 and data protection are on the manager's own navigation and are also filed under
