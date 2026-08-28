@@ -10,6 +10,7 @@ import { setActiveLanguage } from "./services/activeLanguage";
 import { currencyDecimals as currencyDecimalsOf, formatMoney, formatNumber, roundToCurrency } from "./services/money";
 import { errorText, errorTextOr } from "./services/userFacingError";
 import { flashIsGood } from "./services/flashTone.js";
+import { reportFault } from "./services/faultReport.js";
 import { MyReceipts } from "./components/portal/MyReceipts";
 import { intakeReceipt, intakeStatusText, loadMyReceipts, noteReceiptReadFailure, receiptReadFailureText, replaceReceipt, requestStoredReceiptOcr } from "./services/receiptIntake";
 import { DICT } from "./i18n/dictionary";
@@ -2172,6 +2173,9 @@ export default function App() {
       // The server answered. The command did not run, so the key is spent on nothing.
       if (intent) keyBook.current.release(intent);
       flash(errorTextOr(err, "هەڵەیەک ڕوویدا — دووبارە هەوڵ بدەوە"), "error");
+      // A refusal the system wrote is normal and is filtered out inside reportFault. What
+      // reaches the table is the rest: the ones nobody wrote for a reader.
+      reportFault("command", err, page);
       return false;
     }
     finally { lockRef.current = false; setBusy(false); intentRef.current = null; }
