@@ -1,15 +1,10 @@
--- Is the live database ready for the three performance migrations, and did they land?
+-- Did the last three migrations land, and is the live database now the one the gates describe?
 --
--- 202608280019 adds nine indexes. 202608280020 rewrites 62 tenant policies. 202608280021
--- rewrites the eight read policies on the tables the app reads whole.
+--   202608280022  faults reach somebody who can fix them
+--   202608280023  one read policy set on txs, matching the migration files
+--   202608280024  one press: name the holder where the purchase is made
 --
--- 202608280020 does its work by reading pg_policies, and it REFUSES any policy that is not
--- exactly the shape it was written for rather than reshaping it. That is the right behaviour —
--- but it means the migration can stop with an error on a database whose policies do not match
--- the migration files. This one was migrated by hand for a fortnight before there was a
--- workflow, so that is worth knowing BEFORE running migrate.yml rather than from its log.
---
--- Run this, read section 3, then run migrate.yml with confirm: APPLY.
+-- Every question below has a right answer written next to it. Anything else is worth stopping for.
 
 \pset format aligned
 \pset border 2
@@ -23,103 +18,101 @@
 select v as "version",
        case when exists (select 1 from public.schema_migrations m where m.version = v)
             then 'جێبەجێ کراوە ✓' else '— چاوەڕوانە' end as "state",
-       case v when '202608280019' then 'ئیندێکسەکانی کردنەوەی بەرنامە'
-              when '202608280020' then 'پرسیاری تینانت یەک جار'
+       case v when '202608280019' then 'ئیندێکسەکان'
+              when '202608280020' then 'تینانت یەک جار'
               when '202608280021' then 'پۆلیسییەکانی خوێندنەوە'
+              when '202608280022' then 'تۆمارکردنی شکست'
+              when '202608280023' then 'یەک کۆمەڵە پۆلیسی لەسەر txs'
+              when '202608280024' then 'یەک لێدان — هاوبەش لە شاشەی کڕین'
        end as "what"
-  from (values ('202608280019'),('202608280020'),('202608280021')) t(v);
+  from (values ('202608280019'),('202608280020'),('202608280021'),
+               ('202608280022'),('202608280023'),('202608280024')) t(v);
 
 \echo ''
-\echo '════════ 2. ئایا ئیندێکسەکان لەوێن؟ ════════'
+\echo '════════ 2. یەک لێدان — ئایا فەرمانەکە هاوبەشی فۆرمەکە دەناسێتەوە؟ ════════'
+\echo ''
+\echo 'هەردووکیان دەبێت «هەیە ✓» بن. ئەگەر custody بانگ نەکرێت، بەڵگەکە هەمان بەڵگە نییە.'
 \echo ''
 
-select n as "index",
-       case when exists (select 1 from pg_indexes i
-                          where i.schemaname = 'public' and i.indexname = n)
-            then 'هەیە ✓' else 'نییە — بەرنامەکە هێشتا هەموو خشتەکە ڕیز دەکات' end as "state"
-  from (values
-    ('ledger_open_order_idx'), ('txs_open_order_idx'),
-    ('account_ledger_open_order_idx'), ('rate_history_open_order_idx'),
-    ('app_users_open_order_idx'), ('audit_recent_idx'),
-    ('approval_requests_recent_idx'), ('approval_events_recent_idx'),
-    ('tx_versions_recent_idx')) t(n);
+select 'هاوبەشی فۆرمەکە وەردەگیرێت' as "what",
+       case when pg_get_functiondef(p.oid) like '%v_named:=nullif(btrim(p_tx->>''partner_id'')%'
+            then 'هەیە ✓' else 'نییە — هەڵبژاردنەکە هێشتا دەسڕدرێتەوە' end as "state"
+  from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+ where n.nspname = 'public' and p.proname = 'sarraf_convert_receipt_batch_to_transaction'
+union all
+select 'custody بە فەرمانی خۆی تۆمار دەکرێت',
+       case when pg_get_functiondef(p.oid) like '%sarraf_assign_receipt_custody%'
+            then 'هەیە ✓' else 'نییە — بەسەر فەرمانی custodyدا تێدەپەڕێت' end
+  from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+ where n.nspname = 'public' and p.proname = 'sarraf_convert_receipt_batch_to_transaction';
 
 \echo ''
-\echo '════════ 3. پێش جێبەجێکردن — ئایا پۆلیسییەکان ئەو شێوەیەن؟ ════════'
-\echo ''
-\echo 'هەر ڕیزێک لێرەدا کە «REFUSES» بێت، 202608280020 لەسەری دەوەستێت.'
-\echo 'ئەگەر هیچ ڕیزێک نەبوو، مایگرەیشنەکە بەبێ کێشە جێبەجێ دەبێت.'
+\echo '════════ 3. پۆلیسییەکانی خوێندنەوەی txs — دەبێت سێ بن ════════'
 \echo ''
 
-select tablename as "table", policyname as "policy",
-       permissive as "kind", cmd, roles::text as "roles",
-       coalesce(qual, '⟨none⟩') as "using"
-  from pg_policies
- where schemaname = 'public'
-   and (coalesce(qual, '') like '%sarraf_tenant_visible%'
-     or coalesce(with_check, '') like '%sarraf_tenant_visible%')
-   and not (
-        regexp_replace(coalesce(qual, ''), '(public\.)|\s', '', 'g')
-          in ('sarraf_tenant_visible(tenant_id)', '(sarraf_tenant_visible(tenant_id))')
-    and regexp_replace(coalesce(with_check, ''), '(public\.)|\s', '', 'g')
-          in ('sarraf_tenant_visible(tenant_id)', '(sarraf_tenant_visible(tenant_id))')
-    and cmd = 'ALL'
-    and roles::text = '{authenticated}')
- order by tablename, policyname;
-
-\echo ''
-\echo '  ── و ئەوانەی ئامادەن بۆ نووسینەوە ──'
-\echo ''
-
-select count(*) filter (where coalesce(qual,'') like '%sarraf_tenant_visible%')
-         as "هێشتا بۆ هەر ڕیزێک دەپرسن",
-       count(*) filter (where coalesce(qual,'') like '%SELECT sarraf_tenant%')
-         as "یەک جار دەپرسن ✓"
-  from pg_policies
- where schemaname = 'public'
-   and (coalesce(qual,'') like '%sarraf_tenant%' or coalesce(qual,'') like '%sarraf_sees_all%');
-
-\echo ''
-\echo '════════ 4. پۆلیسییەکانی خوێندنەوە لەسەر ئەو خشتانەی بە تەواوی دەخوێندرێنەوە ════════'
-\echo ''
-
-select tablename as "table", policyname as "policy",
+select policyname as "policy",
        case when coalesce(qual,'') ~ '(^|[^.[:alnum:]_])(is_admin|my_app_id|my_role)\(\)'
              and coalesce(qual,'') !~ 'SELECT (is_admin|my_app_id|my_role)'
-            then 'بۆ هەر ڕیزێک دەپرسێت'
-            else 'یەک جار ✓' end as "asked",
-       coalesce(qual, '⟨none⟩') as "using"
+            then 'بۆ هەر ڕیزێک' else 'یەک جار ✓' end as "asked"
   from pg_policies
- where schemaname = 'public' and permissive = 'PERMISSIVE'
-   and tablename in ('ledger','txs','account_ledger','rate_history','app_users','audit')
-   and coalesce(qual, '') <> 'true'
- order by tablename, policyname;
+ where schemaname = 'public' and tablename = 'txs' and permissive = 'PERMISSIVE'
+   and coalesce(qual,'') <> 'true'
+ order by policyname;
 
 \echo ''
-\echo '════════ 5. ئەم بزنسە چەندە گەورەیە؟ ════════'
-\echo ''
-\echo 'ئەمە دەڵێت چەند خێرا CREATE INDEX تەواو دەبێت، و چەند قازانج دەکرێت.'
+\echo '  ── txs_authorized_read دەبێت نەمابێت ──'
 \echo ''
 
-select c.relname as "table",
-       to_char(c.reltuples::bigint, 'FM999,999,999') as "rows (estimated)",
-       pg_size_pretty(pg_total_relation_size(c.oid)) as "size",
-       to_char(ceil(greatest(c.reltuples, 0) / 1000.0), 'FM999,999') as "pages the app fetches"
-  from pg_class c
-  join pg_namespace n on n.oid = c.relnamespace
- where n.nspname = 'public'
-   and c.relname in ('ledger','txs','account_ledger','rate_history','app_users',
-                     'audit','approval_events','tx_versions','receipts','receipt_documents')
-   and c.relkind = 'r'
- order by c.reltuples desc;
+select case when exists (select 1 from pg_policies
+                          where schemaname='public' and tablename='txs'
+                            and policyname='txs_authorized_read')
+            then 'هێشتا لەوێیە — 202608280023 جێبەجێ نەکراوە'
+            else 'لابراوە ✓ — ژیان لەگەڵ فایلەکاندا یەک دەگرێتەوە' end as "state";
 
 \echo ''
-\echo '════════ 6. و ئایا فیشەکان هێشتا ناویان هەیە ════════'
+\echo '════════ 4. تۆمارکردنی شکست — ئایا خشتەکە پارێزراوە؟ ════════'
 \echo ''
 
-select 'receipt_documents' as "table", count(*) as "rows",
-       count(tracking_code) as "named", count(*) - count(tracking_code) as "unnamed"
-  from public.receipt_documents
+select 'خشتەکە هەیە' as "what",
+       case when to_regclass('public.zeman_faults') is null then 'نییە' else 'هەیە ✓' end as "state"
 union all
-select 'receipts', count(*), count(tracking_code), count(*) - count(tracking_code)
-  from public.receipts;
+select 'RLS زۆرکراوە (force)',
+       coalesce((select case when relforcerowsecurity then 'بەڵێ ✓' else 'نەخێر — فەنکشنێکی دیفاینەر هەموو بزنسێک دەبینێت' end
+                   from pg_class where oid = to_regclass('public.zeman_faults')), '⟨خشتەکە نییە⟩')
+union all
+select 'ئیندێکسی تایبەت (لووپی تێکشکان)',
+       case when exists (select 1 from pg_indexes where schemaname='public'
+                          and indexname='zeman_faults_one_per_day')
+            then 'هەیە ✓' else 'نییە — تێکشکان دەتوانێت خشتەکە پڕ بکات' end
+union all
+select 'پۆلیسی سنووردارکەری تینانت',
+       case when exists (select 1 from pg_policies where schemaname='public'
+                          and tablename='zeman_faults' and permissive='RESTRICTIVE')
+            then 'هەیە ✓' else 'نییە' end;
+
+\echo ''
+\echo '  ── و ئایا شتێک تۆمار کراوە؟ ──'
+\echo ''
+
+select coalesce(kind,'⟨هیچ⟩') as "kind", coalesce(code,'') as "code",
+       coalesce(screen,'') as "screen", sum(seen) as "seen", max(last_at) as "last"
+  from public.zeman_faults
+ group by kind, code, screen
+ order by max(last_at) desc
+ limit 10;
+
+\echo ''
+\echo '════════ 5. فیشەکان و مامەڵەکان ════════'
+\echo ''
+
+select 'فیشی گەیشتوو' as "what", count(*)::text as "n" from public.receipt_intake_items
+union all
+select 'لەوانەی گۆڕدراون بۆ مامەڵە',
+       count(*) filter (where transaction_id is not null)::text from public.receipt_intake_items
+union all
+select 'فیش کە لای هاوبەشێک دانراون',
+       count(*) filter (where partner_id is not null)::text from public.receipt_intake_items
+union all
+select 'ڕیزی custody', count(*)::text from public.receipt_custody
+union all
+select 'مامەڵە', count(*)::text from public.txs where not deleted;
