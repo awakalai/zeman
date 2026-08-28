@@ -1436,26 +1436,17 @@ try {
     });
   });
 
-  scenario(22, "the custody the receipts carry is the custody the trade gets", () => {
-    // Reported from a real screen. The owner opened a batch of a customer's receipts in yuan,
-    // pressed «درووستکردنی کڕین لەم فیشانەوە», chose «Bryar» under «لە کوێ دای دەنێیت؟», and was
-    // refused with:
+  scenario(22, "one press places the money, accepts the receipts, and records who holds it", () => {
+    // Reported from a real screen, twice. The owner opened a batch of a customer's receipts in
+    // yuan, pressed «درووستکردنی کڕین لەم فیشانەوە», chose a partner in the form in front of
+    // them, and was told they had named nobody: the conversion reads custody from the RECEIPTS
+    // and overwrote their choice before any rule saw it.
     //
-    //   دراوی دەرەکی پێویستی بە هاوبەشێکی دیاریکراوە کە پارەکەی لایە (ZE-23514)
+    // The first fix locked the box and sent them to another screen to set custody first. Their
+    // answer — «بەڵام با هێندە شپرز نەبێت» — is the right one. Two screens and three commands
+    // to do one thing was the defect; the rule was never the problem.
     //
-    // — told they had named nobody, immediately after naming somebody.
-    //
-    // The reason is in the conversion itself:
-    //
-    //   v_tx := p_tx || jsonb_build_object(…, 'partner_id', v_partner, …)
-    //
-    // `v_partner` is read from the RECEIPTS. Whatever the form sent is overwritten before any
-    // rule sees it, and a customer-seller's receipts carry no partner at all.
-    //
-    // That is the system's design and it is a sound one — custody is evidence about specific
-    // receipts, recorded by its own command with its own reason. What was wrong was the screen
-    // offering a choice it would throw away. So this flow pins the behaviour the screen now has
-    // to tell the truth about.
+    // So this flow is the press itself, and what must be true after it.
     const asAdmin = (sql) => {
       const out = psql(`
         begin;
@@ -1466,7 +1457,7 @@ try {
       return String(out).split("\n").map((l) => l.trim()).filter(Boolean).pop() || "";
     };
 
-    step("a batch of a customer's receipts, in a currency the house does not hold", () => {
+    step("a batch of a customer's receipts, placed with nobody, in a currency the house does not hold", () => {
       be("admin");
       psql(`delete from public.receipt_intake_items where batch_id='f22'`);
       psql(`delete from public.receipt_batches where id='f22'`);
@@ -1489,19 +1480,72 @@ try {
         "these receipts are placed with nobody, exactly as a customer's are");
     });
 
-    step("naming a partner in the transaction alone does not place the money anywhere", () => {
+    step("the owner names the holder on the purchase screen, and presses once", () => {
       const tx = JSON.stringify({
         id: "f22-tx", code: null, type: "buy", direct: false, own_money: false,
         cp_id: "cus", cp_name: null, cur_id: "cny", amount: 2425,
         rate: 0.1449278351, against_id: "usd", total: 351.45,
-        partner_id: "par",                    // ← what the owner chose in the form
+        partner_id: "par",                    // ← chosen in «لە کوێ دای دەنێیت؟»
         status: "completed", date: null, edited: false, deleted: false,
       }).replace(/'/g, "''");
-      if (!refused(`select public.sarraf_convert_receipt_batch_to_transaction(
+      const out = asAdmin(`select public.sarraf_convert_receipt_batch_to_transaction(
         'f22','["f22-item"]'::jsonb,'${tx}'::jsonb,
-        'گۆڕینی فیشە پەسەندکراوەکان','receipt-convert:f22:0123456789abcdef')`)) {
-        throw new Error("the conversion took a partner from the form — the screen may offer the choice again");
-      }
+        'گۆڕینی فیشە پەسەندکراوەکان بۆ کڕین','receipt-convert:f22:0123456789abcdef')::text`);
+      if (!out.includes("f22-tx")) throw new Error(`the conversion refused the press: ${out.slice(0, 240)}`);
+    });
+
+    // Everything the owner asked for, from that one press.
+    step("the money is placed with the partner they named", () => {
+      eq(psql("select coalesce(partner_id,'⟨none⟩') from public.txs where id='f22-tx'").trim(),
+        "par", "the trade's custody");
+      eq(psql("select coalesce(partner_id,'⟨none⟩') from public.receipt_batches where id='f22'").trim(),
+        "par", "the batch's custody");
+    });
+
+    step("the receipts go to them too", () => {
+      eq(psql(`select coalesce(partner_id,'⟨none⟩') from public.receipt_intake_items
+                where id='f22-item'`).trim(), "par", "the receipt's holder");
+      eq(psql("select count(*)::text from public.receipt_custody where batch_id='f22'").trim(),
+        "1", "custody rows written");
+    });
+
+    step("and it is recorded as custody, not merely used", () => {
+      // The conversion calls sarraf_assign_receipt_custody rather than writing the rows itself,
+      // so the evidence is the batch screen's evidence. If it ever stops calling it, this step
+      // is what notices.
+      eq(psql(`select count(*)::text from public.receipt_custody_events where batch_id='f22'`).trim(),
+        "1", "custody events written");
+      eq(psql(`select coalesce(max(to_partner_id),'⟨none⟩') from public.receipt_custody_events
+                where batch_id='f22'`).trim(), "par", "the event names the holder");
+    });
+
+    step("and the receipts are spent on that trade, not left to be converted twice", () => {
+      eq(psql(`select coalesce(transaction_id,'⟨none⟩') from public.receipt_intake_items
+                where id='f22-item'`).trim(), "f22-tx", "the receipt's transaction");
+    });
+
+    step("but receipts already placed with somebody keep that partner", () => {
+      // Custody is evidence about particular receipts. A purchase form may state it where none
+      // exists; it may not overrule one that does.
+      psql(`update public.receipt_intake_items set partner_id='par', transaction_id=null,
+              converted_at=null where id='f22-item'`);
+      psql(`update public.receipt_batches set partner_id='par', status='new',
+              receipt_stage='verified' where id='f22'`);
+      psql(`delete from public.receipt_batch_transactions where batch_id='f22'`);
+      psql(`delete from public.receipt_operation_commands where batch_id='f22'`);
+      psql(`delete from public.txs where id='f22-tx2'`);
+      const tx = JSON.stringify({
+        id: "f22-tx2", code: null, type: "buy", direct: false, own_money: false,
+        cp_id: "cus", cp_name: null, cur_id: "cny", amount: 2425,
+        rate: 0.1449278351, against_id: "usd", total: 351.45,
+        partner_id: "inv",                    // ← somebody else entirely
+        status: "completed", date: null, edited: false, deleted: false,
+      }).replace(/'/g, "''");
+      asAdmin(`select public.sarraf_convert_receipt_batch_to_transaction(
+        'f22','["f22-item"]'::jsonb,'${tx}'::jsonb,
+        'هەوڵی گۆڕینی هاوبەشەکە','receipt-convert:f22:fedcba98765432100')::text`);
+      eq(psql("select coalesce(partner_id,'⟨none⟩') from public.txs where id='f22-tx2'").trim(),
+        "par", "the receipts' own holder still decides");
     });
   });
 
