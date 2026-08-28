@@ -2459,17 +2459,26 @@ export default function App() {
           costComplete,
           avgRate: costComplete && qty > 0 ? costUsd / qty : null,
           avgUsdRate: costComplete && qty > 0 ? costUsd / qty : null,
+          // This came from the server's own snapshot, so it is the same number the command will
+          // check the sale against. Nothing below may stop a sale on any other basis.
+          fromServer: true,
         };
       }
     }
 
-    return computeInventoryPosition({
-      txs: data.txs,
-      curId,
-      excludeTxId,
-      asOfDate,
-      usdCostOf: (t) => usdValueAt(Number(t.total), t.againstId, "spend", t.date),
-    });
+    // Worked out here, from the transactions this browser happens to have loaded. Good enough to
+    // show, never good enough to refuse on — a figure that disagrees with the server's would stop
+    // an owner making a sale that was perfectly fine.
+    return {
+      ...computeInventoryPosition({
+        txs: data.txs,
+        curId,
+        excludeTxId,
+        asOfDate,
+        usdCostOf: (t) => usdValueAt(Number(t.total), t.againstId, "spend", t.date),
+      }),
+      fromServer: false,
+    };
   };
 
   const avgRate = (curId, againstId, excludeTxId = null, asOfDate = null) =>
@@ -3493,7 +3502,7 @@ export default function App() {
 
   const shared = { data, calc, cur, usr, mySafe, profitAll, profitIn, ownProfitIn, ownProfitAll,
     investorsProfitIn, invShare, invUnpaid, autoRate, avgRate, inventoryPosition, usdValueAt, usdToCurrencyAt,
-    toUsd, sumUsd, ratesReady, owners, notify, waNotify, isOwner,
+    toUsd, sumUsd, ratesReady, owners, notify, waNotify, isOwner, flash,
     readModel: data?.readModel || null, loadTxHistoryPage, loadRangeReport, loadInventorySnapshot };
 
   return (
@@ -5110,7 +5119,7 @@ function Safes({ data, calc, cur, usr, mySafe, invUnpaid, owners, ratesReady, ad
 }
 
 /* ══════════════════ فۆرمی مامەڵە ══════════════════ */
-function TxForm({ data, cur, calc, usr, avgRate, inventoryPosition, usdValueAt, usdToCurrencyAt, autoRate, onSave, editing, onCancel, lockCp, batch, onClearBatch, busy }) {
+function TxForm({ data, cur, calc, usr, avgRate, inventoryPosition, usdValueAt, usdToCurrencyAt, autoRate, onSave, editing, onCancel, lockCp, batch, onClearBatch, busy, flash }) {
   const e = editing;
   const [sending, setSending] = useState(false);
   const bCur = batch ? data.currencies.find((c) => c.code === batch.currency)?.id : null;
@@ -5221,6 +5230,24 @@ function TxForm({ data, cur, calc, usr, avgRate, inventoryPosition, usdValueAt, 
   // Mirrored here exactly — not loosened, not re-decided. The rule is still the database's; this
   // only asks the question before the answer can be wrong.
   const needsCustodian = !f.direct && !f.partnerId && !!cur(f.curId).external;
+
+  // Two more the database refuses, for the same reason and at the same late moment:
+  //
+  //   raise 23514 'sale would create negative inventory'   -- v_amount > v_qty
+  //   raise 23514 'inventory cost basis is incomplete'     -- v_avg is null
+  //
+  // `enoughCostBasis` above has computed exactly this all along, and used it only to decide
+  // whether to show an estimated profit. Selling more than the office holds went all the way to
+  // the server and came back refused.
+  //
+  // It stops the sale ONLY when the position came from the server's own snapshot — the same
+  // number the command will check against. When this browser worked the figure out for itself it
+  // says so and lets the sale go, because a client-side disagreement that blocks a legitimate
+  // sale is a worse failure than a late refusal.
+  const shortOfStock = f.type === "sell" && pos && amtR > 0 && amtR > pos.qty + 1e-9;
+  const costBasisMissing = f.type === "sell" && pos && pos.costComplete === false;
+  const inventoryRefuses = (shortOfStock || costBasisMissing) && pos?.fromServer === true;
+  const inventoryDoubts = (shortOfStock || costBasisMissing) && pos?.fromServer !== true;
   const feeRate = f.partnerId ? (usr(f.partnerId).rate || 0) : 0;
   const rateQuoteId = oppositePairId(f.curId, f.againstId, f.rateBaseId);
 
@@ -5285,7 +5312,18 @@ function TxForm({ data, cur, calc, usr, avgRate, inventoryPosition, usdValueAt, 
 
   const submit = async () => {
     if (sending || busy) return;
-    if (!f.curId || !f.againstId || f.curId === f.againstId) return;
+    // This used to `return` here and say nothing at all. The owner pressed «تۆمارکردنی کڕین»,
+    // the screen did not move, no message appeared, and there was nothing on it to tell them
+    // which of the two currency boxes was the problem. A refusal nobody can see is worse than
+    // one they can argue with.
+    if (!f.curId || !f.againstId) {
+      flash?.(tr("هەردوو دراوەکە هەڵبژێرە"), "error");
+      return;
+    }
+    if (f.curId === f.againstId) {
+      flash?.(tr("دراوی مامەڵە و دراوی بەرامبەر ناکرێت هەمان بن"), "error");
+      return;
+    }
     setSending(true);
     try {
       const ok = await onSave({ ...f, rate, batchId: batch?.id, receiptIds: batch?.receipt_ids || [] }, e);
@@ -5741,9 +5779,22 @@ function TxForm({ data, cur, calc, usr, avgRate, inventoryPosition, usdValueAt, 
         </div>
       )}
 
+      {(inventoryRefuses || inventoryDoubts) && (
+        <div className="flex items-start gap-2 px-1 text-[12px] font-semibold"
+             style={{ color: inventoryRefuses ? "var(--neg)" : "var(--warn)" }}>
+          <AlertTriangle className="w-4 h-4 shrink-0 mt-px" />
+          <span>
+            {costBasisMissing
+              ? tr("تێچووی ئەم دراوە تەواو نییە — نرخی ڕۆژی ئەو ڕۆژانە دابنێ کە کڕدراون")
+              : <>{tr("زیاتر لەوەی هەتە دەفرۆشیت")} — {fmtMoney(data, pos?.qty || 0, f.curId)} {cur(f.curId).code} {tr("هەیە")}</>}
+            {inventoryDoubts && ` · ${tr("ئەم ژمارەیە لێرە دەرهێنراوە؛ سێرڤەر بڕیاری کۆتایی دەدات")}`}
+          </span>
+        </div>
+      )}
+
       <div className="flex gap-2 sticky bottom-24 md:bottom-4">
         <Btn kind={f.direct ? "gold" : f.type === "buy" ? "primary" : "danger"}
-          onClick={submit} disabled={sending || busy || needsCustodian} className="flex-1 !py-4 !text-[15px]">
+          onClick={submit} disabled={sending || busy || needsCustodian || inventoryRefuses} className="flex-1 !py-4 !text-[15px]">
           {sending || busy ? "..." : e ? tr("پاشەکەوتی ئیدیت")
             : f.direct ? tr("تۆمارکردنی مامەڵەی ڕاستەوخۆ")
             : f.type === "buy" ? tr("تۆمارکردنی کڕین") : tr("تۆمارکردنی فرۆشتن")}
