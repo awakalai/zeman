@@ -632,7 +632,7 @@ const StatePanel = ({ type = "empty", title, detail, compact = false, onRetry })
         <Ic className={`w-4 h-4 ${isLoading ? "animate-spin" : ""}`} />
       </span>
       <div className="min-w-0">
-        <div className="state-panel-title">{title || (isLoading ? tr("بارکردن...") : isError ? "هەڵەیەک ڕوویدا" : tr("هیچ داتایەک نییە"))}</div>
+        <div className="state-panel-title">{title || (isLoading ? tr("بارکردن...") : isError ? tr("هەڵەیەک ڕوویدا") : tr("هیچ داتایەک نییە"))}</div>
         {detail && <div className="state-panel-detail">{detail}</div>}
         {isError && onRetry && (
           <button onClick={onRetry} className="state-panel-retry tap">
@@ -2860,7 +2860,7 @@ export default function App() {
                 {profile.name}
               </div>
               <div className="text-[11.5px] truncate" style={{ color: "var(--txt-3)" }}>
-                {va ? `${tr("بینین وەک")} · ${va.name}` : (isOwner ? "خاوەنی سیستەم" : tr(ROLE_KU[profile.role]))}
+                {va ? `${tr("بینین وەک")} · ${va.name}` : (isOwner ? tr("خاوەنی سیستەم") : tr(ROLE_KU[profile.role]))}
               </div>
             </div>
             {!portalUser && <div className={`zeman-system-status ${systemNeedsAttention ? "is-attention" : "is-live"}`} role="status" aria-label={systemStatusLabel} title={systemStatusLabel}>
@@ -3794,7 +3794,7 @@ function CurrencyBreakdown({ curId, data, calc, cur, owners, ratesReady }) {
             if (!v) return null;
             return (
               <div key={p.id} className="flex justify-between items-center py-2.5 border-b border-[var(--line)]">
-                <span className="text-sm text-[var(--txt-2)]">لای {p.name}{v < 0 && <span className="text-[var(--neg)] text-xs mr-1">{tr("(قەرز)")}</span>}</span>
+                <span className="text-sm text-[var(--txt-2)]">{tr("لای")} {p.name}{v < 0 && <span className="text-[var(--neg)] text-xs mr-1">{tr("(قەرز)")}</span>}</span>
                 <Money v={v} dec={0} />
               </div>
             );
@@ -4312,7 +4312,10 @@ function Safes({ data, calc, cur, usr, mySafe, invUnpaid, owners, ratesReady, ad
   const [xf, setXf] = useState({ category: "کرێی شوێن", investorId: "", curId: data.currencies[0]?.id, amount: "", note: "" });
   const [nc, setNc] = useState({ code: "", name: "", symbol: "", dec: 2 });
   const investors = data.users.filter((u) => u.role === "investor" && !u.deleted);
-  const XCATS = ["کرێی شوێن", "مووچە", "گواستنەوە و حەواڵە", "کارەبا و ئینتەرنێت", "خەرجی تر", tr("خێری وەبەرهێنەر")];
+  // The value stored against an expense is the Kurdish word, in every language: it is written
+  // to the ledger and compared against below, so one category must not become three because
+  // three people had three languages open. Only the label is translated.
+  const XCATS = ["کرێی شوێن", "مووچە", "گواستنەوە و حەواڵە", "کارەبا و ئینتەرنێت", "خەرجی تر", "خێری وەبەرهێنەر"].map((category) => [category, tr(category)]);
   const isPayout = xf.category === "خێری وەبەرهێنەر";
   const unpaid = isPayout && xf.investorId ? invUnpaid(xf.investorId, xf.curId) : null;
 
@@ -4374,7 +4377,7 @@ function Safes({ data, calc, cur, usr, mySafe, invUnpaid, owners, ratesReady, ad
       <Card className="p-5">
         <div className="flex items-center gap-1.5 mb-3"><Receipt className="w-4 h-4 text-[var(--neg)]" /><SecLbl>{tr("تۆمارکردنی خەرجی")}</SecLbl></div>
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-          <div><Lbl>{tr("جۆری خەرجی")}</Lbl><Sel value={xf.category} onChange={(e) => setXf({ ...xf, category: e.target.value, investorId: "" })}>{XCATS.map((c) => <option key={c} value={c}>{c}</option>)}</Sel></div>
+          <div><Lbl>{tr("جۆری خەرجی")}</Lbl><Sel value={xf.category} onChange={(e) => setXf({ ...xf, category: e.target.value, investorId: "" })}>{XCATS.map(([category, label]) => <option key={category} value={category}>{label}</option>)}</Sel></div>
           {isPayout && (
             <div><Lbl>{tr("وەبەرهێنەر")}</Lbl><Sel value={xf.investorId} onChange={(e) => setXf({ ...xf, investorId: e.target.value })}><option value="">—</option>{investors.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</Sel></div>
           )}
@@ -5032,7 +5035,7 @@ function TxForm({ data, cur, calc, usr, avgRate, inventoryPosition, usdValueAt, 
               )}
               {feeRate > 0 && f.type === "buy" && amtR > 0 && (
                 <div className="text-[11.5px] mt-2" style={{ color: "var(--warn)" }}>
-                  {tr("عمولە")} {feeRate}٪ = <b style={num}>{fmtMoney(data, roundMoney(data, amtR * feeRate / 100, f.curId), f.curId)}</b> · {tr("باڵانسی دوایی")} <b style={num}>{fmtMoney(data, amtR - roundMoney(data, amtR * feeRate / 100, f.curId), f.curId)}</b>
+                  {tr("عمولە")} {feeRate}{tr("٪")} = <b style={num}>{fmtMoney(data, roundMoney(data, amtR * feeRate / 100, f.curId), f.curId)}</b> · {tr("باڵانسی دوایی")} <b style={num}>{fmtMoney(data, amtR - roundMoney(data, amtR * feeRate / 100, f.curId), f.curId)}</b>
                 </div>
               )}
               {cur(f.curId).external && !f.partnerId && (
@@ -5909,7 +5912,7 @@ function RejectedReceipts({ rows, data, title = "فیشە ڕەتکراوەکان
                     <Pill tone="red">{tr("هەژمار نەکراوە")}</Pill>
                   </div>
                   <div className="mt-1.5 text-xs text-[var(--neg)] bg-[color-mix(in_srgb,var(--neg)_10%,transparent)] rounded-lg px-2.5 py-1.5 leading-relaxed">
-                    <b>{tr("هۆکار:")}</b> {r.reject_reason || r.rejectReason || r.note || "نەزانراو"}
+                    <b>{tr("هۆکار:")}</b> {r.reject_reason || r.rejectReason || r.note || tr("نەزانراو")}
                   </div>
                   <div className="mt-1.5 grid grid-cols-2 gap-x-3 gap-y-0.5 text-[11px] text-[var(--txt-2)]">
                     {(r.ref_no || r.refNo) && <div style={num}>{tr("ژمارەی مامەڵە:")} <b>{r.ref_no || r.refNo}</b></div>}
@@ -7202,7 +7205,7 @@ function ReceiptUploader({ customerId, customerName, partnerId, uploaderId, dire
                           </div>
                         )}
                         <div className="text-[11px] text-[var(--txt-2)] mt-1 truncate">
-                          {r.receiver ? <>{tr("بۆ")} <b>{r.receiver}</b></> : "وەرگر: —"}
+                          {r.receiver ? <>{tr("بۆ")} <b>{r.receiver}</b></> : <>{tr("وەرگر:")} —</>}
                           {r.refNo && <span style={num}> · {r.refNo}</span>}
                         </div>
                         {r.merchantOrderNo && <div className="text-[10px] text-[var(--txt-3)] mt-0.5" style={num}>Merchant order: {r.merchantOrderNo}</div>}
@@ -7572,7 +7575,7 @@ function ShareTable({ rows, data, who, title, onClose, flash }) {
       rejected.forEach((r, i) => {
         const amt = r.amount ? `${fmtMoney(data, r.net_amount ?? r.net ?? r.amount, r.currency)} ${r.currency || ""}` : "—";
         L.push(`${i + 1}. ${amt}`);
-        L.push(`   ❌ ${r.reject_reason || r.rejectReason || r.note || "نەزانراو"}`);
+        L.push(`   ❌ ${r.reject_reason || r.rejectReason || r.note || tr("نەزانراو")}`);
         const bits = [];
         if (r.ref_no || r.refNo) bits.push(`ژمارە: ${r.ref_no || r.refNo}`);
         if (r.tx_time || r.txTime) bits.push(`کات: ${r.tx_time || r.txTime}`);
@@ -7663,7 +7666,7 @@ function ShareTable({ rows, data, who, title, onClose, flash }) {
       : `https://wa.me/?text=${encodeURIComponent(text)}`;
     window.open(url, "_blank");
   };
-  const copy = () => navigator.clipboard.writeText(text).then(() => flash("کۆپی کرا ✓"));
+  const copy = () => navigator.clipboard.writeText(text).then(() => flash(tr("کۆپی کرا ✓")));
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/50 flex items-end md:items-center justify-center md:p-6" onClick={onClose}>
@@ -7844,7 +7847,7 @@ function WhatsAppInfo({ batches, waN }) {
         <div className="space-y-3 text-sm text-[var(--txt-2)] leading-relaxed">
           <div className="flex gap-3">
             <span className="w-6 h-6 rounded-full bg-[var(--pos)] text-white flex items-center justify-center text-xs font-bold shrink-0">{tr("١")}</span>
-            <span>{tr("کڕیار فیشەکان لە واتساپەوە")} <b>فۆرۆرد</b> {tr("دەکات بۆ ژمارەی کۆمپانیاکە")}</span>
+            <span>{tr("کڕیار فیشەکان لە واتساپەوە")} <b>{tr("فۆرۆرد")}</b> {tr("دەکات بۆ ژمارەی کۆمپانیاکە")}</span>
           </div>
           <div className="flex gap-3">
             <span className="w-6 h-6 rounded-full bg-[var(--pos)] text-white flex items-center justify-center text-xs font-bold shrink-0">{tr("٢")}</span>
@@ -7856,14 +7859,14 @@ function WhatsAppInfo({ batches, waN }) {
           </div>
         </div>
         <div className="mt-4 pt-4 border-t border-[var(--line)] text-xs text-[var(--txt-2)] leading-relaxed">
-          <b className="text-[var(--txt)]">{tr("تێبینی:")}</b> فیشەکان کە بە ماوەی ١٥ خولەک بنێردرێن، هەموویان لە یەک کۆمەڵەدا کۆدەبنەوە.
+          <b className="text-[var(--txt)]">{tr("تێبینی:")}</b> {tr("فیشەکان کە بە ماوەی ١٥ خولەک بنێردرێن، هەموویان لە یەک کۆمەڵەدا کۆدەبنەوە.")}
           کڕیارەکە بە ژمارەی مۆبایلەکەی دەناسرێتەوە — بۆیە دڵنیابە ژمارەکەی لە ئەکاونتەکەیدا دروستە.
         </div>
       </Card>
 
       <Card className="p-4 bg-[var(--line)]">
         <div className="text-xs text-[var(--txt-2)] leading-relaxed">
-          <b className="text-[var(--txt)]">{tr("نرخ:")}</b> وەرگرتنی نامە لە کڕیارەکانەوە <b>{tr("بەخۆڕاییە")}</b> — تەنها ئەگەر تۆ وەڵامیان بدەیتەوە پارەی لەسەرە.
+          <b className="text-[var(--txt)]">{tr("نرخ:")}</b> {tr("وەرگرتنی نامە لە کڕیارەکانەوە")} <b>{tr("بەخۆڕاییە")}</b> {tr("— تەنها ئەگەر تۆ وەڵامیان بدەیتەوە پارەی لەسەرە.")}
           سیستەمەکە بە شێوەی بنەڕەت وەڵام نادات.
         </div>
       </Card>
@@ -8430,8 +8433,8 @@ function BatchDetail({ id, back, usr, data, profile, onMakeTx, flash, reloadBatc
             <>
               <div className={`text-sm mb-3 ${isOut ? "text-[var(--neg)]" : "text-[var(--pos)]"}`}>
                 {isOut
-                  ? <>ئەم بڕەی پەسەندکراوە ماوە: <b style={num}>{fmtMoney(data, remainingTotal, remainingCurrency)} {remainingCurrency}</b> {tr("— فرۆشتنێکی لێ دروست بکە")}</>
-                  : <>ئەم بڕەی پەسەندکراوە ماوە: <b style={num}>{fmtMoney(data, remainingTotal, remainingCurrency)} {remainingCurrency}</b> {tr("— کڕینێکی لێ دروست بکە")}</>}
+                  ? <>{tr("ئەم بڕەی پەسەندکراوە ماوە:")} <b style={num}>{fmtMoney(data, remainingTotal, remainingCurrency)} {remainingCurrency}</b> {tr("— فرۆشتنێکی لێ دروست بکە")}</>
+                  : <>{tr("ئەم بڕەی پەسەندکراوە ماوە:")} <b style={num}>{fmtMoney(data, remainingTotal, remainingCurrency)} {remainingCurrency}</b> {tr("— کڕینێکی لێ دروست بکە")}</>}
               </div>
               <Btn kind={isOut ? "danger" : "primary"} className="w-full"
                 onClick={() => onMakeTx({ ...b, total_net: remainingTotal, currency: remainingCurrency, n: convertibleReceipts.length,
@@ -8637,7 +8640,7 @@ function Statement({ u, txs, c, cur, onClose, flash }) {
     return L.join("\n");
   })();
 
-  const copy = () => navigator.clipboard.writeText(text).then(() => flash("کۆپی کرا ✓"));
+  const copy = () => navigator.clipboard.writeText(text).then(() => flash(tr("کۆپی کرا ✓")));
   const share = async () => { if (navigator.share) { try { await navigator.share({ text }); } catch {} } else copy(); };
 
   return (
@@ -8718,8 +8721,8 @@ function Statement({ u, txs, c, cur, onClose, flash }) {
 /* ══════════════════ ناوەندی بەکارهێنەران ══════════════════ */
 function PeopleHub(p) {
   const [tab, setTab] = useState("customers");
-  const TABS = [["customers", "کڕیاران", Users], ["partners", "هاوبەشان", Handshake], ["investors", tr("وەبەرهێنەران"), TrendingUp],
-    ["money", "پارە و گواستنەوە", ArrowLeftRight], ["office", tr("نووسینگە"), Building2], ["manage", "بەڕێوەبردن", UserCog]];
+  const TABS = [["customers", tr("کڕیاران"), Users], ["partners", tr("هاوبەشان"), Handshake], ["investors", tr("وەبەرهێنەران"), TrendingUp],
+    ["money", tr("پارە و گواستنەوە"), ArrowLeftRight], ["office", tr("نووسینگە"), Building2], ["manage", tr("بەڕێوەبردن"), UserCog]];
   return (
     <div className="space-y-4">
       <div className="flex gap-1 flex-wrap bg-[var(--surf)] border border-[var(--line)] rounded-[var(--r)] p-1.5">
@@ -9146,7 +9149,7 @@ function Partners({ data, calc, cur, usr, transfer, detailId, setDetailId }) {
         </div>
         {tf.dir === "to" && fr > 0 && +tf.amount > 0 && (
           <div className="mt-3 text-sm text-[var(--txt-2)] bg-[var(--line)] border border-[var(--line)] rounded-[var(--r-sm)] p-3">
-            عمولەی {fr}٪ = <b style={num}>{fmtMoney(data, roundMoney(data, roundMoney(data, +tf.amount, tf.curId) * fr / 100, tf.curId), tf.curId)}</b> {tr("— باڵانسی دوایی:")} <b style={num}>{fmtMoney(data, roundMoney(data, +tf.amount, tf.curId) - roundMoney(data, roundMoney(data, +tf.amount, tf.curId) * fr / 100, tf.curId), tf.curId)}</b>
+            {tr("عمولەی")} {fr}{tr("٪")} = <b style={num}>{fmtMoney(data, roundMoney(data, roundMoney(data, +tf.amount, tf.curId) * fr / 100, tf.curId), tf.curId)}</b> {tr("— باڵانسی دوایی:")} <b style={num}>{fmtMoney(data, roundMoney(data, +tf.amount, tf.curId) - roundMoney(data, roundMoney(data, +tf.amount, tf.curId) * fr / 100, tf.curId), tf.curId)}</b>
           </div>
         )}
       </Card>
@@ -9261,7 +9264,7 @@ function InvestorDetail({ u, data, calc, cur, invUnpaid, mine }) {
         <Hero label={mine ? tr("کۆی ماڵی من") : tr("کۆی ماڵی") + " " + u.name}
           value={main ? fmt(main.tot, 0) : "0"}
           unit={main ? cur(main.c.id).code : ""}
-          sub={`${tr("ڕێژەی خێر")} ${u.rate}٪ · ${(u.scope || []).length === 0 ? tr("لە هەموو دراوەکاندا") : (u.scope || []).map((x) => cur(x).code).join("، ")}`} />
+          sub={`${tr("ڕێژەی خێر")} ${u.rate}${tr("٪")} · ${(u.scope || []).length === 0 ? tr("لە هەموو دراوەکاندا") : (u.scope || []).map((x) => cur(x).code).join(l10n("، ", ", ", "، "))}`} />
       </div>
 
       <div className="grid grid-cols-2 gap-3">
@@ -9347,7 +9350,7 @@ function Office({ data, cur, usr, officePay, calc, accountMove, accountTransfer,
   const histTot = {};
   hist.forEach((t) => (histTot[t.againstId] = (histTot[t.againstId] || 0) + t.total));
 
-  const TABS = [["pending", `چاوەڕوان (${pending.length})`], ["hist", tr("مێژووی پارەدان")]];
+  const TABS = [["pending", `${tr("چاوەڕوان")} (${pending.length})`], ["hist", tr("مێژووی پارەدان")]];
   if (officeId) TABS.push(["safe", tr("قاسەی نووسینگە")]);
 
   return (
@@ -9599,12 +9602,12 @@ function Report({ data, calc, cur, usr, profitIn, investorsProfitIn, invShare, s
   const reportNetTone = reportNet < 0 ? "negative" : reportNet > 0 ? "positive" : "neutral";
 
   const exportCsv = () => {
-    const head = ["کۆد", tr("جۆر"), "بەروار", "لایەن", tr("دراو"), tr("بڕ"), "ڕەیت", "بەرامبەر", "کۆ", "شوێن", tr("دۆخ"), tr("خێر")];
-    const rows = txs.map((t) => [t.code || "", t.type === "buy" ? "کڕین" : "فرۆشتن", new Date(t.date).toLocaleString("en-GB"),
+    const head = [tr("کۆد"), tr("جۆر"), tr("بەروار"), tr("لایەن"), tr("دراو"), tr("بڕ"), tr("ڕەیت"), tr("بەرامبەر"), tr("کۆ"), tr("شوێن"), tr("دۆخ"), tr("خێر")];
+    const rows = txs.map((t) => [t.code || "", t.type === "buy" ? tr("کڕین") : tr("فرۆشتن"), new Date(t.date).toLocaleString("en-GB"),
       t.cpId ? (usr(t.cpId).name || t.cpName) : t.cpName, cur(t.curId).code, t.amount,
       (() => { const b = preferredRateBaseId(t.curId, t.againstId); const r = storedRateToDisplay(t.rate, t.curId, t.againstId, b); return r ? +r.toFixed(6) : ""; })(),
       cur(t.againstId).code, t.total,
-      t.partnerId ? "لای " + usr(t.partnerId).name : "قاسەی گشتی", t.status === "pending" ? "چاوەڕوان" : "تەواو", t.profit ?? ""]);
+      t.partnerId ? `${tr("لای")} ${usr(t.partnerId).name}` : tr("قاسەی گشتی"), t.status === "pending" ? tr("چاوەڕوان") : tr("تەواو"), t.profit ?? ""]);
     // Counterparty names and notes are text a customer supplied. Quoting alone does not stop a
     // spreadsheet evaluating a cell that begins with = + - or @, so every cell is neutralised.
     const csv = toCsv([head, ...rows]);
@@ -9643,7 +9646,7 @@ function Report({ data, calc, cur, usr, profitIn, investorsProfitIn, invShare, s
     <div className="space-y-5">
       <div className="report-head">
         <div className="min-w-0">
-          <H sub={`${from} تا ${to}`}>{tr("ڕاپۆرت")}</H>
+          <H sub={`${from} ${tr("تا")} ${to}`}>{tr("ڕاپۆرت")}</H>
           <div className="report-period-badge">
             <History className="w-3.5 h-3.5" />
             <span style={num}>{from}</span>
@@ -9921,7 +9924,7 @@ function Backup({ data, calc, cur, downloadBackup, flash, sumUsd, mySafe, owners
 
   return (
     <div className="space-y-4">
-      <H sub="پشکنینی دروستی داتا، یەکسانکردنەوە و ڕێنمایی گەڕاندنەوەی بەرهەم">{tr("پاراستنی داتا")}</H>
+      <H sub={tr("پشکنینی دروستی داتا، یەکسانکردنەوە و ڕێنمایی گەڕاندنەوەی بەرهەم")}>{tr("پاراستنی داتا")}</H>
 
       <Card className={`p-4 ${frozen ? "border-[color-mix(in_srgb,var(--neg)_40%,transparent)] bg-[color-mix(in_srgb,var(--neg)_8%,transparent)]" : "border-[color-mix(in_srgb,var(--pos)_28%,transparent)]"}`}>
         <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -10366,7 +10369,7 @@ function Insights({ data, calc, cur, usr, profitIn, ownProfitIn, sumUsd, ratesRe
     <div className="space-y-5">
       <div className="analytics-head">
         <div>
-          <H sub="ڕەوتی خێر، مێژووی نرخەکان، کورتەی ڕۆژ و چاودێری بازاڕ">{tr("ڕەوت و شیکاری")}</H>
+          <H sub={tr("ڕەوتی خێر، مێژووی نرخەکان، کورتەی ڕۆژ و چاودێری بازاڕ")}>{tr("ڕەوت و شیکاری")}</H>
           <div className="analytics-live-badge"><span className="analytics-live-dot" /> داتای ناوخۆی سیستەم</div>
         </div>
       </div>
@@ -10406,7 +10409,7 @@ function Insights({ data, calc, cur, usr, profitIn, ownProfitIn, sumUsd, ratesRe
             <Bars rows={dayProfit} />
             {best?.v > 0 && (
               <div className="text-[11px] mt-3 pt-3" style={{ color: "var(--txt-3)", borderTop: "1px solid var(--line)" }}>
-                {tr("باشترین ڕۆژ:")} <b style={{ ...num, color: "var(--pos)" }}>{fmt(best.v, 0)}</b> لە {best.k}
+                {tr("باشترین ڕۆژ:")} <b style={{ ...num, color: "var(--pos)" }}>{fmt(best.v, 0)}</b> {l10n("لە", "on", "في")} {best.k}
               </div>
             )}
           </Card>
@@ -10591,7 +10594,7 @@ function Insights({ data, calc, cur, usr, profitIn, ownProfitIn, sumUsd, ratesRe
               <MessageCircle className="w-4 h-4" /> {tr("ناردن بە واتساپ")}
             </Btn>
             <Btn kind="ghost" className="flex-1"
-              onClick={() => navigator.clipboard.writeText(repText()).then(() => flash("کۆپی کرا ✓"))}>{tr("کۆپیکردن")}</Btn>
+              onClick={() => navigator.clipboard.writeText(repText()).then(() => flash(tr("کۆپی کرا ✓")))}>{tr("کۆپیکردن")}</Btn>
           </div>
         </>
       )}
@@ -10992,7 +10995,7 @@ function DayClose({ data, calc, cur, usr, closeDay, sumUsd }) {
 
   return (
     <div className="space-y-4">
-      <H sub="لە کۆتایی ڕۆژدا پارەی ڕاستەقینە بژمێرە و بەراوردی بکە لەگەڵ حیسابی سیستەم">{tr("بەستنی ڕۆژ")}</H>
+      <H sub={tr("لە کۆتایی ڕۆژدا پارەی ڕاستەقینە بژمێرە و بەراوردی بکە لەگەڵ حیسابی سیستەم")}>{tr("بەستنی ڕۆژ")}</H>
 
       {closedToday && (
         <Card className="p-4 border-[color-mix(in_srgb,var(--pos)_34%,transparent)] bg-[color-mix(in_srgb,var(--pos)_9%,transparent)]">
@@ -11379,7 +11382,7 @@ function PartnerPortal({ user, data, calc, cur, usr, flash, reloadBatches, onlin
 
           {Object.keys(fees).length > 0 && (
             <Card className="px-4 py-2 portal-list-card">
-              <div className="pt-2"><SecLbl>{tr("عمولەی وەرگیراو")} ({user.rate}٪)</SecLbl></div>
+              <div className="pt-2"><SecLbl>{tr("عمولەی وەرگیراو")} ({user.rate}{tr("٪")})</SecLbl></div>
               {Object.entries(fees).map(([cid, v]) => (
                 <Row key={cid} icon={<CurBadge c={cur(cid)} size="sm" />} title={cur(cid).name} right={fmt(v, 0)} tone="pos" />
               ))}
@@ -11459,7 +11462,7 @@ function Portal({ user, data, calc, cur, usr, officePay, settle, invUnpaid, flas
     data.ledger.forEach((e) => { if (e.partnerId === user.id && e.type === "partner_fee") fees[e.curId] = (fees[e.curId] || 0) + Math.abs(e.amount); });
     return (
       <div className="space-y-4">
-        <H sub={`بەخێربێیت، ${user.name}`}>{tr("ئەکاونتی من")}</H>
+        <H sub={`${tr("بەخێربێیت،")} ${user.name}`}>{tr("ئەکاونتی من")}</H>
         <div className="grid md:grid-cols-2 gap-4">
           <Card className="p-5">
             <SecLbl>{tr("باڵانسی لای من")}</SecLbl>

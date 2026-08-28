@@ -1,7 +1,7 @@
 {
-  "total": 1132,
+  "total": 1127,
   "counts": {
-    "src/App.jsx": 688,
+    "src/App.jsx": 683,
     "src/brand/brand.js": 1,
     "src/components/accounting/BooksReconciliation.jsx": 9,
     "src/components/accounting/CashboxPanel.jsx": 12,
