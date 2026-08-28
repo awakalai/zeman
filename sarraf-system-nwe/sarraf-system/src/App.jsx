@@ -4545,9 +4545,23 @@ function TxForm({ data, cur, calc, usr, avgRate, inventoryPosition, usdValueAt, 
   //
   // The box is therefore not a choice here. It shows what the receipts say, and when they say
   // nothing it sends the owner to the one screen where it can be said.
-  const custodyFromReceipts = !!batch;
-  const receiptsNameNobody = custodyFromReceipts && !batch?.partner_id;
-  const custodyMustBeSetFirst = receiptsNameNobody && !f.direct && !!cur(f.curId).external;
+  //
+  // ── and then the owner said no, and they were right ────────────────────────
+  //
+  // The first version of this locked the box and sent them to «دابەشکردن بەسەر هاوبەشەکان» to
+  // set custody before coming back. Two screens and three commands to do one thing. What they
+  // asked for instead:
+  //
+  //   «هەر لەوێوە هاوبەش هەڵبژێرم و کە کردم، هەم پارەکە بچێتە لای ئەو، هەمیش پەسەند بکرێت،
+  //    و فیشەکانیشی بۆ بڕوات — بەڵام با هێندە شپرز نەبێت»
+  //
+  // 202608280024 makes the conversion honour a partner named here, by calling the custody
+  // command itself so the evidence is written exactly as that screen writes it. So the box is
+  // a real choice again — but only where there is a choice to make. Receipts already placed
+  // with a partner still show that partner and cannot be moved from here: reassigning custody
+  // is its own decision and keeps its own screen.
+  const custodyLockedByReceipts = !!batch?.partner_id;
+  const custodyChosenHere = !!batch && !batch?.partner_id;
 
   // Two more the database refuses, for the same reason and at the same late moment:
   //
@@ -4998,20 +5012,22 @@ function TxForm({ data, cur, calc, usr, avgRate, inventoryPosition, usdValueAt, 
           <>
             <div>
               <Lbl>{f.type === "buy" ? tr("لە کوێ دای دەنێیت؟") : tr("لە کوێوە دەفرۆشیت؟")}</Lbl>
-              <Sel value={f.partnerId} disabled={custodyFromReceipts}
+              <Sel value={f.partnerId} disabled={custodyLockedByReceipts}
                    onChange={(ev) => setF({ ...f, partnerId: ev.target.value })}>
-                {custodyFromReceipts && !batch?.partner_id && (
-                  <option value="">{tr("— فیشەکان لای کەس دانەنراون —")}</option>
-                )}
-                {!custodyFromReceipts && !cur(f.curId).external && <option value="">{tr("قاسەی گشتی")} — {fmt(calc.atMe[f.curId] || 0, cur(f.curId).dec ?? 0)}</option>}
-                {!custodyFromReceipts && cur(f.curId).external && <option value="">{tr("— تەرەفێک هەڵبژێرە —")}</option>}
+                {!custodyLockedByReceipts && !cur(f.curId).external && <option value="">{tr("قاسەی گشتی")} — {fmt(calc.atMe[f.curId] || 0, cur(f.curId).dec ?? 0)}</option>}
+                {!custodyLockedByReceipts && cur(f.curId).external && <option value="">{tr("— تەرەفێک هەڵبژێرە —")}</option>}
                 {partners.map((p) => (
                   <option key={p.id} value={p.id}>{p.name} — {fmt((calc.partner[p.id] || {})[f.curId] || 0, cur(f.curId).dec ?? 0)}</option>
                 ))}
               </Sel>
-              {custodyFromReceipts && (
+              {custodyLockedByReceipts && (
                 <div className="text-[11.5px] mt-2" style={{ color: "var(--txt-2)" }}>
-                  {tr("ئەمە لە فیشەکانەوە دێت — لە شاشەی کۆمەڵەکەدا، «دابەشکردن بەسەر هاوبەشەکان»، دەگۆڕدرێت")}
+                  {tr("ئەم فیشانە پێشتر لای ئەم هاوبەشە دانراون — لە شاشەی کۆمەڵەکەدا دەگۆڕدرێت")}
+                </div>
+              )}
+              {custodyChosenHere && f.partnerId && (
+                <div className="text-[11.5px] mt-2" style={{ color: "var(--pos)" }}>
+                  {tr("فیشەکانیش هەر بەم لێدانە دەچنە لای ئەم هاوبەشە")}
                 </div>
               )}
               {feeRate > 0 && f.type === "buy" && amtR > 0 && (
@@ -5099,15 +5115,7 @@ function TxForm({ data, cur, calc, usr, avgRate, inventoryPosition, usdValueAt, 
         </div>
       </Card>
 
-      {custodyMustBeSetFirst ? (
-        <div className="flex items-start gap-2 px-1 text-[12px] font-semibold" style={{ color: "var(--neg)" }}>
-          <AlertTriangle className="w-4 h-4 shrink-0 mt-px" />
-          <span>
-            {cur(f.curId).name} {tr("لە قاسەی گشتیدا هەڵناگیرێت، و ئەم فیشانە لای کەس دانەنراون.")}
-            {" "}{tr("بگەڕێوە بۆ کۆمەڵەکە و لە «دابەشکردن بەسەر هاوبەشەکان»دا دیاری بکە پارەکە لای کێیە.")}
-          </span>
-        </div>
-      ) : needsCustodian && (
+      {needsCustodian && (
         <div className="flex items-start gap-2 px-1 text-[12px] font-semibold" style={{ color: "var(--warn)" }}>
           <AlertTriangle className="w-4 h-4 shrink-0 mt-px" />
           <span>{cur(f.curId).name} {tr("لە قاسەی گشتیدا هەڵناگیرێت — دیاری بکە پارەکە لای کێ دەمێنێتەوە")}</span>
@@ -5129,7 +5137,7 @@ function TxForm({ data, cur, calc, usr, avgRate, inventoryPosition, usdValueAt, 
 
       <div className="flex gap-2 sticky bottom-24 md:bottom-4">
         <Btn kind={f.direct ? "gold" : f.type === "buy" ? "primary" : "danger"}
-          onClick={submit} disabled={sending || busy || needsCustodian || custodyMustBeSetFirst || inventoryRefuses} className="flex-1 !py-4 !text-[15px]">
+          onClick={submit} disabled={sending || busy || needsCustodian || inventoryRefuses} className="flex-1 !py-4 !text-[15px]">
           {sending || busy ? "..." : e ? tr("پاشەکەوتی ئیدیت")
             : f.direct ? tr("تۆمارکردنی مامەڵەی ڕاستەوخۆ")
             : f.type === "buy" ? tr("تۆمارکردنی کڕین") : tr("تۆمارکردنی فرۆشتن")}
