@@ -1436,6 +1436,75 @@ try {
     });
   });
 
+  scenario(22, "the custody the receipts carry is the custody the trade gets", () => {
+    // Reported from a real screen. The owner opened a batch of a customer's receipts in yuan,
+    // pressed «درووستکردنی کڕین لەم فیشانەوە», chose «Bryar» under «لە کوێ دای دەنێیت؟», and was
+    // refused with:
+    //
+    //   دراوی دەرەکی پێویستی بە هاوبەشێکی دیاریکراوە کە پارەکەی لایە (ZE-23514)
+    //
+    // — told they had named nobody, immediately after naming somebody.
+    //
+    // The reason is in the conversion itself:
+    //
+    //   v_tx := p_tx || jsonb_build_object(…, 'partner_id', v_partner, …)
+    //
+    // `v_partner` is read from the RECEIPTS. Whatever the form sent is overwritten before any
+    // rule sees it, and a customer-seller's receipts carry no partner at all.
+    //
+    // That is the system's design and it is a sound one — custody is evidence about specific
+    // receipts, recorded by its own command with its own reason. What was wrong was the screen
+    // offering a choice it would throw away. So this flow pins the behaviour the screen now has
+    // to tell the truth about.
+    const asAdmin = (sql) => {
+      const out = psql(`
+        begin;
+        select set_config('request.jwt.claim.aal','aal2',true);
+        set local role authenticated;
+        ${sql};
+        commit;`);
+      return String(out).split("\n").map((l) => l.trim()).filter(Boolean).pop() || "";
+    };
+
+    step("a batch of a customer's receipts, in a currency the house does not hold", () => {
+      be("admin");
+      psql(`delete from public.receipt_intake_items where batch_id='f22'`);
+      psql(`delete from public.receipt_batches where id='f22'`);
+      psql(`update public.currencies set external = true where id='cny'`);
+      psql(`insert into public.receipt_batches(id,customer_id,customer_name,direction,status,currency,
+              uploaded_by,receipt_stage,tenant_id,n)
+            values ('f22','cus','کڕیار فرۆشیار','in','new','CNY','cus','verified','t-sarkhel',1)`);
+      psql(`insert into public.receipt_intake_items(id,batch_id,submitted_by,customer_id,direction,
+              image_path,source_status,intake_status,counted,currency,amount,fee,net_amount,
+              payee,tx_date,platform,has_fee)
+            values ('f22-item','f22','cus','cus','in',
+                    'ingest/flow-twentytwo-batch/receipt-f22-item.jpg','ok','accepted',true,
+                    'CNY',2425,0,2425,'ئەحمەد','2026-08-06','wechat',false)`);
+      psql(`insert into public.ledger(id,type,owner,cur_id,amount,note,date,created_by)
+            values ('f22-float','deposit','self','usd',50000,'قاسەی سەرەتایی',
+                    statement_timestamp(),'adm')
+            on conflict (id) do nothing`);
+      eq(psql(`select coalesce(max(partner_id),'⟨none⟩') from public.receipt_intake_items
+                where batch_id='f22'`).trim(), "⟨none⟩",
+        "these receipts are placed with nobody, exactly as a customer's are");
+    });
+
+    step("naming a partner in the transaction alone does not place the money anywhere", () => {
+      const tx = JSON.stringify({
+        id: "f22-tx", code: null, type: "buy", direct: false, own_money: false,
+        cp_id: "cus", cp_name: null, cur_id: "cny", amount: 2425,
+        rate: 0.1449278351, against_id: "usd", total: 351.45,
+        partner_id: "par",                    // ← what the owner chose in the form
+        status: "completed", date: null, edited: false, deleted: false,
+      }).replace(/'/g, "''");
+      if (!refused(`select public.sarraf_convert_receipt_batch_to_transaction(
+        'f22','["f22-item"]'::jsonb,'${tx}'::jsonb,
+        'گۆڕینی فیشە پەسەندکراوەکان','receipt-convert:f22:0123456789abcdef')`)) {
+        throw new Error("the conversion took a partner from the form — the screen may offer the choice again");
+      }
+    });
+  });
+
   // ── the report ──────────────────────────────────────────────────────────────
   const failed = scenarios.filter((s) => !s.ok);
   for (const s of scenarios) {
