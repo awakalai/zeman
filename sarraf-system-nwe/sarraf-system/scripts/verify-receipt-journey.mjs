@@ -266,6 +266,16 @@ try {
     // Storage. The object row is written the way the storage service writes it — first without
     // its metadata, then completed — because the send reads that row back and refuses a receipt
     // whose staged object it cannot find.
+    // Asking for a link to look at a stored image. The storage service answers with a PATH, and
+    // the client concatenates it onto its own base — so answering with anything else, or with
+    // nothing, makes the browser fetch `…/storage/v1undefined`. This branch did not exist, the
+    // upload pattern below does not match `/object/sign/`, and every request for a receipt image
+    // was being answered with `{}`. The browser was right; the fixture was not.
+    const sign = url.match(/\/storage\/v1\/object\/sign\/receipts\/(.+?)(?:\?|$)/);
+    if (sign) {
+      return json({ signedURL: `/object/sign/receipts/${sign[1]}?token=journey` });
+    }
+
     const upload = url.match(/\/storage\/v1\/object\/(?:receipts)\/(.+?)(?:\?|$)/);
     if (upload) {
       const objectPath = decodeURIComponent(upload[1]);
@@ -292,7 +302,7 @@ try {
       }
       return json({ signedURL: `${BASE}/receipt.jpg` });
     }
-    if (url.includes("/storage/v1/")) return json({});
+    if (url.includes("/storage/v1")) return json({});
 
     // Everything else is this repository's own commands and tables, run for real.
     try {
@@ -300,7 +310,7 @@ try {
         method, url, headers, body: request.postData(),
         run: (sql) => asCaller(signedInAs, sql),
       });
-      if (reply.status === 501) shimFailures.push(`${method} ${new URL(url).pathname}`);
+      if (reply.status === 501) shimFailures.push(`${method} ${new URL(url).pathname}${new URL(url).search} [${request.resourceType()}, as ${signedInAs === OWNER ? "owner" : "customer"}]`);
       if (process.env.ZEMAN_JOURNEY_TRACE) {
         console.log(`  ${String(reply.status).padEnd(4)} ${method.padEnd(6)} ${new URL(url).pathname}${new URL(url).search.slice(0, 90)}`
           + (reply.status >= 400 ? `\n       ${String(reply.body).slice(0, 200)}` : ""));
@@ -541,6 +551,60 @@ try {
       "and the with-fee figure the customer was quoted is there too",
       `looking for ${grouped(READING.gross)}`);
 
+    // ── and now the owner does the thing they opened the app to do ─────────
+    //
+    // Everything up to here proves the receipt REACHED the owner. It does not prove the owner
+    // can act on it. The receipt is at `validated` — and the state machine is explicit that
+    // `validated` may only go to `submitted`, `needs_manual_review` or `rejected`, never
+    // straight to `accepted`. So the owner's move from the batch screen is not a per-receipt
+    // tick; it is «درووستکردنی کڕین لەم فیشانەوە» — turning what arrived into a purchase.
+    //
+    // What is asserted is that the figures cross that boundary. `verify:flows` already proves
+    // the command itself works against a real database; what no gate could see is whether the
+    // screen hands it the right numbers, which is exactly where `p_command_key: undefined`
+    // lived for days.
+    let ownerDecided = "";
+    let purchaseScreen = "";
+    try {
+      // Open the batch. The card is not a <button> — the buttons on that screen are the sender
+      // chip and the four filters — so it is found by the line only a batch card carries.
+      const card = ownerPage.getByText(/\d+\s*فیش\s*·/).first();
+      if (await card.count().catch(() => 0)) {
+        await card.click({ timeout: 5000 }).catch(() => {});
+        await ownerPage.waitForTimeout(4000);
+      }
+      const make = ownerPage.getByRole("button", { name: /درووستکردنی کڕین/ }).first();
+      if (await make.count().catch(() => 0)) {
+        await make.click({ timeout: 5000 }).catch(() => {});
+        await ownerPage.waitForTimeout(5000);
+        purchaseScreen = await ownerPage.innerText("body").catch(() => "");
+        const values = await ownerPage.locator("input").evaluateAll(
+          (nodes) => nodes.map((n) => n.value).filter(Boolean).join(" | ")).catch(() => "");
+        ownerDecided = `${values}`.slice(0, 400);
+      } else {
+        ownerDecided = "⟨the owner is offered no way to turn the batch into a purchase⟩";
+      }
+    } catch (e) {
+      ownerDecided = `⟨the owner could not act: ${String(e).slice(0, 160)}⟩`;
+    }
+    if (process.env.ZEMAN_JOURNEY_DUMP) {
+      console.log(`\n===== after the owner acts =====\n${purchaseScreen.replace(/\s+/g, " ").slice(0, 1200)}\n--- inputs: ${ownerDecided}\n=====`);
+    }
+
+    record(/\d/.test(ownerDecided) && !ownerDecided.startsWith("⟨"),
+      "the owner can turn what arrived into a purchase, with the figures already in it",
+      ownerDecided);
+
+    // The amount the customer's receipt carried is the amount the purchase starts from. A form
+    // that opens empty is a form the owner has to retype from a screenshot — which is the whole
+    // thing this system exists to stop.
+    const carried = `${ownerDecided} ${purchaseScreen}`.replace(/,/g, "");
+    record(carried.includes("1210") || carried.includes("1246.3"),
+      "and the amount it starts from is the amount that was sent",
+      `looking for 1210 or 1246.3 in: ${ownerDecided.slice(0, 200)}`);
+
+    // Filtered here, after the decision, so a throw during the accept is caught too — not only
+    // one during the sign-in.
     const ownerCrashesReal = ownerCrashes.filter(
       (e) => !/supabaseUrl|Failed to load resource|net::ERR|realtime/i.test(e));
     record(ownerCrashesReal.length === 0, "nothing throws on the owner's side either",
