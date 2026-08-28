@@ -1,6 +1,7 @@
 import React from "react";
 import { RefreshCw, ShieldAlert } from "lucide-react";
 import { BrandLogo } from "../../brand/BrandLogo.jsx";
+import { reportFault } from "../../services/faultReport.js";
 
 export class AppErrorBoundary extends React.Component {
   constructor(props) {
@@ -14,6 +15,10 @@ export class AppErrorBoundary extends React.Component {
 
   componentDidCatch(error, info) {
     console.error("ZEMAN render recovery", error, info);
+    // And somewhere a person can actually read it. The console of a customer's phone is not a
+    // place anybody looks; this is the difference between knowing a screen broke and finding
+    // out weeks later from a phone call with nothing in it.
+    reportFault("render", error, this.props.screen, info?.componentStack || error?.stack || "");
   }
 
   render() {

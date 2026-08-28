@@ -1009,6 +1009,57 @@ try {
     if (open) throw new Error(`a browser can call these, and they bypass tenancy: ${open}`);
   });
 
+  // ── the fault report is a write path a user can trigger at will ─────────────
+  //
+  // An error reporter is the one table an ordinary browser fills on purpose, in a system that
+  // holds other people's money. Three things have to stay true of it, and none of them is
+  // enforced by the caller — a future caller could forget every one.
+  check("one business cannot read another's faults", () => {
+    asUser(A_UID, `select public.sarraf_record_fault(
+      'render','TypeError','receipts','isolationprint0001','r.map is not a function','Safari · iOS')`);
+    const mine = asUser(A_UID, "select count(*) from public.zeman_faults").trim();
+    const theirs = asUser(B_UID, "select count(*) from public.zeman_faults").trim();
+    if (Number(mine) < 1) throw new Error(`the business that hit the fault saw ${mine} of it`);
+    if (Number(theirs) !== 0) throw new Error(`the other business saw ${theirs} faults that are not theirs`);
+  });
+
+  check("a crash loop is counted, not appended", () => {
+    for (let i = 0; i < 40; i += 1) {
+      asUser(A_UID, `select public.sarraf_record_fault(
+        'render','TypeError','receipts','loopprint00000001','same fault again','Safari · iOS')`);
+    }
+    const rows = psql(`select count(*) from public.zeman_faults
+                        where fingerprint = 'loopprint00000001'`).trim();
+    const seen = psql(`select seen from public.zeman_faults
+                        where fingerprint = 'loopprint00000001'`).trim();
+    if (rows !== "1") throw new Error(`forty crashes wrote ${rows} rows — the table can be filled`);
+    if (Number(seen) < 40) throw new Error(`forty crashes counted as ${seen}`);
+  });
+
+  check("one browser cannot report an unbounded number of different faults", () => {
+    let refused = 0;
+    for (let i = 0; i < 30; i += 1) {
+      const out = asUser(A_UID, `select public.sarraf_record_fault(
+        'render','TypeError','receipts','flood' || lpad(${i}::text, 11, '0'))::text`);
+      if (out.includes("too many")) refused += 1;
+    }
+    if (refused === 0) throw new Error("a browser may report any number of distinct faults");
+  });
+
+  check("nothing a browser sends can grow past its bound", () => {
+    asUser(A_UID, `select public.sarraf_record_fault(
+      'render','${"c".repeat(200)}','${"s".repeat(200)}','boundprint0000001',
+      '${"d".repeat(900)}','${"a".repeat(400)}')`);
+    const worst = psql(`select coalesce(max(char_length(detail)),0) || '/' ||
+                               coalesce(max(char_length(code)),0) || '/' ||
+                               coalesce(max(char_length(agent)),0)
+                          from public.zeman_faults`).trim();
+    const [detail, code, agent] = worst.split("/").map(Number);
+    if (detail > 200 || code > 40 || agent > 120) {
+      throw new Error(`a field grew past its bound — detail/code/agent = ${worst}`);
+    }
+  });
+
   // ── and the manager, who is meant to see everything ─────────────────────────
   check("the manager still sees both businesses", () => {
     const mgr = psql(`select coalesce(auth_id::text,'') from public.app_users
