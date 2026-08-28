@@ -256,7 +256,6 @@ as $$
            group by a.currency) s;
 $$;
 revoke all on function public.sarraf_office_paid_since(text, timestamptz) from public, anon, authenticated;
-alter function public.sarraf_office_paid_since(text, timestamptz) owner to sarraf_definer;
 
 -- ── everything the office's screen shows, in one call ───────────────────────
 --
@@ -317,7 +316,6 @@ end;
 $$;
 revoke all on function public.sarraf_office_board(integer) from public, anon;
 grant execute on function public.sarraf_office_board(integer) to authenticated;
-alter function public.sarraf_office_board(integer) owner to sarraf_definer;
 
 -- ── «هەر کاتێک ویستم حسابی نووسینگەکە بدەم و تەواو» ──────────────────────────
 --
@@ -417,11 +415,25 @@ end;
 $$;
 revoke all on function public.sarraf_office_settle(text,text,numeric,text,text) from public, anon;
 grant execute on function public.sarraf_office_settle(text,text,numeric,text,text) to authenticated;
-alter function public.sarraf_office_settle(text,text,numeric,text,text) owner to sarraf_definer;
 
+-- ── and none of them may bypass row-level security ──────────────────────────
+--
+-- Handing a function over is judged as though the new owner were creating it in the schema, so
+-- the role receiving it needs CREATE there — USAGE is not enough, and `permission denied for
+-- schema public` is exactly what the live database said when this migration first ran without
+-- it. The local fixture connects as a superuser that owns the schema and never noticed.
+--
+-- It is granted for the handover and taken back on the next line. A role that owns this many
+-- SECURITY DEFINER functions should not also be able to create objects for the rest of the
+-- installation's life.
+grant create on schema public to sarraf_definer;
+alter function public.sarraf_office_paid_since(text, timestamptz) owner to sarraf_definer;
+alter function public.sarraf_office_board(integer) owner to sarraf_definer;
+alter function public.sarraf_office_settle(text,text,numeric,text,text) owner to sarraf_definer;
 alter function public.sarraf_office_payment_post(
   public.office_payment_assignments, text, numeric, text, text) owner to sarraf_definer;
 alter function public.sarraf_office_payment_paid(text,text,text) owner to sarraf_definer;
 alter function public.sarraf_office_payment_confirm(text,text,text) owner to sarraf_definer;
+revoke create on schema public from sarraf_definer;
 
 commit;

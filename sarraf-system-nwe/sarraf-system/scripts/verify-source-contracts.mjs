@@ -100,6 +100,29 @@ for (const file of [
   }
 }
 
+// Handing a SECURITY DEFINER function to sarraf_definer is judged as though that role were
+// creating it in the schema, so it needs CREATE on public for the length of the statement. The
+// disposable fixture connects as a superuser that owns the schema and grants it that by
+// accident, so a migration missing the grant passes every gate here and then fails on the live
+// database with `permission denied for schema public`. It has now done so once.
+//
+// The three events are read in the order they appear: every handover must fall inside a grant
+// that has not yet been taken back, and nothing may be left holding it at the end of the file.
+for (const file of migrations) {
+  const sql = text(`supabase/migrations/${file}`).replace(/--.*$/gm, "");
+  const events = [...sql.matchAll(
+    /(grant\s+create\s+on\s+schema\s+public\s+to\s+sarraf_definer)|(revoke\s+create\s+on\s+schema\s+public\s+from\s+sarraf_definer)|(owner\s+to\s+sarraf_definer)/gi)];
+  let holding = false;
+  for (const [, granted, revoked] of events) {
+    if (granted) holding = true;
+    else if (revoked) holding = false;
+    else if (!holding) {
+      fail(`migration hands a function to sarraf_definer without CREATE on public: ${file}`);
+    }
+  }
+  if (holding) fail(`migration leaves sarraf_definer able to create objects in public: ${file}`);
+}
+
 const workflow = text("../../.github/workflows/verify.yml");
 for (const required of ["npm ci", "npm test", "npm run build", "npm run verify:accounting", "npm run verify:roles", "npm audit --audit-level=high"]) {
   if (!workflow.includes(required)) fail(`CI is missing required gate: ${required}`);
