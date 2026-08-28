@@ -101,15 +101,16 @@ select case when exists (
 \echo '   پێویستە: دوو ئارگومێنت ✓  ·  یەک ئارگومێنتی کۆن نەماوە ✓  ·  ئەدمین ڕێپێدراوە ✓'
 \echo ''
 
+-- pg_get_function_identity_arguments ناوی پارامەتەرەکانیش لەگەڵ خۆیدا دەهێنێت
+-- («p_days integer, p_office_id text»)، بۆیە بەراوردکردنی لەگەڵ «integer, text» هەمیشە
+-- شکست دەهێنێت و ڕاپۆرتەکە دەڵێت شتێک نییە کە هەیە. ژمارەی ئارگومێنتەکان دەژمێردرێت.
 select case when exists (
          select 1 from pg_proc p where p.proname = 'sarraf_office_board'
-          and p.pronamespace = 'public'::regnamespace
-          and pg_get_function_identity_arguments(p.oid) = 'integer, text')
+          and p.pronamespace = 'public'::regnamespace and p.pronargs = 2)
        then 'دوو ئارگومێنت ✓' else '— نییە' end as "signature",
        case when exists (
          select 1 from pg_proc p where p.proname = 'sarraf_office_board'
-          and p.pronamespace = 'public'::regnamespace
-          and pg_get_function_identity_arguments(p.oid) = 'integer')
+          and p.pronamespace = 'public'::regnamespace and p.pronargs = 1)
        then '⚠ شێوەی کۆن هێشتا ماوە' else 'شێوەی کۆن نەماوە ✓' end as "old form",
        case when (select pg_get_functiondef(p.oid) from pg_proc p
                    where p.proname = 'sarraf_office_board'
