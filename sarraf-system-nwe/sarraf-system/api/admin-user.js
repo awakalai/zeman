@@ -169,6 +169,80 @@ const mayGrant = (profile, level) => {
   return false;
 };
 
+/**
+ * Whether this actor may act on this target — and the tenant predicate the write must carry.
+ *
+ * Every mutating action loaded its target without a tenant and then wrote with `.eq("id", …)`
+ * alone. This route holds the service key, which bypasses row-level security, so a business
+ * owner who knew a user's UUID from another business could deactivate that person, change their
+ * commission, reset their password, or change their rank. Nothing had to be forged. The
+ * identifier was the whole attack.
+ *
+ * Three things follow from that, and all three are here rather than repeated four times:
+ *
+ *   1. The target is loaded WITH its tenant.
+ *   2. The tenant is compared against the actor's.
+ *   3. The tenant is returned so the caller can put it in the UPDATE.
+ *
+ * The third is the one that is easy to skip. A check that runs before the write and is not
+ * repeated in it is a check that a tenant change between the two walks straight past.
+ *
+ * A target in another business is reported as not found. "You may not touch that account"
+ * confirms the account exists, which is the answer somebody probing for it wants.
+ *
+ * A manager maintains the installation and may act across businesses — that is their reason for
+ * existing, and it is how a locked-out owner gets back in. They must name the business they are
+ * acting in, and it must be the one the target is actually in. That is the smallest honest form
+ * of an explicit tenant context; the audited, expiring, step-up support mode is its own change.
+ */
+export async function authorizeTarget(service, actor, userId, options = {}) {
+  const { columns = "id,name,role,admin_level,deleted", requestedTenantId = null } = options;
+  const notFound = { status: 404, body: { error: "ئەکاونت نەدۆزرایەوە", code: "target_not_found" } };
+
+  if (!userId) {
+    return { ok: false, status: 400, body: { error: "userId پێویستە", code: "user_id_required" } };
+  }
+
+  const select = columns.includes("tenant_id") ? columns : `${columns},tenant_id`;
+  const { data: target, error } = await service
+    .from("app_users").select(select).eq("id", userId).maybeSingle();
+  if (error) {
+    const e = new Error(`target lookup failed: ${error.message || error.code || "unknown"}`);
+    e.status = 500;
+    e.code = "target_lookup_failed";
+    throw e;
+  }
+  if (!target?.id) return { ok: false, ...notFound };
+
+  const actorTenant = actor.profile.tenant_id || null;
+  const targetTenant = target.tenant_id || null;
+
+  if (isManager(actor.profile)) {
+    // A manager acting inside a business must say which one, and be right about it.
+    const named = String(requestedTenantId || "").trim() || null;
+    if (targetTenant && named !== targetTenant) {
+      return {
+        ok: false,
+        status: 400,
+        body: {
+          error: "بۆ ئەم کردارە دەبێت بازرگانییەکە بە ڕوونی دیاری بکەیت",
+          code: "tenant_context_required",
+        },
+      };
+    }
+  } else {
+    // Everybody else acts inside their own business and nowhere else. An actor with no business
+    // has no business to act in, which is a refusal rather than a wildcard.
+    if (!actorTenant || targetTenant !== actorTenant) return { ok: false, ...notFound };
+  }
+
+  return { ok: true, target, tenantId: targetTenant };
+}
+
+/** Narrow an update to the tenant the target was authorized in. Null means the row has none. */
+export const withinTenant = (query, tenantId) =>
+  tenantId === null ? query.is("tenant_id", null) : query.eq("tenant_id", tenantId);
+
 async function writeAudit(service, action, detail) {
   const { error } = await service.from("audit").insert({
     id: auditId(),
@@ -349,13 +423,12 @@ export default async function handler(req, res) {
         return res.status(400).json({ error: "ناتوانیت ئەکاونتی خۆت لەم شوێنە ناچالاک بکەیت" });
       }
 
-      const { data: target, error: targetError } = await service
-        .from("app_users")
-        .select("id,name,role,admin_level,deleted")
-        .eq("id", userId)
-        .maybeSingle();
-      if (targetError) throw targetError;
-      if (!target?.id) return res.status(404).json({ error: "ئەکاونت نەدۆزرایەوە" });
+      const decision = await authorizeTarget(service, actor, userId, {
+        columns: "id,name,role,admin_level,deleted",
+        requestedTenantId: body.tenantId,
+      });
+      if (!decision.ok) return res.status(decision.status).json(decision.body);
+      const target = decision.target;
       if (target.role === "admin") {
         if (!isOwner(actor.profile)) {
           return res.status(403).json({ error: "تەنها ماناجەر یان سەرخێڵ دەتوانێت ئەدمین ناچالاک بکات", code: "owner_required" });
@@ -370,11 +443,14 @@ export default async function handler(req, res) {
         }
       }
 
-      const { error: updateError } = await service
-        .from("app_users")
-        .update({ deleted: true })
-        .eq("id", userId);
+      const { data: changed, error: updateError } = await withinTenant(
+        service.from("app_users").update({ deleted: true }).eq("id", userId),
+        decision.tenantId,
+      ).select("id");
       if (updateError) throw updateError;
+      // Nothing changed means the row moved out from under the check between reading and
+      // writing. That is a refusal, not a success with no effect.
+      if (!changed?.length) return res.status(409).json({ error: "ئەکاونتەکە گۆڕا لە کاتی کارەکەدا", code: "target_changed" });
 
       await writeAudit(
         service,
@@ -392,23 +468,23 @@ export default async function handler(req, res) {
         return res.status(400).json({ error: "userId و ڕێژەی ٠ تا ١٠٠ پێویستن" });
       }
 
-      const { data: target, error: targetError } = await service
-        .from("app_users")
-        .select("id,name,role,deleted")
-        .eq("id", userId)
-        .eq("deleted", false)
-        .maybeSingle();
-      if (targetError) throw targetError;
-      if (!target?.id) return res.status(404).json({ error: "ئەکاونت نەدۆزرایەوە" });
+      const decision = await authorizeTarget(service, actor, userId, {
+        columns: "id,name,role,deleted",
+        requestedTenantId: body.tenantId,
+      });
+      if (!decision.ok) return res.status(decision.status).json(decision.body);
+      const target = decision.target;
+      if (target.deleted) return res.status(404).json({ error: "ئەکاونت نەدۆزرایەوە", code: "target_not_found" });
       if (!["partner", "investor"].includes(target.role)) {
         return res.status(400).json({ error: "ڕێژە تەنها بۆ هاوبەش یان وەبەرهێنەرە" });
       }
 
-      const { error: updateError } = await service
-        .from("app_users")
-        .update({ rate })
-        .eq("id", userId);
+      const { data: changed, error: updateError } = await withinTenant(
+        service.from("app_users").update({ rate }).eq("id", userId),
+        decision.tenantId,
+      ).select("id");
       if (updateError) throw updateError;
+      if (!changed?.length) return res.status(409).json({ error: "ئەکاونتەکە گۆڕا لە کاتی کارەکەدا", code: "target_changed" });
 
       await writeAudit(
         service,
@@ -427,17 +503,20 @@ export default async function handler(req, res) {
     if (action === "reset_password") {
       const userId = String(body.userId || "").trim();
       const password = String(body.password || "");
+      // The message said twelve and the check said eight. Whichever number is right, a screen
+      // that is told one rule while the server applies another reads as the system being broken.
+      // Both say eight; raising the policy is its own change, with the interface and all three
+      // languages moved together.
       if (!userId || password.length < 8) {
-        return res.status(400).json({ error: "userId و وشەی نهێنیی لانیکەم ١٢ پیت پێویستن" });
+        return res.status(400).json({ error: "userId و وشەی نهێنیی لانیکەم ٨ پیت پێویستن", code: "password_too_short" });
       }
 
-      const { data: target, error: targetError } = await service
-        .from("app_users")
-        .select("id,name,role,admin_level,auth_id,deleted")
-        .eq("id", userId)
-        .maybeSingle();
-      if (targetError) throw targetError;
-      if (!target?.id) return res.status(404).json({ error: "ئەکاونت نەدۆزرایەوە" });
+      const decision = await authorizeTarget(service, actor, userId, {
+        columns: "id,name,role,admin_level,auth_id,deleted",
+        requestedTenantId: body.tenantId,
+      });
+      if (!decision.ok) return res.status(decision.status).json(decision.body);
+      const target = decision.target;
       if (target.deleted) return res.status(400).json({ error: "ئەکاونتەکە ناچالاکە" });
       if (!target.auth_id) return res.status(400).json({ error: "ئەم ئەکاونتە لۆگینی نییە" });
 
@@ -476,13 +555,12 @@ export default async function handler(req, res) {
         return res.status(400).json({ error: "userId و پلەی دروست پێویستن (manager/owner/operator)" });
       }
 
-      const { data: target, error: targetError } = await service
-        .from("app_users")
-        .select("id,name,role,admin_level,deleted")
-        .eq("id", userId)
-        .maybeSingle();
-      if (targetError) throw targetError;
-      if (!target?.id) return res.status(404).json({ error: "ئەکاونت نەدۆزرایەوە" });
+      const decision = await authorizeTarget(service, actor, userId, {
+        columns: "id,name,role,admin_level,deleted",
+        requestedTenantId: body.tenantId,
+      });
+      if (!decision.ok) return res.status(decision.status).json(decision.body);
+      const target = decision.target;
       if (target.role !== "admin") return res.status(400).json({ error: "تەنها ئەدمین پلەی هەیە" });
 
       const currentLevel = target.admin_level || "operator";
@@ -504,9 +582,12 @@ export default async function handler(req, res) {
         }
       }
 
-      const { error: updateError } = await service
-        .from("app_users").update({ admin_level: level }).eq("id", userId);
+      const { data: changed, error: updateError } = await withinTenant(
+        service.from("app_users").update({ admin_level: level }).eq("id", userId),
+        decision.tenantId,
+      ).select("id");
       if (updateError) throw updateError;
+      if (!changed?.length) return res.status(409).json({ error: "ئەکاونتەکە گۆڕا لە کاتی کارەکەدا", code: "target_changed" });
 
       await writeAudit(
         service,

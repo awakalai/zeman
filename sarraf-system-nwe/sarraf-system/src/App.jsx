@@ -1392,7 +1392,7 @@ export default function App() {
       }
       const d = {
         currencies: (c.data || []).map((r) => ({ id: r.id, code: r.code, name: r.name, symbol: r.symbol, dec: r.dec, external: !!r.external, rate: r.rate == null ? null : +r.rate, buyRate: r.buy_rate == null ? null : +r.buy_rate, sellRate: r.sell_rate == null ? null : +r.sell_rate, rateUpdated: r.rate_updated })),
-        users: (u.data || []).map((r) => ({ id: r.id, authId: r.auth_id, name: r.name, role: r.role, adminLevel: r.admin_level || null, rate: +r.rate || 0, scope: Array.isArray(r.scope_curs) ? r.scope_curs : [], phone: r.phone, address: r.address, note: r.note, deleted: r.deleted })),
+        users: (u.data || []).map((r) => ({ id: r.id, authId: r.auth_id, name: r.name, role: r.role, adminLevel: r.admin_level || null, tenantId: r.tenant_id || null, rate: +r.rate || 0, scope: Array.isArray(r.scope_curs) ? r.scope_curs : [], phone: r.phone, address: r.address, note: r.note, deleted: r.deleted })),
         ledger: (l.data || []).map((r) => ({
           id: r.id, type: r.type, owner: r.owner, investorId: r.investor_id, curId: r.cur_id,
           amount: +r.amount, partnerId: r.partner_id, txId: r.tx_id, note: r.note, date: r.date,
@@ -2409,7 +2409,7 @@ export default function App() {
   const deleteUser = (u) => {
     if (!window.confirm(`ناچالاککردنی ئەکاونتی «${u.name}»؟ مێژووی دارایی دەمێنێتەوە.`)) return;
     run(async () => {
-      await adminUserRequest({ action: "deactivate", userId: u.id });
+      await adminUserRequest({ action: "deactivate", userId: u.id, tenantId: u.tenantId });
       flash("ئەکاونت ناچالاک کرا ✓");
     });
   };
@@ -2420,7 +2420,7 @@ export default function App() {
       flash("ڕێژە دەبێت لە نێوان ٠ تا ١٠٠ بێت");
       return false;
     }
-    await adminUserRequest({ action: "update_rate", userId: u.id, rate: n });
+    await adminUserRequest({ action: "update_rate", userId: u.id, rate: n, tenantId: u.tenantId });
     flash("ڕێژە نوێ کرایەوە ✓");
   });
 

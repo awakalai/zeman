@@ -86,14 +86,14 @@ export function ManagerCenter({ users = [], profile, lang = "ku", request, flash
     const objection = rankObjection(profile, user, level)
       || lastManagerObjection(users, user, level);
     if (objection) { setError(objection); return; }
-    await send(`rank:${user.id}`, { action: "set_level", userId: user.id, adminLevel: level });
+    await send(`rank:${user.id}`, { action: "set_level", userId: user.id, adminLevel: level, tenantId: user.tenantId });
   }, [profile, users, send]);
 
   const resetPassword = useCallback(async () => {
     const user = users.find((u) => u.id === pwTarget);
     const objection = passwordObjection(profile, user) || passwordTooShort(pw);
     if (objection) { setError(objection); return; }
-    const ok = await send(`pw:${user.id}`, { action: "reset_password", userId: user.id, password: pw });
+    const ok = await send(`pw:${user.id}`, { action: "reset_password", userId: user.id, password: pw, tenantId: user.tenantId });
     // Cleared whether or not it worked: a failed attempt is not a reason to keep it on screen.
     setPw("");
     if (ok) setPwTarget("");
