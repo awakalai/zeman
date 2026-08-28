@@ -64,9 +64,11 @@ jobs:
         # names is the no-undef rule this repository has no linter for. Three identifiers that
         # were read and never declared made receipt upload throw ReferenceError inside an event
         # handler — no message, no rows, nothing on the screen — and every other gate passed.
-        # i18n is a ratchet, not a target: the count of sentences written in one language
-        # only is recorded, and this fails if it goes up. The hole cannot grow while it is
-        # being closed.
+        # i18n does two things. Every key the interface asks for by name must have an English
+        # and an Arabic entry — that half is absolute, because tr() falls back to the Kurdish
+        # key and a missing translation is otherwise invisible. The sentences written straight
+        # into the markup are a ratchet instead: the count is recorded, and this fails if it
+        # goes up. The hole cannot grow while it is being closed.
         check: [brand, share, search, names, i18n]
     steps:
       - uses: actions/checkout@v4

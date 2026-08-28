@@ -21,6 +21,7 @@
  */
 import { readFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
+import { DICT } from "../src/i18n/dictionary.js";
 
 const ROOT = "src";
 const BASELINE = "scripts/i18n-baseline.json";
@@ -39,6 +40,103 @@ const files = [];
     else if (/\.jsx?$/.test(entry)) files.push(full);
   }
 })(ROOT);
+
+/* ─────────────────────────────────────────────────────────────────────────────
+ * Part one, and it does not ratchet: every key the interface asks for by name
+ * must exist in both dictionaries.
+ *
+ * tr("…") falls back to the Kurdish key when the dictionary has no entry, which is the right
+ * behaviour at runtime and a silent one in review: the screen renders, and an English reader
+ * simply gets Kurdish. There is nothing to notice. So this counts them instead.
+ *
+ * Three call sites pass a computed key — a lifecycle stage, an outcome, a role — read out of a
+ * table. Those tables are registered below and their Kurdish values are required in the
+ * dictionary exactly like a literal. A computed key from anywhere else fails the gate, because
+ * a table this file does not know about is a hole that reopens without anybody seeing it.
+ * ────────────────────────────────────────────────────────────────────────── */
+const KURDISH = /[؀-ۿݐ-ݿࢠ-ࣿﭐ-﷿ﹰ-﻿]/;
+const LITERAL_KEY = /\btr\(\s*"((?:[^"\\]|\\.)*)"\s*\)/g;
+const COMPUTED_KEY = /\btr\(\s*([^"\s)][^)\n]{0,30})/g;
+
+// file → the expression each computed key starts with, and the table it is read from.
+const COMPUTED = {
+  "src/components/portal/PortalReceiptSummary.jsx": [["STAGE_LABEL[", "STAGE_LABEL"]],
+  "src/components/portal/MyReceipts.jsx": [["outcome.label", "OUTCOME"]],
+  "src/App.jsx": [["ROLE_KU[", "ROLE_KU"], ["category", "XCATS"]],
+};
+
+// The Kurdish string values of `const NAME = { … }` or `const NAME = [ … ]`, however deep it goes.
+const tableValues = (text, name) => {
+  const at = text.indexOf(`const ${name} = `);
+  if (at < 0) return null;
+  const open = text[at + `const ${name} = `.length];
+  if (open !== "{" && open !== "[") return null;
+  const close = open === "{" ? "}" : "]";
+  let depth = 0, end = at;
+  for (let i = text.indexOf(open, at); i < text.length; i++) {
+    if (text[i] === open) depth += 1;
+    else if (text[i] === close && (depth -= 1) === 0) { end = i; break; }
+  }
+  // In an object the keys are English identifiers and only the values are read; in an array
+  // every string is a value.
+  const strings = open === "{" ? /:\s*"((?:[^"\\]|\\.)*)"/g : /"((?:[^"\\]|\\.)*)"/g;
+  return [...text.slice(at, end).matchAll(strings)].map((m) => m[1]).filter((v) => KURDISH.test(v));
+};
+
+const asked = new Map();       // key → the files that ask for it
+const unregistered = [];       // computed keys from a table this gate does not know
+for (const file of files.sort()) {
+  const text = readFileSync(file, "utf8");
+  const note = (key) => { if (!asked.has(key)) asked.set(key, new Set()); asked.get(key).add(file); };
+
+  for (const m of text.matchAll(LITERAL_KEY)) note(m[1].replace(/\\"/g, '"'));
+
+  const registered = COMPUTED[file] || [];
+  for (const m of text.matchAll(COMPUTED_KEY)) {
+    const expression = m[1].trim();
+    const known = registered.find(([starts]) => expression.startsWith(starts));
+    if (!known) { unregistered.push(`${file}: tr(${expression.slice(0, 40)}…`); continue; }
+    const values = tableValues(text, known[1]);
+    if (values === null) { unregistered.push(`${file}: ${known[1]} is registered but not declared here`); continue; }
+    for (const value of values) note(value);
+  }
+}
+
+const untranslated = [...asked.keys()]
+  .filter((k) => KURDISH.test(k))
+  .filter((k) => !DICT.en[k] || !DICT.ar[k])
+  .sort();
+
+if (untranslated.length || unregistered.length) {
+  for (const key of untranslated) {
+    const where = [...asked.get(key)].join(", ");
+    const gap = !DICT.en[key] && !DICT.ar[key] ? "no English, no Arabic"
+      : !DICT.en[key] ? "no English" : "no Arabic";
+    console.log(`FAIL  ${gap.padEnd(21)} ${key}   (${where})`);
+  }
+  for (const line of unregistered) console.log(`FAIL  computed key from an unregistered table — ${line}`);
+  if (untranslated.length) {
+    console.log(`\n${untranslated.length} key(s) the interface asks for are missing from src/i18n/dictionary.js.`);
+    console.log("tr() falls back to the Kurdish key, so these render as Kurdish to an English or Arabic reader.");
+  }
+  if (unregistered.length) {
+    console.log(`\n${unregistered.length} computed key(s) come from a table this gate cannot read.`);
+    console.log("Register the file and its table in COMPUTED above, so its Kurdish values are required too.");
+  }
+  process.exit(1);
+}
+
+const spare = Object.keys(DICT.en).filter((k) => !Object.hasOwn(DICT.ar, k))
+  .concat(Object.keys(DICT.ar).filter((k) => !Object.hasOwn(DICT.en, k)));
+if (spare.length) {
+  for (const key of spare) console.log(`FAIL  in one dictionary only: ${key}`);
+  process.exit(1);
+}
+
+console.log(
+  `Dictionary: ${asked.size} key(s) asked for by the interface, every one of them in English and `
+  + `Arabic (${Object.keys(DICT.en).length} entries each).`
+);
 
 const counts = {};
 for (const file of files.sort()) {
