@@ -501,10 +501,19 @@ try {
     const state = psql(`select a.status||'|'||t.status from office_payment_assignments a
       join txs t on t.id=a.transaction_id where a.id='${officeAssignmentId}'`).trim();
     if (state !== "confirmed|completed") throw new Error(`office settlement state is ${state}`);
+    // The office paid out of the office's own money, so the customer's payable is discharged
+    // against what ZEMAN now owes the office — not against ZEMAN's cash, which has not moved.
+    // This check pinned acc-1000 for weeks: the books said the safe had paid, the safe had not,
+    // and acc-2200 — قەرزی ZEMAN بۆ نووسینگە — was never credited by this path at all.
     const pair = psql(`select string_agg(account_id||':'||side,',' order by line_no)
-      from journal_lines where entry_id=(select journal_entry_id from transaction_payment_events
-        where office_assignment_id='${officeAssignmentId}' and event_kind='settled')`).trim();
-    if (pair !== "acc-2300:debit,acc-1000:credit") throw new Error(`office settlement posted ${pair}`);
+      from journal_lines where entry_id=(select id from journal_entries
+        where transaction_id=(select transaction_id from office_payment_assignments
+                               where id='${officeAssignmentId}')
+          and source_type='transaction_settlement' and id like 'je-office-paid-%')`).trim();
+    if (pair !== "acc-2300:debit,acc-2200:credit") throw new Error(`office settlement posted ${pair}`);
+    const owed = psql(`select coalesce(sum(amount),0) from account_ledger
+      where user_id=(select office_id from office_payment_assignments where id='${officeAssignmentId}')`).trim();
+    if (Number(owed) <= 0) throw new Error(`the office is owed ${owed} after covering a purchase`);
     if (!out.replace(/\s/g,"").includes('"status":"confirmed"')) throw new Error(out);
   });
 

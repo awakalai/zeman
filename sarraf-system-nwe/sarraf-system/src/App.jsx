@@ -2088,6 +2088,24 @@ export default function App() {
     }, `office-assign:${t.id}:${officeId}`);
   };
 
+  // «هەر کاتێک ویستم حسابی نووسینگەکە بدەم و تەواو.» This is the only place the money actually
+  // leaves: what the office covered has stood as a debt since it pressed, and paying it takes the
+  // safe down, the office's account down to zero and the liability off the books together.
+  const officeSettle = (officeId, curId, amount) => {
+    if (!officeId || !curId) return flash(tr("نووسینگە هەڵبژێرە"), "error");
+    if (!(amount > 0)) return flash(tr("ئەم نووسینگەیە هیچ قەرزێکی لەسەر نییە"), "error");
+    return run(async () => {
+      await rpcStrict("sarraf_office_settle", {
+        p_office_id: officeId,
+        p_cur_id: curId,
+        p_amount: amount,
+        p_reason: tr("حسابی نووسینگە درایەوە"),
+        p_command_key: commandKey("office-settle"),
+      });
+      flash(tr("حسابی نووسینگە درایەوە ✓"));
+    }, `office-settle:${officeId}:${curId}`);
+  };
+
   const addExpense = (f) => {
     const amt = roundMoney(data, Math.abs(+f.amount), f.curId);
     if (!(amt > 0)) return flash("بڕی خەرجی پێویستە");
@@ -3040,7 +3058,7 @@ export default function App() {
               : <TxList {...shared} onEdit={setEditTx} onDel={delTx} settle={settle} unsettle={unsettle} />)}
             {page === "receipts" && <ReceiptsHub {...shared} batches={batches} batchLoadError={batchLoadError} reloadBatches={reloadBatches} flash={flash} profile={profile}
               searchFocus={searchFocus} onMakeTx={(b) => { setPendingBatch(b); setPage("newtx"); }} />}
-            {page === "people" && <PeopleHub {...shared} accountMove={accountMove} accountTransfer={accountTransfer} profile={profile} detailId={detailId} setDetailId={setDetailId} onSave={saveTx} transfer={transfer} officePay={officePay} settle={settle} createUser={createUser} deleteUser={deleteUser} setUserRate={setUserRate} flash={flash} />}
+            {page === "people" && <PeopleHub {...shared} accountMove={accountMove} accountTransfer={accountTransfer} profile={profile} detailId={detailId} setDetailId={setDetailId} onSave={saveTx} transfer={transfer} officePay={officePay} officeSettle={officeSettle} settle={settle} createUser={createUser} deleteUser={deleteUser} setUserRate={setUserRate} flash={flash} />}
             {page === "report" && <Report {...shared} />}
             {/* The admin centre is one business's world. A manager belongs to no business, so
                 for them it is not a page they should not open — it is a page with no meaning. */}
@@ -3076,8 +3094,20 @@ export default function App() {
                 const { data: signed } = await supabase.storage.from("receipts").createSignedUrl(path, 3600);
                 return signed?.signedUrl || null;
               }} /></DeferredPanel>}
-            {page === "office-payments" && <DeferredPanel><OfficePayments client={supabase} lang={lang}
-              flash={flash} canConfirm={isAdmin} /></DeferredPanel>}
+            {page === "office-payments" && (() => {
+              // The office's own screen belongs to the office; this is the owner's side of it —
+              // every office, what it is owed, and the one press that pays it back.
+              const offices = data.users.filter((u) => u.role === "office" && !u.deleted);
+              return <div className="space-y-4">
+                <H sub={tr("ئەوەی نووسینگەکان لە پارەی خۆیانەوە داویانە و هێشتا وەریان نەگرتووەتەوە")}>
+                  {tr("پارەدانی نووسینگە")}
+                </H>
+                {offices.length === 0
+                  ? <Card><Empty t={tr("هیچ نووسینگەیەکی چالاک نییە")} /></Card>
+                  : offices.map((o) => <OfficeDebts key={o.id} data={data} calc={calc} officeId={o.id}
+                      title={o.name} officeSettle={officeSettle} readOnly={!isAdmin} />)}
+              </div>;
+            })()}
             {page === "partner-accounts" && <DeferredPanel><PartnerAccounts client={supabase} lang={lang} flash={flash}
               partners={(data?.users || []).filter((u) => u.role === "partner" && !u.deleted)} /></DeferredPanel>}
             {page === "partner-holdings" && <DeferredPanel><PartnerHoldings client={supabase} lang={lang}
@@ -8718,6 +8748,40 @@ function Statement({ u, txs, c, cur, onClose, flash }) {
   );
 }
 
+/* ══════════════════ قەرزی ZEMAN بۆ نووسینگە ══════════════════ */
+//
+// What an office has covered out of its own money and has not been paid back for. It rises the
+// moment the office presses «پارەم دا» and is the number the owner is answering when they say
+// «حسابی نووسینگەکە بدەم» — so the figure and the button that clears it belong on one card, and
+// that card is shown both on the office's own page and on the admin centre's office screen.
+function OfficeDebts({ data, calc, officeId, title, officeSettle, readOnly }) {
+  const owed = data.currencies
+    .map((c) => ({ c, v: (calc.acctCash[officeId] || {})[c.id] || 0 }))
+    .filter((r) => r.v > 0);
+  return (
+    <Card className="p-5">
+      <SecLbl>{title ? `${tr("قەرزی ZEMAN بۆ")} ${title}` : tr("قەرزی ZEMAN بۆ ئەم نووسینگەیە")}</SecLbl>
+      {owed.length === 0 ? <Empty t={tr("هیچ قەرزێک نەماوە ✓")} /> : owed.map(({ c, v }) => (
+        <div key={c.id} className="flex flex-wrap justify-between items-center gap-3 py-2.5 border-b border-[var(--line)] last:border-0">
+          <span className="text-sm text-[var(--txt-2)]">{c.name}</span>
+          <Money v={v} dec={c.dec} />
+          {!readOnly && (
+            <Btn kind="primary" className="flex items-center gap-1.5"
+              onClick={() => officeSettle(officeId, c.id, v)}>
+              <CheckCircle2 className="w-4 h-4" /> {tr("حسابی نووسینگە دەدەمەوە")}
+            </Btn>
+          )}
+        </div>
+      ))}
+      {owed.length > 0 && (
+        <div className="text-[11.5px] mt-3" style={{ color: "var(--txt-3)" }}>
+          {tr("ئەم پارەیە لە قاسەی گشتی دەردەچێت کاتێک حسابەکە دەدەیتەوە")}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 /* ══════════════════ ناوەندی بەکارهێنەران ══════════════════ */
 function PeopleHub(p) {
   const [tab, setTab] = useState("customers");
@@ -9311,7 +9375,7 @@ function InvestorDetail({ u, data, calc, cur, invUnpaid, mine }) {
 
 
 /* ══════════════════ نووسینگە ══════════════════ */
-function Office({ data, cur, usr, officePay, calc, accountMove, accountTransfer, flash, officeId, readOnlyUser }) {
+function Office({ data, cur, usr, officePay, officeSettle, calc, accountMove, accountTransfer, flash, officeId, readOnlyUser }) {
   const [tab, setTab] = useState("pending");
   const officeUser = officeId ? usr(officeId) : null;
   const [q, setQ] = useState("");
@@ -9438,8 +9502,12 @@ function Office({ data, cur, usr, officePay, calc, accountMove, accountTransfer,
       )}
 
       {tab === "safe" && officeId && (
-        <AccountSafe userId={officeId} data={data} calc={calc} cur={cur} usr={usr}
-          accountMove={accountMove} accountTransfer={accountTransfer} flash={flash} readOnly={!!readOnlyUser} />
+        <>
+          <OfficeDebts data={data} calc={calc} officeId={officeId} title={usr(officeId)?.name}
+            officeSettle={officeSettle} readOnly={!!readOnlyUser} />
+          <AccountSafe userId={officeId} data={data} calc={calc} cur={cur} usr={usr}
+            accountMove={accountMove} accountTransfer={accountTransfer} flash={flash} readOnly={!!readOnlyUser} />
+        </>
       )}
     </div>
   );
