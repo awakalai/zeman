@@ -154,3 +154,53 @@ test("pressing the button always says something, even when it refuses to act", (
   assert.ok(/flash\?\.\(tr\("هەردوو دراوەکە هەڵبژێرە"\), "error"\)/.test(body),
     "the empty-currency case no longer says which box is the problem");
 });
+
+/**
+ * Reported from a real screen, and the sharpest of the three.
+ *
+ * The owner opened a batch of a customer's receipts in yuan, pressed «درووستکردنی کڕین لەم
+ * فیشانەوە», chose «Bryar» under «لە کوێ دای دەنێیت؟», and was told:
+ *
+ *   دراوی دەرەکی پێویستی بە هاوبەشێکی دیاریکراوە کە پارەکەی لایە (ZE-23514)
+ *
+ * They had named somebody. The system said they had named nobody. Both were right:
+ *
+ *   v_tx := p_tx || jsonb_build_object(…, 'partner_id', v_partner, …)
+ *
+ * `v_partner` is read from the RECEIPTS. Whatever the form sent was overwritten before a single
+ * rule saw it — and a customer-seller's receipts carry no partner at all.
+ *
+ * That overwrite is the system's design, and a sound one: custody is evidence about particular
+ * receipts, recorded on the batch screen by its own command with its own reason and audit trail.
+ * The defect was never the rule. It was a screen offering a choice it would throw away, and then
+ * blaming the owner for the emptiness it had created.
+ */
+test("the custody box does not offer a choice the conversion will discard", () => {
+  const app = readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8");
+  assert.ok(/const custodyFromReceipts = !!batch;/.test(app),
+    "the form no longer knows that a batch conversion takes its custody from the receipts");
+  assert.ok(/<Sel value=\{f\.partnerId\} disabled=\{custodyFromReceipts\}/.test(app),
+    "the custody box is editable again during a batch conversion");
+  assert.ok(/فیشەکان لای کەس دانەنراون/.test(app),
+    "an unplaced batch no longer says so in the box itself");
+  assert.ok(/دابەشکردن بەسەر هاوبەشەکان/.test(app),
+    "the owner is no longer told which screen sets custody");
+});
+
+test("and it will not send a conversion the receipts cannot support", () => {
+  const app = readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8");
+  assert.ok(/const custodyMustBeSetFirst = receiptsNameNobody && !f\.direct && !!cur\(f\.curId\)\.external;/.test(app),
+    "the condition no longer matches the server's own");
+  const guards = [...app.matchAll(/onClick=\{submit\} disabled=\{([^}]*)\}/g)].map((m) => m[1]);
+  assert.ok(guards.some((g) => /\bcustodyMustBeSetFirst\b/.test(g)),
+    `no submit button stops an unplaced batch: ${guards.join(" / ")}`);
+});
+
+test("the conversion still takes custody from the receipts, not from the form", () => {
+  const sql = readFileSync(
+    new URL("../supabase/migrations/202608110001_receipt_assurance.sql", import.meta.url), "utf8");
+  assert.ok(/'partner_id',\s*v_partner/.test(sql),
+    "the conversion now takes the form's word for who holds the money");
+  assert.ok(/if v_partner is null then v_partner:=v_batch\.partner_id; end if;/.test(sql),
+    "the batch is no longer the fallback for custody");
+});
