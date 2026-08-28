@@ -2,6 +2,7 @@
 -- describe rather than the one it posted for weeks?
 --
 --   202608280025  one press, and the office is owed
+--   202608280026  the owner may look at an office's board
 --
 -- Every question below has a right answer written next to it. Anything else is worth stopping for.
 
@@ -21,8 +22,9 @@ select v as "version",
               when '202608280023' then 'یەک کۆمەڵە پۆلیسی لەسەر txs'
               when '202608280024' then 'هاوبەش لە شاشەی کڕین'
               when '202608280025' then 'یەک لێدان — نووسینگە قەرزار دەبێت'
+              when '202608280026' then 'خاوەن کارەکە سەیری کارتی نووسینگە دەکات'
        end as "what"
-  from (values ('202608280022'),('202608280023'),('202608280024'),('202608280025')) t(v);
+  from (values ('202608280023'),('202608280024'),('202608280025'),('202608280026')) t(v);
 
 \echo ''
 \echo '════════ 2. سێ فەرمانە نوێیەکە لەوێن؟ ════════'
@@ -93,6 +95,32 @@ select case when exists (
          select 1 from pg_enum e join pg_type t on t.oid = e.enumtypid
           where t.typname = 'voucher_kind' and e.enumlabel = 'office_settlement')
        then 'office_settlement هەیە ✓' else '— نییە' end as "voucher kind";
+
+\echo ''
+\echo '════════ 5.b کارتی نووسینگە — خاوەن کارەکە دەتوانێت سەیری بکات؟ ════════'
+\echo '   پێویستە: دوو ئارگومێنت ✓  ·  یەک ئارگومێنتی کۆن نەماوە ✓  ·  ئەدمین ڕێپێدراوە ✓'
+\echo ''
+
+select case when exists (
+         select 1 from pg_proc p where p.proname = 'sarraf_office_board'
+          and p.pronamespace = 'public'::regnamespace
+          and pg_get_function_identity_arguments(p.oid) = 'integer, text')
+       then 'دوو ئارگومێنت ✓' else '— نییە' end as "signature",
+       case when exists (
+         select 1 from pg_proc p where p.proname = 'sarraf_office_board'
+          and p.pronamespace = 'public'::regnamespace
+          and pg_get_function_identity_arguments(p.oid) = 'integer')
+       then '⚠ شێوەی کۆن هێشتا ماوە' else 'شێوەی کۆن نەماوە ✓' end as "old form",
+       case when (select pg_get_functiondef(p.oid) from pg_proc p
+                   where p.proname = 'sarraf_office_board'
+                     and p.pronamespace = 'public'::regnamespace limit 1)
+                 like '%elsif v_actor.role = ''admin''%'
+       then 'ئەدمین ڕێپێدراوە ✓' else '⚠ ئەدمین هێشتا ڕەت دەکرێتەوە' end as "admin",
+       case when (select pg_get_functiondef(p.oid) from pg_proc p
+                   where p.proname = 'sarraf_office_board'
+                     and p.pronamespace = 'public'::regnamespace limit 1)
+                 like '%may_pay%'
+       then 'may_pay دەگەڕێنێتەوە ✓' else '⚠ شاشەکە نازانێت دوگمە پیشان بدات یان نا' end as "may_pay";
 
 \echo ''
 \echo '════════ 6. ئەرکەکانی نووسینگە لە ئێستادا ════════'
