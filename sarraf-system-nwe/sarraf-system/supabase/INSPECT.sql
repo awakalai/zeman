@@ -1,8 +1,7 @@
--- Did the last three migrations land, and is the live database now the one the gates describe?
+-- Did the office-payment rework land, and does the live database now post the entry the gates
+-- describe rather than the one it posted for weeks?
 --
---   202608280022  faults reach somebody who can fix them
---   202608280023  one read policy set on txs, matching the migration files
---   202608280024  one press: name the holder where the purchase is made
+--   202608280025  one press, and the office is owed
 --
 -- Every question below has a right answer written next to it. Anything else is worth stopping for.
 
@@ -12,107 +11,113 @@
 \pset pager off
 
 \echo ''
-\echo '════════ 1. کام مایگرەیشن جێبەجێ کراوە؟ ════════'
+\echo '════════ 1. مایگرەیشنەکە جێبەجێ کراوە؟ ════════'
 \echo ''
 
 select v as "version",
        case when exists (select 1 from public.schema_migrations m where m.version = v)
             then 'جێبەجێ کراوە ✓' else '— چاوەڕوانە' end as "state",
-       case v when '202608280019' then 'ئیندێکسەکان'
-              when '202608280020' then 'تینانت یەک جار'
-              when '202608280021' then 'پۆلیسییەکانی خوێندنەوە'
-              when '202608280022' then 'تۆمارکردنی شکست'
+       case v when '202608280022' then 'تۆمارکردنی شکست'
               when '202608280023' then 'یەک کۆمەڵە پۆلیسی لەسەر txs'
-              when '202608280024' then 'یەک لێدان — هاوبەش لە شاشەی کڕین'
+              when '202608280024' then 'هاوبەش لە شاشەی کڕین'
+              when '202608280025' then 'یەک لێدان — نووسینگە قەرزار دەبێت'
        end as "what"
-  from (values ('202608280019'),('202608280020'),('202608280021'),
-               ('202608280022'),('202608280023'),('202608280024')) t(v);
+  from (values ('202608280022'),('202608280023'),('202608280024'),('202608280025')) t(v);
 
 \echo ''
-\echo '════════ 2. یەک لێدان — ئایا فەرمانەکە هاوبەشی فۆرمەکە دەناسێتەوە؟ ════════'
-\echo ''
-\echo 'هەردووکیان دەبێت «هەیە ✓» بن. ئەگەر custody بانگ نەکرێت، بەڵگەکە هەمان بەڵگە نییە.'
-\echo ''
-
-select 'هاوبەشی فۆرمەکە وەردەگیرێت' as "what",
-       case when pg_get_functiondef(p.oid) like '%v_named:=nullif(btrim(p_tx->>''partner_id'')%'
-            then 'هەیە ✓' else 'نییە — هەڵبژاردنەکە هێشتا دەسڕدرێتەوە' end as "state"
-  from pg_proc p join pg_namespace n on n.oid = p.pronamespace
- where n.nspname = 'public' and p.proname = 'sarraf_convert_receipt_batch_to_transaction'
-union all
-select 'custody بە فەرمانی خۆی تۆمار دەکرێت',
-       case when pg_get_functiondef(p.oid) like '%sarraf_assign_receipt_custody%'
-            then 'هەیە ✓' else 'نییە — بەسەر فەرمانی custodyدا تێدەپەڕێت' end
-  from pg_proc p join pg_namespace n on n.oid = p.pronamespace
- where n.nspname = 'public' and p.proname = 'sarraf_convert_receipt_batch_to_transaction';
-
-\echo ''
-\echo '════════ 3. پۆلیسییەکانی خوێندنەوەی txs — دەبێت سێ بن ════════'
+\echo '════════ 2. سێ فەرمانە نوێیەکە لەوێن؟ ════════'
+\echo '   پێویستە هەر سێکیان: هەیە ✓  و  sarraf_definer'
 \echo ''
 
-select policyname as "policy",
-       case when coalesce(qual,'') ~ '(^|[^.[:alnum:]_])(is_admin|my_app_id|my_role)\(\)'
-             and coalesce(qual,'') !~ 'SELECT (is_admin|my_app_id|my_role)'
-            then 'بۆ هەر ڕیزێک' else 'یەک جار ✓' end as "asked"
-  from pg_policies
- where schemaname = 'public' and tablename = 'txs' and permissive = 'PERMISSIVE'
-   and coalesce(qual,'') <> 'true'
- order by policyname;
+select v as "command",
+       case when p.oid is null then '— نییە' else 'هەیە ✓' end as "state",
+       coalesce(pg_get_userbyid(p.proowner), '—') as "owner",
+       case when p.prosecdef then 'security definer' else 'invoker' end as "kind"
+  from (values ('sarraf_office_payment_paid'),
+               ('sarraf_office_settle'),
+               ('sarraf_office_board'),
+               ('sarraf_office_payment_post'),
+               ('sarraf_office_paid_since')) t(v)
+  left join pg_proc p on p.proname = v
+   and p.pronamespace = 'public'::regnamespace;
 
 \echo ''
-\echo '  ── txs_authorized_read دەبێت نەمابێت ──'
+\echo '════════ 3. لێدانی نووسینگە قەرزەکە دەگوێزێتەوە، پارە ناجوڵێت؟ ════════'
+\echo '   پێویستە: acc-2200 هەیە ✓   و   acc-1000 نییە ✓'
 \echo ''
 
-select case when exists (select 1 from pg_policies
-                          where schemaname='public' and tablename='txs'
-                            and policyname='txs_authorized_read')
-            then 'هێشتا لەوێیە — 202608280023 جێبەجێ نەکراوە'
-            else 'لابراوە ✓ — ژیان لەگەڵ فایلەکاندا یەک دەگرێتەوە' end as "state";
+with body as (
+  select pg_get_functiondef(p.oid) as src
+    from pg_proc p
+   where p.proname = 'sarraf_office_payment_post'
+     and p.pronamespace = 'public'::regnamespace
+   limit 1
+)
+select case when src is null then '— فەرمانەکە نییە'
+            when src like '%''acc-2300'', ''acc-2200''%' then 'قەرزەکە دەچێتە سەر نووسینگە ✓'
+            else '⚠ لقی مامەڵە ئەو دوو حسابە ناناسێت' end as "acc-2200",
+       case when src is null then '—'
+            when src like '%acc-1000%' then '⚠ هێشتا قاسەی سەرەکی دەبات'
+            else 'قاسە دەستی لێ نادرێت ✓' end as "acc-1000",
+       case when src is null then '—'
+            when src like '%transaction_payment_events%' then '⚠ هێشتا ڕووداوی پارەدان دەنووسێت'
+            else 'ڕووداوی پارەدان نانووسرێت ✓' end as "cash trigger",
+       case when src is null then '—'
+            when src like '%account_ledger%' then 'حسابی نووسینگە دەنووسرێت ✓'
+            else '⚠ حسابی نووسینگە نانووسرێت' end as "office account"
+  from body;
 
 \echo ''
-\echo '════════ 4. تۆمارکردنی شکست — ئایا خشتەکە پارێزراوە؟ ════════'
+\echo '════════ 4. حسابدانەوە: acc-2200 دەبڕدرێتەوە و قاسە کەم دەبێت؟ ════════'
+\echo '   پێویستە هەر چوارکیان ✓'
 \echo ''
 
-select 'خشتەکە هەیە' as "what",
-       case when to_regclass('public.zeman_faults') is null then 'نییە' else 'هەیە ✓' end as "state"
-union all
-select 'RLS زۆرکراوە (force)',
-       coalesce((select case when relforcerowsecurity then 'بەڵێ ✓' else 'نەخێر — فەنکشنێکی دیفاینەر هەموو بزنسێک دەبینێت' end
-                   from pg_class where oid = to_regclass('public.zeman_faults')), '⟨خشتەکە نییە⟩')
-union all
-select 'ئیندێکسی تایبەت (لووپی تێکشکان)',
-       case when exists (select 1 from pg_indexes where schemaname='public'
-                          and indexname='zeman_faults_one_per_day')
-            then 'هەیە ✓' else 'نییە — تێکشکان دەتوانێت خشتەکە پڕ بکات' end
-union all
-select 'پۆلیسی سنووردارکەری تینانت',
-       case when exists (select 1 from pg_policies where schemaname='public'
-                          and tablename='zeman_faults' and permissive='RESTRICTIVE')
-            then 'هەیە ✓' else 'نییە' end;
+with body as (
+  select pg_get_functiondef(p.oid) as src
+    from pg_proc p
+   where p.proname = 'sarraf_office_settle' and p.pronamespace = 'public'::regnamespace
+   limit 1
+)
+select case when src like '%''acc-2200'', ''acc-1000''%' then 'دەفتەر ✓' else '⚠ دەفتەر' end as "journal",
+       case when src like '%account_ledger%' then 'حساب ✓' else '⚠ حساب' end as "account",
+       case when src like '%public.ledger%' then 'قاسە ✓' else '⚠ قاسە' end as "safe",
+       case when src like '%that is more than this office is owed%' then 'سنوور ✓' else '⚠ سنوور' end as "guard"
+  from body;
 
 \echo ''
-\echo '  ── و ئایا شتێک تۆمار کراوە؟ ──'
+\echo '════════ 5. voucher_kind ناوی نوێی هەیە؟ ════════'
+\echo '   پێویستە: office_settlement هەیە ✓'
 \echo ''
 
-select coalesce(kind,'⟨هیچ⟩') as "kind", coalesce(code,'') as "code",
-       coalesce(screen,'') as "screen", sum(seen) as "seen", max(last_at) as "last"
-  from public.zeman_faults
- group by kind, code, screen
- order by max(last_at) desc
- limit 10;
+select case when exists (
+         select 1 from pg_enum e join pg_type t on t.oid = e.enumtypid
+          where t.typname = 'voucher_kind' and e.enumlabel = 'office_settlement')
+       then 'office_settlement هەیە ✓' else '— نییە' end as "voucher kind";
 
 \echo ''
-\echo '════════ 5. فیشەکان و مامەڵەکان ════════'
+\echo '════════ 6. ئەرکەکانی نووسینگە لە ئێستادا ════════'
 \echo ''
 
-select 'فیشی گەیشتوو' as "what", count(*)::text as "n" from public.receipt_intake_items
-union all
-select 'لەوانەی گۆڕدراون بۆ مامەڵە',
-       count(*) filter (where transaction_id is not null)::text from public.receipt_intake_items
-union all
-select 'فیش کە لای هاوبەشێک دانراون',
-       count(*) filter (where partner_id is not null)::text from public.receipt_intake_items
-union all
-select 'ڕیزی custody', count(*)::text from public.receipt_custody
-union all
-select 'مامەڵە', count(*)::text from public.txs where not deleted;
+select status::text as "state", count(*) as "how many",
+       coalesce(string_agg(distinct currency, ', '), '—') as "currencies"
+  from public.office_payment_assignments
+ group by status
+ order by 2 desc;
+
+\echo ''
+\echo '════════ 7. ئێستا ZEMAN چەندی قەرزارە بۆ نووسینگەکان؟ ════════'
+\echo '   ئەمە ئەو ژمارەیەیە کە دوگمەی «حسابی نووسینگە دەدەمەوە» سفری دەکاتەوە'
+\echo ''
+
+select u.name as "office", c.code as "currency", sum(a.amount) as "owed"
+  from public.account_ledger a
+  join public.app_users u on u.id = a.user_id and u.role = 'office'
+  join public.currencies c on c.id = a.cur_id
+ where a.kind = 'cash'
+ group by u.name, c.code
+having sum(a.amount) <> 0
+ order by 1, 2;
+
+\echo ''
+\echo '════════ تەواو ════════'
+\echo ''
