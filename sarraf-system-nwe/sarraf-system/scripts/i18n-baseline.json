@@ -1,7 +1,7 @@
 {
-  "total": 1133,
+  "total": 1132,
   "counts": {
-    "src/App.jsx": 690,
+    "src/App.jsx": 688,
     "src/brand/brand.js": 1,
     "src/components/accounting/BooksReconciliation.jsx": 9,
     "src/components/accounting/CashboxPanel.jsx": 12,
@@ -30,6 +30,7 @@
     "src/services/currencyRate.js": 2,
     "src/services/dayClose.js": 2,
     "src/services/debtRegister.js": 29,
+    "src/services/flashTone.js": 1,
     "src/services/managerConsole.js": 9,
     "src/services/partnerBatches.js": 16,
     "src/services/receiptDisplay.js": 3,
