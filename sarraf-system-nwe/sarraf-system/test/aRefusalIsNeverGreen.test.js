@@ -79,8 +79,14 @@ test("the form will not send a transaction the database must refuse", () => {
   const app = readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8");
   assert.ok(/const needsCustodian = !f\.direct && !f\.partnerId && !!cur\(f\.curId\)\.external;/.test(app),
     "the custody rule is no longer mirrored in the form");
-  assert.ok(/disabled=\{sending \|\| busy \|\| needsCustodian\}/.test(app),
-    "the submit button no longer refuses to send what the server will refuse");
+  // Matched loosely on purpose: more guards will be added to this button over time, and a test
+  // that pins the whole expression fails for the wrong reason every time one is.
+  // There is more than one `onClick={submit}` in this file, so the one that records a trade is
+  // picked out by the kind it renders with, not by being the first one found.
+  const guards = [...app.matchAll(/onClick=\{submit\} disabled=\{([^}]*)\}/g)].map((m) => m[1]);
+  assert.ok(guards.length > 0, "the submit button no longer has a disabled expression at all");
+  assert.ok(guards.some((g) => /\bneedsCustodian\b/.test(g)),
+    `no submit button refuses what the server will refuse: ${guards.join(" / ")}`);
 });
 
 test("and the server's rule is still the server's", () => {
@@ -88,4 +94,63 @@ test("and the server's rule is still the server's", () => {
     new URL("../supabase/migrations/202608180002_core_command_contracts.sql", import.meta.url), "utf8");
   assert.ok(sql.includes("external currency requires an explicit custody partner"),
     "the database no longer enforces custody — the form is not a substitute for the rule");
+});
+
+/**
+ * Two more rules the database refuses at the same late moment, and one rule about who is
+ * allowed to be sure.
+ *
+ *   raise 23514 'sale would create negative inventory'   -- v_amount > v_qty
+ *   raise 23514 'inventory cost basis is incomplete'     -- v_avg is null
+ *
+ * The form has computed exactly this all along — `enoughCostBasis` — and used it only to decide
+ * whether to show an estimated profit. Selling more than the office held went to the server and
+ * came back refused.
+ *
+ * The subtle part is not the guard. It is that the guard must only fire on a number the SERVER
+ * produced. `inventoryPosition` prefers the server's own snapshot and falls back to arithmetic
+ * over whatever transactions this browser happens to have loaded. Blocking a sale on the second
+ * kind of number would stop an owner making a sale that was perfectly legitimate — a worse
+ * failure than the late refusal this replaces.
+ */
+test("the sale is stopped only on a figure the server itself produced", () => {
+  const app = readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8");
+  assert.ok(/fromServer: true,/.test(app), "the server snapshot no longer says it is the server's");
+  assert.ok(/fromServer: false,/.test(app), "the browser's own arithmetic no longer says so");
+  assert.ok(/const inventoryRefuses = \(shortOfStock \|\| costBasisMissing\) && pos\?\.fromServer === true;/.test(app),
+    "the guard no longer requires the server's own number");
+  assert.ok(/const inventoryDoubts = \(shortOfStock \|\| costBasisMissing\) && pos\?\.fromServer !== true;/.test(app),
+    "a figure worked out here no longer merely warns");
+  const guards = [...app.matchAll(/onClick=\{submit\} disabled=\{([^}]*)\}/g)].map((m) => m[1]);
+  assert.ok(guards.some((g) => /\binventoryRefuses\b/.test(g)),
+    `no submit button stops a sale the server would refuse: ${guards.join(" / ")}`);
+  assert.ok(!guards.some((g) => /\binventoryDoubts\b/.test(g)),
+    "a figure this browser worked out for itself is stopping a sale");
+});
+
+test("the database still owns both inventory rules", () => {
+  const sql = readFileSync(
+    new URL("../supabase/migrations/202608180002_core_command_contracts.sql", import.meta.url), "utf8");
+  for (const rule of ["sale would create negative inventory", "inventory cost basis is incomplete"]) {
+    assert.ok(sql.includes(rule), `the database no longer enforces: ${rule}`);
+  }
+});
+
+test("pressing the button always says something, even when it refuses to act", () => {
+  const app = readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8");
+  const submit = app.slice(app.indexOf("const submit = async () => {"));
+  const body = submit.slice(0, submit.indexOf("setSending(true);"));
+  // Every early exit before the command is attempted must leave a message behind. A `return`
+  // with nothing said is a button that does nothing when pressed, which is how this one behaved
+  // when either currency box was empty.
+  const lines = body.split("\n");
+  const silent = lines.filter((l, i) => {
+    if (!/^\s*(if \([^)]*\) )?return;\s*$/.test(l)) return false;
+    if (/sending \|\| busy/.test(l)) return false;              // the re-entry guard says nothing on purpose
+    const said = lines.slice(Math.max(0, i - 3), i).join(" ");   // …but every other exit must
+    return !/flash\??\.?\(/.test(said);
+  }).map((l) => l.trim());
+  assert.deepEqual(silent, [], "these leave the owner pressing a button that does nothing");
+  assert.ok(/flash\?\.\(tr\("هەردوو دراوەکە هەڵبژێرە"\), "error"\)/.test(body),
+    "the empty-currency case no longer says which box is the problem");
 });
