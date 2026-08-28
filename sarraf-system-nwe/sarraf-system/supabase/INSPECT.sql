@@ -1,10 +1,11 @@
--- Did the office-payment rework land, and does the live database now post the entry the gates
--- describe rather than the one it posted for weeks?
+-- ── BASELINE ────────────────────────────────────────────────────────────────
 --
---   202608280025  one press, and the office is owed
---   202608280026  the owner may look at an office's board
+-- Read-only. Everything the production-readiness brief asks to be recorded before any change:
+-- migration ledgers, system health, tenantless rows, storage integrity, function privileges,
+-- and the state of the accounts that operate the business.
 --
--- Every question below has a right answer written next to it. Anything else is worth stopping for.
+-- Every question has the answer it should give written beside it. Anything else is worth
+-- stopping for. Nothing here writes; the workflow opens the transaction read-only.
 
 \pset format aligned
 \pset border 2
@@ -12,140 +13,139 @@
 \pset pager off
 
 \echo ''
-\echo '════════ 1. مایگرەیشنەکە جێبەجێ کراوە؟ ════════'
+\echo '════════ 1. دوو دەفتەری مایگرەیشن ════════'
+\echo '   پێویستە: هەردووکیان هەمان ژمارە — دوو سەرچاوەی جیاوازی ڕاستی مەترسیدارە'
 \echo ''
 
-select v as "version",
-       case when exists (select 1 from public.schema_migrations m where m.version = v)
-            then 'جێبەجێ کراوە ✓' else '— چاوەڕوانە' end as "state",
-       case v when '202608280022' then 'تۆمارکردنی شکست'
-              when '202608280023' then 'یەک کۆمەڵە پۆلیسی لەسەر txs'
-              when '202608280024' then 'هاوبەش لە شاشەی کڕین'
-              when '202608280025' then 'یەک لێدان — نووسینگە قەرزار دەبێت'
-              when '202608280026' then 'خاوەن کارەکە سەیری کارتی نووسینگە دەکات'
-       end as "what"
-  from (values ('202608280023'),('202608280024'),('202608280025'),('202608280026')) t(v);
+select
+  (select count(*) from public.schema_migrations) as "zeman ledger",
+  (select count(*) from supabase_migrations.schema_migrations) as "supabase ledger",
+  (select max(version) from public.schema_migrations) as "latest applied";
 
 \echo ''
-\echo '════════ 2. سێ فەرمانە نوێیەکە لەوێن؟ ════════'
-\echo '   پێویستە هەر سێکیان: هەیە ✓  و  sarraf_definer'
+\echo '════════ 2. تەندروستی سیستەم ════════'
+\echo '   پێویستە: ok = true'
 \echo ''
 
-select v as "command",
-       case when p.oid is null then '— نییە' else 'هەیە ✓' end as "state",
-       coalesce(pg_get_userbyid(p.proowner), '—') as "owner",
-       case when p.prosecdef then 'security definer' else 'invoker' end as "kind"
-  from (values ('sarraf_office_payment_paid'),
-               ('sarraf_office_settle'),
-               ('sarraf_office_board'),
-               ('sarraf_office_payment_post'),
-               ('sarraf_office_paid_since')) t(v)
-  left join pg_proc p on p.proname = v
-   and p.pronamespace = 'public'::regnamespace;
+select public.sarraf_system_health()::text as "health";
 
 \echo ''
-\echo '════════ 3. لێدانی نووسینگە قەرزەکە دەگوێزێتەوە، پارە ناجوڵێت؟ ════════'
-\echo '   پێویستە: acc-2200 هەیە ✓   و   acc-1000 نییە ✓'
+\echo '════════ 3. ڕیزەکانی بێ بازرگانی (tenant_id = null) ════════'
+\echo '   پێویستە: هەموویان سفر — یان بە ڕوونی خاوەنی پلاتفۆرم بن'
 \echo ''
 
-with body as (
-  select pg_get_functiondef(p.oid) as src
-    from pg_proc p
-   where p.proname = 'sarraf_office_payment_post'
-     and p.pronamespace = 'public'::regnamespace
-   limit 1
-)
-select case when src is null then '— فەرمانەکە نییە'
-            when src like '%''acc-2300'', ''acc-2200''%' then 'قەرزەکە دەچێتە سەر نووسینگە ✓'
-            else '⚠ لقی مامەڵە ئەو دوو حسابە ناناسێت' end as "acc-2200",
-       case when src is null then '—'
-            when src like '%acc-1000%' then '⚠ هێشتا قاسەی سەرەکی دەبات'
-            else 'قاسە دەستی لێ نادرێت ✓' end as "acc-1000",
-       case when src is null then '—'
-            when src like '%transaction_payment_events%' then '⚠ هێشتا ڕووداوی پارەدان دەنووسێت'
-            else 'ڕووداوی پارەدان نانووسرێت ✓' end as "cash trigger",
-       case when src is null then '—'
-            when src like '%account_ledger%' then 'حسابی نووسینگە دەنووسرێت ✓'
-            else '⚠ حسابی نووسینگە نانووسرێت' end as "office account"
-  from body;
+select t as "table", n as "tenantless"
+  from (
+    select 'audit' as t, count(*) as n from public.audit where tenant_id is null
+    union all select 'notes', count(*) from public.notes where tenant_id is null
+    union all select 'system_event_log', count(*) from public.system_event_log where tenant_id is null
+    union all select 'receipt_extractions', count(*) from public.receipt_extractions where tenant_id is null
+    union all select 'receipt_ocr_attempts', count(*) from public.receipt_ocr_attempts where tenant_id is null
+    union all select 'receipt_state_transitions', count(*) from public.receipt_state_transitions where tenant_id is null
+    union all select 'txs', count(*) from public.txs where tenant_id is null
+    union all select 'ledger', count(*) from public.ledger where tenant_id is null
+    union all select 'journal_entries', count(*) from public.journal_entries where tenant_id is null
+    union all select 'receipts', count(*) from public.receipts where tenant_id is null
+    union all select 'receipt_batches', count(*) from public.receipt_batches where tenant_id is null
+    union all select 'zeman_notifications', count(*) from public.zeman_notifications where tenant_id is null
+  ) x
+ order by n desc, t;
 
 \echo ''
-\echo '════════ 4. حسابدانەوە: acc-2200 دەبڕدرێتەوە و قاسە کەم دەبێت؟ ════════'
-\echo '   پێویستە هەر چوارکیان ✓'
+\echo '════════ 4. تازەترین ڕیزی بێ بازرگانی — هێشتا درووست دەبن؟ ════════'
+\echo '   پێویستە: هیچ شتێکی ئەمڕۆ'
 \echo ''
 
-with body as (
-  select pg_get_functiondef(p.oid) as src
-    from pg_proc p
-   where p.proname = 'sarraf_office_settle' and p.pronamespace = 'public'::regnamespace
-   limit 1
-)
-select case when src like '%''acc-2200'', ''acc-1000''%' then 'دەفتەر ✓' else '⚠ دەفتەر' end as "journal",
-       case when src like '%account_ledger%' then 'حساب ✓' else '⚠ حساب' end as "account",
-       case when src like '%public.ledger%' then 'قاسە ✓' else '⚠ قاسە' end as "safe",
-       case when src like '%that is more than this office is owed%' then 'سنوور ✓' else '⚠ سنوور' end as "guard"
-  from body;
+select t as "table", latest as "newest tenantless"
+  from (
+    select 'audit' as t, max(date) as latest from public.audit where tenant_id is null
+    union all select 'system_event_log', max(created_at) from public.system_event_log where tenant_id is null
+    union all select 'receipt_state_transitions', max(created_at) from public.receipt_state_transitions where tenant_id is null
+    union all select 'receipt_extractions', max(created_at) from public.receipt_extractions where tenant_id is null
+    union all select 'receipt_ocr_attempts', max(created_at) from public.receipt_ocr_attempts where tenant_id is null
+  ) x where latest is not null order by latest desc;
 
 \echo ''
-\echo '════════ 5. voucher_kind ناوی نوێی هەیە؟ ════════'
-\echo '   پێویستە: office_settlement هەیە ✓'
+\echo '════════ 5. یەکپارچەیی ستۆرەج ════════'
+\echo '   پێویستە: هیچ فایلێکی بێ تۆمار، هیچ تۆمارێکی بێ فایل'
 \echo ''
 
-select case when exists (
-         select 1 from pg_enum e join pg_type t on t.oid = e.enumtypid
-          where t.typname = 'voucher_kind' and e.enumlabel = 'office_settlement')
-       then 'office_settlement هەیە ✓' else '— نییە' end as "voucher kind";
+select
+  (select count(*) from storage.objects where bucket_id = 'receipts') as "objects",
+  (select count(*) from public.receipt_documents) as "document rows",
+  (select count(*) from storage.objects o where o.bucket_id = 'receipts'
+     and not exists (select 1 from public.receipt_documents d where d.storage_path = o.name)) as "unreferenced",
+  (select count(*) from public.receipt_documents d
+     where d.storage_path is not null
+       and not exists (select 1 from storage.objects o where o.bucket_id='receipts' and o.name = d.storage_path)) as "missing file",
+  (select (b.public)::text from storage.buckets b where b.id = 'receipts') as "bucket public";
 
 \echo ''
-\echo '════════ 5.b کارتی نووسینگە — خاوەن کارەکە دەتوانێت سەیری بکات؟ ════════'
-\echo '   پێویستە: دوو ئارگومێنت ✓  ·  یەک ئارگومێنتی کۆن نەماوە ✓  ·  ئەدمین ڕێپێدراوە ✓'
+\echo '════════ 6. فەرمانەکان: کێ بانگیان دەکات ════════'
+\echo '   پێویستە: anon = 0 لە هەموو فەرمانێکی SECURITY DEFINERدا'
 \echo ''
 
--- pg_get_function_identity_arguments ناوی پارامەتەرەکانیش لەگەڵ خۆیدا دەهێنێت
--- («p_days integer, p_office_id text»)، بۆیە بەراوردکردنی لەگەڵ «integer, text» هەمیشە
--- شکست دەهێنێت و ڕاپۆرتەکە دەڵێت شتێک نییە کە هەیە. ژمارەی ئارگومێنتەکان دەژمێردرێت.
-select case when exists (
-         select 1 from pg_proc p where p.proname = 'sarraf_office_board'
-          and p.pronamespace = 'public'::regnamespace and p.pronargs = 2)
-       then 'دوو ئارگومێنت ✓' else '— نییە' end as "signature",
-       case when exists (
-         select 1 from pg_proc p where p.proname = 'sarraf_office_board'
-          and p.pronamespace = 'public'::regnamespace and p.pronargs = 1)
-       then '⚠ شێوەی کۆن هێشتا ماوە' else 'شێوەی کۆن نەماوە ✓' end as "old form",
-       case when (select pg_get_functiondef(p.oid) from pg_proc p
-                   where p.proname = 'sarraf_office_board'
-                     and p.pronamespace = 'public'::regnamespace limit 1)
-                 like '%elsif v_actor.role = ''admin''%'
-       then 'ئەدمین ڕێپێدراوە ✓' else '⚠ ئەدمین هێشتا ڕەت دەکرێتەوە' end as "admin",
-       case when (select pg_get_functiondef(p.oid) from pg_proc p
-                   where p.proname = 'sarraf_office_board'
-                     and p.pronamespace = 'public'::regnamespace limit 1)
-                 like '%may_pay%'
-       then 'may_pay دەگەڕێنێتەوە ✓' else '⚠ شاشەکە نازانێت دوگمە پیشان بدات یان نا' end as "may_pay";
+select
+  count(*) filter (where p.prosecdef) as "definer total",
+  count(*) filter (where p.prosecdef and has_function_privilege('anon', p.oid, 'execute')) as "anon may call",
+  count(*) filter (where p.prosecdef and has_function_privilege('authenticated', p.oid, 'execute')) as "authenticated may call",
+  count(*) filter (where p.prosecdef and pg_get_userbyid(p.proowner) <> 'sarraf_definer') as "not owned by definer",
+  count(*) filter (where p.prosecdef and p.proconfig is null) as "no search_path"
+  from pg_proc p
+ where p.pronamespace = 'public'::regnamespace and p.proname like 'sarraf%';
 
 \echo ''
-\echo '════════ 6. ئەرکەکانی نووسینگە لە ئێستادا ════════'
+\echo '════════ 6.b ئەوانەی anon بانگیان دەکات — بە ناو ════════'
+\echo '   پێویستە: بەتاڵ، یان لیستێکی کورتی مەبەستدار'
 \echo ''
 
-select status::text as "state", count(*) as "how many",
-       coalesce(string_agg(distinct currency, ', '), '—') as "currencies"
-  from public.office_payment_assignments
- group by status
- order by 2 desc;
+select p.proname as "function", pg_get_userbyid(p.proowner) as "owner"
+  from pg_proc p
+ where p.pronamespace = 'public'::regnamespace and p.prosecdef
+   and has_function_privilege('anon', p.oid, 'execute')
+ order by 1;
 
 \echo ''
-\echo '════════ 7. ئێستا ZEMAN چەندی قەرزارە بۆ نووسینگەکان؟ ════════'
-\echo '   ئەمە ئەو ژمارەیەیە کە دوگمەی «حسابی نووسینگە دەدەمەوە» سفری دەکاتەوە'
+\echo '════════ 7. RLS: کام خشتە پارێزراو نییە ════════'
+\echo '   پێویستە: بەتاڵ'
 \echo ''
 
-select u.name as "office", c.code as "currency", sum(a.amount) as "owed"
-  from public.account_ledger a
-  join public.app_users u on u.id = a.user_id and u.role = 'office'
-  join public.currencies c on c.id = a.cur_id
- where a.kind = 'cash'
- group by u.name, c.code
-having sum(a.amount) <> 0
- order by 1, 2;
+select c.relname as "table",
+       case when not c.relrowsecurity then 'RLS ناکارایە'
+            when not c.relforcerowsecurity then 'FORCE نییە'
+            else 'بێ پۆلیسی سنووردارکەر' end as "why"
+  from pg_class c
+  join pg_namespace n on n.oid = c.relnamespace
+ where n.nspname = 'public' and c.relkind = 'r'
+   and exists (select 1 from information_schema.columns col
+                where col.table_schema='public' and col.table_name=c.relname and col.column_name='tenant_id')
+   and (not c.relrowsecurity or not c.relforcerowsecurity
+        or not exists (select 1 from pg_policies pp where pp.tablename=c.relname and pp.permissive='RESTRICTIVE'))
+ order by 1;
+
+\echo ''
+\echo '════════ 8. ئەکاونتەکان و MFA ════════'
+\echo ''
+
+select coalesce(u.admin_level, u.role) as "rank", u.tenant_id as "business",
+       count(*) as "how many",
+       count(*) filter (where exists (
+         select 1 from auth.users a where a.id = u.auth_id)) as "has a login"
+  from public.app_users u where not u.deleted
+ group by 1, 2 order by 1, 2;
+
+\echo ''
+\echo '════════ 9. ژمارەکانی کار ════════'
+\echo ''
+
+select
+  (select count(*) from public.tenants) as "businesses",
+  (select count(*) from public.txs where not deleted) as "transactions",
+  (select count(*) from public.ledger) as "ledger rows",
+  (select count(*) from public.journal_entries) as "journal entries",
+  (select count(*) from public.journal_entries where status <> 'posted') as "not posted",
+  (select count(*) from public.receipts) as "receipts",
+  (select count(*) from public.receipt_batches) as "batches";
 
 \echo ''
 \echo '════════ تەواو ════════'
