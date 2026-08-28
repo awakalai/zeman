@@ -11654,7 +11654,8 @@ function PartnerPortal({ user, data, calc, cur, usr, flash, reloadBatches, onlin
 function Portal({ user, data, calc, cur, usr, officePay, settle, invUnpaid, flash, reloadBatches, accountMove, accountTransfer, ...portalState }) {
   if (user.role === "office") return (
     <div className="portal-frame"><section className="portal-main" id="portal-content">
-      <DeferredPanel><OfficePayments client={supabase} lang={portalState.lang || "ku"} flash={flash} /></DeferredPanel>
+      <DeferredPanel><OfficePayments client={supabase} lang={portalState.lang || "ku"} flash={flash}
+        officeId={user.id} /></DeferredPanel>
     </section></div>
   );
 

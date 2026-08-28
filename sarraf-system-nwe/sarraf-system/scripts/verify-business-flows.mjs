@@ -1652,6 +1652,38 @@ try {
         "acc-2200 debit acc-1000 credit", "the settlement entry");
     });
 
+    step("the owner may look at the office's board without becoming one", () => {
+      // «بینین وەک» is impersonation in the interface only: the database still sees the owner.
+      // The screen this replaced read the assignments through row-level security, which lets an
+      // administrator read their own business's rows — so asking the board a stricter question
+      // than the policy took away the owner's ability to see what their staff see.
+      be("admin");
+      const board = j("public.sarraf_office_board(60, 'off23'::text)");
+      eq(board.office_name, "نووسینگەی دووەم", "whose board it is");
+      eq(board.may_pay, false, "the owner is told they may not press it");
+      // And an office is still the only one who can say it paid. Looking is not acting.
+      const assignment = psql("select id from public.office_payment_assignments where transaction_id='f23-tx'").trim();
+      if (!refused(`select public.sarraf_office_payment_paid('${assignment}','x','flow-23-owner-press')`)) {
+        throw new Error("the owner reported a payment on an office's behalf");
+      }
+    });
+
+    step("but nobody may read a board that is not theirs", () => {
+      if (!refused("select public.sarraf_office_board(60, null)")) {
+        throw new Error("an administrator was given a board without naming an office");
+      }
+      psql(`create or replace function auth.uid() returns uuid language sql stable
+            as $fn$ select 'f2300000-0000-0000-0000-000000000023'::uuid $fn$`);
+      if (!refused("select public.sarraf_office_board(60, 'off')")) {
+        throw new Error("an office read another office's board");
+      }
+      be("customer");
+      if (!refused("select public.sarraf_office_board(60, 'off23')")) {
+        throw new Error("a customer read an office's board");
+      }
+      be("admin");
+    });
+
     step("and there is nothing left to settle", () => {
       if (!refused(`select public.sarraf_office_settle('off23','usd',null,'again','flow-23-again')`)) {
         throw new Error("an office with a zero balance could still be paid");

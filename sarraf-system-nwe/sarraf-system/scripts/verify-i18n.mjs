@@ -138,11 +138,33 @@ console.log(
   + `Arabic (${Object.keys(DICT.en).length} entries each).`
 );
 
+// A translation table — `COPY = { ku: { … }, en: { … }, ar: { … } }` — is localised text by
+// construction, but only its opening line carries the language key, so every line inside it was
+// counted as unreachable. Several components are written that way and each was reported as dozens
+// of lines of untranslatable interface while being translated three times over.
+//
+// Only when all three arms are really there. `COPY.en = COPY.ku; COPY.ar = COPY.ku` is an alias,
+// not a translation — a component written that way shows Kurdish to an English reader, which is
+// the exact thing being counted, and skipping it would have hidden a whole file.
+const TABLE_OPENS = /^\s*(?:ku|en|ar)\s*:\s*\{/;
+const ARM = (lang) => new RegExp(`^\\s*${lang}\\s*:\\s*\\{`, "m");
+const depthOf = (line) => (line.match(/\{/g) || []).length - (line.match(/\}/g) || []).length;
+
 const counts = {};
 for (const file of files.sort()) {
-  let n = 0;
-  for (const raw of readFileSync(file, "utf8").split("\n")) {
+  const text = readFileSync(file, "utf8");
+  const translated = ARM("ku").test(text) && ARM("en").test(text) && ARM("ar").test(text);
+  let n = 0, inTable = 0;
+  for (const raw of text.split("\n")) {
     const line = raw.trim();
+    if (inTable > 0) {
+      inTable += depthOf(raw);
+      continue;
+    }
+    if (translated && TABLE_OPENS.test(raw)) {
+      inTable = depthOf(raw);
+      continue;
+    }
     if (!SCRIPT.test(line)) continue;
     if (line.startsWith("//") || line.startsWith("*") || line.startsWith("/*")) continue;
     if (LOCALISED.test(line)) continue;
