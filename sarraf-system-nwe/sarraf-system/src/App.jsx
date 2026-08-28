@@ -9,6 +9,7 @@ import { loadWholeTable } from "./services/tableLoader";
 import { setActiveLanguage } from "./services/activeLanguage";
 import { currencyDecimals as currencyDecimalsOf, formatMoney, formatNumber, roundToCurrency } from "./services/money";
 import { errorText, errorTextOr } from "./services/userFacingError";
+import { flashIsGood } from "./services/flashTone.js";
 import { MyReceipts } from "./components/portal/MyReceipts";
 import { intakeReceipt, intakeStatusText, loadMyReceipts, noteReceiptReadFailure, receiptReadFailureText, replaceReceipt, requestStoredReceiptOcr } from "./services/receiptIntake";
 import { DICT } from "./i18n/dictionary";
@@ -1762,6 +1763,7 @@ export default function App() {
   const [detailId, setDetailId] = useState(null);
   const [editTx, setEditTx] = useState(null);
   const [msg, setMsg] = useState(null);
+  const [msgTone, setMsgTone] = useState(null);
   const [busy, setBusy] = useState(false);
   const [more, setMore] = useState(false);
   const [langOpen, setLangOpen] = useState(false);
@@ -1840,10 +1842,30 @@ export default function App() {
   // this component. The timer is also tracked, so a second message cannot be cut short by the
   // first one's timeout.
   const flashTimer = useRef(null);
-  const flash = useCallback((t) => {
+  /**
+   * Say something, and say what KIND of thing it is.
+   *
+   * This used to be one string, and the banner worked out whether it was good news by looking
+   * for words in it: ✓, «کرا», «تۆمار», «نێردرا», «وەرگ». That held only while refusals arrived
+   * in English. Once they were translated, an ordinary Kurdish refusal —
+   *
+   *   «دراوی دەرەکی پێویستی بە هاوبەشێکی دیاریکراوە کە پارەکەی لایە»
+   *
+   * — contains «دیاری‌کراوە», which contains «کرا», and the owner was shown a green tick over a
+   * sentence telling them their transaction had been refused. Guessing a message's meaning from
+   * its spelling cannot be made safe; the caller knows, so the caller says.
+   *
+   * `tone` is "error", "ok", or omitted — omitted keeps the old reading, so no existing call
+   * changes behaviour, and a refusal carrying a ZE- reference is never read as success.
+   */
+  const flash = useCallback((t, tone = null) => {
     setMsg(t);
+    setMsgTone(t == null ? null : tone);
     if (flashTimer.current) clearTimeout(flashTimer.current);
-    flashTimer.current = setTimeout(() => { flashTimer.current = null; setMsg(null); }, 3000);
+    // A refusal is something to act on, not something to notice. Three seconds is not enough
+    // time to read a sentence and a reference code on a phone.
+    const linger = tone === "error" || /\(ZE-[A-Z0-9-]+\)/.test(String(t ?? "")) ? 7000 : 3000;
+    flashTimer.current = setTimeout(() => { flashTimer.current = null; setMsg(null); setMsgTone(null); }, linger);
   }, []);
   useEffect(() => () => { if (flashTimer.current) clearTimeout(flashTimer.current); }, []);
 
@@ -2142,14 +2164,14 @@ export default function App() {
       if (err?.outcomeUnknown) {
         // Deliberately NOT released: the operator's own retry must reuse this key, or the
         // command they were never told the result of could run a second time for real.
-        flash(err.message);
+        flash(err.message, "error");
         // Reload anyway — if it did commit, the screen should show it rather than deny it.
         try { await loadAll(); } catch (e) { console.error("reload after unknown outcome", e); }
         return false;
       }
       // The server answered. The command did not run, so the key is spent on nothing.
       if (intent) keyBook.current.release(intent);
-      flash(errorTextOr(err, "هەڵەیەک ڕوویدا — دووبارە هەوڵ بدەوە"));
+      flash(errorTextOr(err, "هەڵەیەک ڕوویدا — دووبارە هەوڵ بدەوە"), "error");
       return false;
     }
     finally { lockRef.current = false; setBusy(false); intentRef.current = null; }
@@ -3160,7 +3182,7 @@ export default function App() {
       return result;
     } catch (e) {
       console.error("maintenance-mode", e);
-      flash(errorTextOr(e, "نەتوانرا Emergency Freeze بگۆڕدرێت"));
+      flash(errorTextOr(e, "نەتوانرا Emergency Freeze بگۆڕدرێت"), "error");
       return false;
     } finally {
       setBusy(false);
@@ -3499,8 +3521,8 @@ export default function App() {
       )}
       {msg && (
         <div className="fixed top-0 right-0 left-0 z-[60] flex justify-center px-4" style={{ paddingTop: "calc(env(safe-area-inset-top) + 12px)" }}>
-          <div className={`drop flex items-center gap-2.5 px-5 py-3.5 rounded-[var(--r)] shadow-xl text-white font-bold text-sm max-w-md w-full justify-center ${/✓|کرا|تۆمار|نێردرا|وەرگ/.test(msg) ? "bg-emerald-600" : "bg-slate-900"}`}>
-            {/✓|کرا|تۆمار|نێردرا|وەرگ/.test(msg) ? <CheckCircle2 className="w-5 h-5 shrink-0" /> : <AlertTriangle className="w-5 h-5 shrink-0" />}
+          <div className={`drop flex items-center gap-2.5 px-5 py-3.5 rounded-[var(--r)] shadow-xl text-white font-bold text-sm max-w-md w-full justify-center ${flashIsGood(msg, msgTone) ? "bg-emerald-600" : "bg-slate-900"}`}>
+            {flashIsGood(msg, msgTone) ? <CheckCircle2 className="w-5 h-5 shrink-0" /> : <AlertTriangle className="w-5 h-5 shrink-0" />}
             <span>{msg.replace(" ✓", "")}</span>
           </div>
         </div>
@@ -5187,6 +5209,18 @@ function TxForm({ data, cur, calc, usr, avgRate, inventoryPosition, usdValueAt, 
 
   const srcBal = f.partnerId ? ((calc.partner[f.partnerId] || {})[f.curId] || 0) : (calc.atMe[f.curId] || 0);
   const willBeNeg = f.type === "sell" && srcBal - amtR < -1e-9;
+
+  // The server refuses this, and it is right to: money in a currency the office does not hold in
+  // its own safe has to be somewhere, and that somewhere is a person. But the refusal arrived
+  // only AFTER the owner had filled the whole form and pressed the button, as a banner over a
+  // screen that had already cleared.
+  //
+  //   raise exception using errcode='23514',
+  //     message='external currency requires an explicit custody partner'
+  //
+  // Mirrored here exactly — not loosened, not re-decided. The rule is still the database's; this
+  // only asks the question before the answer can be wrong.
+  const needsCustodian = !f.direct && !f.partnerId && !!cur(f.curId).external;
   const feeRate = f.partnerId ? (usr(f.partnerId).rate || 0) : 0;
   const rateQuoteId = oppositePairId(f.curId, f.againstId, f.rateBaseId);
 
@@ -5700,9 +5734,16 @@ function TxForm({ data, cur, calc, usr, avgRate, inventoryPosition, usdValueAt, 
         </div>
       </Card>
 
+      {needsCustodian && (
+        <div className="flex items-start gap-2 px-1 text-[12px] font-semibold" style={{ color: "var(--warn)" }}>
+          <AlertTriangle className="w-4 h-4 shrink-0 mt-px" />
+          <span>{cur(f.curId).name} {tr("لە قاسەی گشتیدا هەڵناگیرێت — دیاری بکە پارەکە لای کێ دەمێنێتەوە")}</span>
+        </div>
+      )}
+
       <div className="flex gap-2 sticky bottom-24 md:bottom-4">
         <Btn kind={f.direct ? "gold" : f.type === "buy" ? "primary" : "danger"}
-          onClick={submit} disabled={sending || busy} className="flex-1 !py-4 !text-[15px]">
+          onClick={submit} disabled={sending || busy || needsCustodian} className="flex-1 !py-4 !text-[15px]">
           {sending || busy ? "..." : e ? tr("پاشەکەوتی ئیدیت")
             : f.direct ? tr("تۆمارکردنی مامەڵەی ڕاستەوخۆ")
             : f.type === "buy" ? tr("تۆمارکردنی کڕین") : tr("تۆمارکردنی فرۆشتن")}
@@ -8669,7 +8710,7 @@ function BatchDetail({ id, back, usr, data, profile, onMakeTx, flash, reloadBatc
       reloadBatches && reloadBatches();
     } catch (error) {
       console.error("receipt match", error);
-      flash(`بەستنەوە سەرکەوتوو نەبوو — ${errorTextOr(error, "هەڵە")}`);
+      flash(`بەستنەوە سەرکەوتوو نەبوو — ${errorTextOr(error, "هەڵە")}`, "error");
     } finally {
       setMatchBusy(null);
     }
@@ -8691,7 +8732,7 @@ function BatchDetail({ id, back, usr, data, profile, onMakeTx, flash, reloadBatc
       reloadBatches && reloadBatches();
     } catch (error) {
       console.error("receipt decision", error);
-      flash(errorTextOr(error, "بڕیاری فیش جێبەجێ نەکرا"));
+      flash(errorTextOr(error, "بڕیاری فیش جێبەجێ نەکرا"), "error");
     } finally {
       setDecisionBusy(null);
     }
@@ -8726,9 +8767,9 @@ function BatchDetail({ id, back, usr, data, profile, onMakeTx, flash, reloadBatc
         // A fresh key, because the figures this one was minted against no longer exist.
         finalizationCommandRef.current = null;
         await load();
-        flash(STALE_MESSAGE);
+        flash(STALE_MESSAGE, "error");
       } else {
-        flash(errorTextOr(error, "پشکنینی کۆتایی سەرکەوتوو نەبوو"));
+        flash(errorTextOr(error, "پشکنینی کۆتایی سەرکەوتوو نەبوو"), "error");
       }
     } finally {
       setFinalizationBusy(false);
@@ -11272,7 +11313,7 @@ function ApprovalCenter({
       else flash(`${out?.failures || 0} کێشە لە یەکسانکردنەوە دۆزرایەوە`);
     } catch (e) {
       console.error(e);
-      flash(errorTextOr(e, "یەکسانکردنەوە سەرکەوتوو نەبوو"));
+      flash(errorTextOr(e, "یەکسانکردنەوە سەرکەوتوو نەبوو"), "error");
     } finally {
       setReconBusy(false);
     }

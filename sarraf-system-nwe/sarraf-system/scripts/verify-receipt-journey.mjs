@@ -603,6 +603,30 @@ try {
       "and the amount it starts from is the amount that was sent",
       `looking for 1210 or 1246.3 in: ${ownerDecided.slice(0, 200)}`);
 
+    // CNY is not held in the office's own safe, so the database refuses a purchase in it that
+    // names nobody to hold the money:
+    //
+    //   raise exception using errcode='23514',
+    //     message='external currency requires an explicit custody partner'
+    //
+    // The owner met that refusal AFTER filling the form and pressing the button — as a banner,
+    // over a screen that had already moved on. The form now asks first.
+    let sendState = "⟨no send button⟩";
+    try {
+      const send = ownerPage.getByRole("button", { name: /تۆمارکردنی (کڕین|فرۆشتن|مامەڵەی)/ }).first();
+      if (await send.count().catch(() => 0)) {
+        sendState = (await send.isDisabled().catch(() => null)) ? "refuses" : "would send";
+      }
+    } catch (e) { sendState = `⟨${String(e).slice(0, 120)}⟩`; }
+
+    record(sendState === "refuses",
+      "and it will not send a purchase the database would have to refuse",
+      `the button ${sendState}; currency is held by nobody yet`);
+
+    record(/هەڵناگیرێت/.test(purchaseScreen),
+      "having said why, on the screen, instead of after the fact",
+      purchaseScreen.replace(/\s+/g, " ").slice(0, 160));
+
     // Filtered here, after the decision, so a throw during the accept is caught too — not only
     // one during the sign-in.
     const ownerCrashesReal = ownerCrashes.filter(
