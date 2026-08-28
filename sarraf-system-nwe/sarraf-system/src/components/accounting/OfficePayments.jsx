@@ -28,6 +28,7 @@ const COPY = {
     day: "ئەمڕۆ", week: "ئەم هەفتەیە", month: "ئەم مانگە",
     failed: "زانیاریی ئەرکەکانی نووسینگە بار نەبوو",
     paid: "دراوە", done: "پارەکە درا ✓",
+    watching: "تۆ وەک ئەم نووسینگەیە سەیر دەکەیت — تەنها خۆیان دەتوانن بڵێن پارەیان داوە",
   },
   en: {
     title: "Office payments", subtitle: "Pay these people, then press “I paid”",
@@ -37,6 +38,7 @@ const COPY = {
     day: "Today", week: "This week", month: "This month",
     failed: "Could not load the office assignments",
     paid: "Paid", done: "Recorded ✓",
+    watching: "You are viewing as this office — only they can say they paid",
   },
   ar: {
     title: "مدفوعات المكتب", subtitle: "ادفع لهؤلاء، ثم اضغط «دفعتُ»",
@@ -46,6 +48,7 @@ const COPY = {
     day: "اليوم", week: "هذا الأسبوع", month: "هذا الشهر",
     failed: "تعذّر تحميل مهام المكتب",
     paid: "مدفوع", done: "تم التسجيل ✓",
+    watching: "أنت تشاهد بصفة هذا المكتب — وحدهم من يمكنه تأكيد الدفع",
   },
 };
 const localeKey = (lang) => (lang === "en" ? "en" : lang === "ar" ? "ar" : "ku");
@@ -71,7 +74,7 @@ const Figures = ({ rows, label, tone }) => (
   </div>
 );
 
-export function OfficePayments({ client, lang = "ku", flash = () => {} }) {
+export function OfficePayments({ client, lang = "ku", flash = () => {}, officeId = null }) {
   const copy = COPY[localeKey(lang)];
   const [board, setBoard] = useState(null);
   const [state, setState] = useState("loading");
@@ -87,7 +90,10 @@ export function OfficePayments({ client, lang = "ku", flash = () => {} }) {
   const load = useCallback(async () => {
     setState((s) => (s === "ready" ? "ready" : "loading"));
     try {
-      const { data, error } = await client.rpc("sarraf_office_board", { p_days: 60 });
+      // The owner reaches this screen through «بینین وەک», where the database still sees them
+      // and not the office. The board is told whose it is; the server decides whether they may
+      // read it, and answers `may_pay` for whether they may act on it.
+      const { data, error } = await client.rpc("sarraf_office_board", { p_days: 60, p_office_id: officeId });
       if (error) throw error;
       setBoard(data || { waiting: [], paid: [], owed: [], totals: {} });
       setState("ready");
@@ -96,7 +102,7 @@ export function OfficePayments({ client, lang = "ku", flash = () => {} }) {
       flash(errorText(e));
       setState("error");
     }
-  }, [client, flash]);
+  }, [client, flash, officeId]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -172,10 +178,14 @@ export function OfficePayments({ client, lang = "ku", flash = () => {} }) {
               {money(row.amount)} <span className="debt-currency-code">{row.currency}</span>
             </span>
           </div>
-          <button type="button" className="debt-primary debt-press"
-                  disabled={busy === row.id} onClick={() => pay(row)}>
-            <Send aria-hidden="true" /> {busy === row.id ? copy.working : copy.pay}
-          </button>
+          {board?.may_pay === false
+            ? <p className="debt-muted" style={{ marginTop: 10 }}>{copy.watching}</p>
+            : (
+              <button type="button" className="debt-primary debt-press"
+                      disabled={busy === row.id} onClick={() => pay(row)}>
+                <Send aria-hidden="true" /> {busy === row.id ? copy.working : copy.pay}
+              </button>
+            )}
         </article>
       ))}
 

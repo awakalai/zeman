@@ -21,7 +21,7 @@ const COPY = {
     reconcilesByNet: "فی لە بڕەکە کەم کراوەتەوە و ژمارەکان یەک دەگرنەوە",
     mismatchByNet: "کۆی گشتی کە فی لێ کەم بکرێتەوە، ئەوەی نووسراوە نادات",
     undecidable: "ناتوانرێت بڕیار بدرێت — فیشەکە بڕی بنەڕەتی نەنووسیوە",
-    gross: "کۆی گشتی", order: "بڕی بنەڕەتی", fee: "فی", net: "نەت", expected: "پێویستە بێت",
+    gross: "کۆی گشتی", order: "بڕی بنەڕەتی", fee: "فی", net: "نەت", expected: "پێویستە بێت", inUsd: "بە USD",
     treatment: "شێوازی فی", currency: "دراو", ref: "ژمارەی مامەڵە", payee: "وەرگر",
     accept: "پەسەندکردن", acceptReason: "هۆکاری پەسەندکردن (لانیکەم ٨ پیت)",
     reject: "ڕەتکردنەوە", review: "بۆ پشکنینی دەستی",
@@ -206,7 +206,7 @@ export function ReceiptReviewWorkspace({ client, lang = "ku", signedUrlFor = nul
     const result = await finalizeReceipt(client, { documentId: currentDoc.id, reason: finalReason });
     if (result?.valuation_status !== "valued") throw new Error(copy.noRate);
     return loadReceiptSummary(client, currentDoc.id);
-  }, (summary) => summary?.netUsd == null ? "✓" : `✓ ${copy.net} بە USD: $${money(summary.netUsd)}`);
+  }, (summary) => summary?.netUsd == null ? "✓" : `✓ ${copy.net} ${copy.inUsd}: $${money(summary.netUsd)}`);
 
   if (state === "loading") return <div className="rrw"><div className="rrw-empty">{copy.loading}</div></div>;
 
