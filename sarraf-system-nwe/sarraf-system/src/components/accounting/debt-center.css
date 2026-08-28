@@ -272,3 +272,18 @@
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* The office's one press. It is the only thing on that screen a thumb has to find, so it is the
+   width of the card and tall enough to hit without looking. */
+.debt-press {
+  margin-top: 10px;
+  width: 100%;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 13.5px;
+  font-weight: 700;
+}
+.debt-press > svg { width: 15px; height: 15px; }

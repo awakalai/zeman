@@ -1549,6 +1549,116 @@ try {
     });
   });
 
+  // ── 23 ──────────────────────────────────────────────────────────────────────
+  scenario(23, "the office pays in one press, is owed for it, and is paid back to zero", () => {
+    // Earlier flows have already moved dollars through the safe, so every figure here is read as
+    // a change against what was there a moment ago, not as an absolute.
+    const safe = () => Number(psql("select coalesce(sum(amount),0) from public.ledger where cur_id='usd'").trim());
+    let safeBefore = 0;
+    // «نووسینگەش کە پارەی ئەو کەسانەی دا ، بڵێ پارەم داوە و ببێت بە قەرز لای من ، و هەر کاتێک
+    //  ویستم حسابی نووسینگەکە بدەم و تەواو.»
+    //
+    // This gate never reached the transaction-backed branch: flow 8 builds a standalone
+    // assignment with no transaction behind it. The accounting gate did reach it, and asserted
+    // the wrong entry — dr acc-2300 / cr acc-1000, the books saying ZEMAN's own safe had paid
+    // when the office paid out of the office's. Both are fixed; this is the end-to-end half.
+    step("a purchase is left unpaid, and the customer is owed", () => {
+      be("admin");
+      // Its own office, with no history: flow 8 leaves a balance on «off», and a flow that reads
+      // «the office is owed 1000» has to mean 1000 and not 1000 more than something.
+      psql(`insert into public.app_users(id,name,role,auth_id,tenant_id)
+            values ('off23','نووسینگەی دووەم','office','f2300000-0000-0000-0000-000000000023','t-sarkhel')
+            on conflict (id) do nothing`);
+      psql(`insert into public.txs(id,type,cp_id,cur_id,amount,rate,against_id,total,status,date)
+            values ('f23-tx','buy','cus','cny',7200,0.1388888889,'usd',1000,'pending',now())`);
+      // Enough in the safe to settle the office later, and none of it spent yet.
+      psql(`insert into public.ledger(id,type,cur_id,amount,note,date,created_by)
+            values ('f23-fund','deposit','usd',5000,'سەرمایە','2026-08-01','adm')`);
+      eq(psql(`select coalesce(sum(outstanding_principal),0) from public.debts
+               where source_transaction_id='f23-tx' and status in ('open','partially_settled')`).trim(),
+        "1000.0000000000", "the customer is owed");
+    });
+
+    step("the owner hands it to the office", () => {
+      safeBefore = safe();
+      const out = j(`public.sarraf_create_office_payment_assignment('f23-tx'::text,'off23'::text,
+        null::timestamptz,'ئەرکی پارەدان'::text,'flow-23-assign'::text)`);
+      if (out.status !== "assigned") throw new Error(`the assignment is ${out.status}`);
+      eq(out.amount, 1000, "the assignment carries the transaction's amount");
+    });
+
+    step("the office's board names the customer it cannot otherwise read", () => {
+      psql(`create or replace function auth.uid() returns uuid language sql stable
+            as $fn$ select 'f2300000-0000-0000-0000-000000000023'::uuid $fn$`);
+      // Under row-level security an office sees exactly one row in app_users: itself. If the
+      // board did not carry the name, the screen would say the payment is for «—».
+      const board = j("public.sarraf_office_board(60)");
+      if (board.waiting.length !== 1) throw new Error(`the board shows ${board.waiting.length} waiting`);
+      eq(board.waiting[0].customer, "کڕیار فرۆشیار", "the customer's name");
+      eq(board.owed.length, 0, "nothing is owed before the press");
+    });
+
+    step("one press pays the customer and makes the office the creditor", () => {
+      const assignment = psql("select id from public.office_payment_assignments where transaction_id='f23-tx'").trim();
+      const out = j(`public.sarraf_office_payment_paid('${assignment}'::text,null::text,'flow-23-paid'::text)`);
+      eq(out.status, "confirmed", "the assignment");
+      eq(psql("select status from public.txs where id='f23-tx'").trim(), "completed", "the purchase");
+      eq(psql(`select coalesce(sum(outstanding_principal),0) from public.debts
+               where source_transaction_id='f23-tx'`).trim(), "0.0000000000", "the customer's debt");
+      // The whole point: the debt moved to the office, and no cash moved at all.
+      eq(psql(`select string_agg(l.account_id||' '||l.side, ' ' order by l.line_no)
+               from public.journal_lines l join public.journal_entries e on e.id=l.entry_id
+               where e.id like 'je-office-paid-%' and e.transaction_id='f23-tx'`).trim(),
+        "acc-2300 debit acc-2200 credit", "the entry");
+      eq(safe(), safeBefore, "the safe is untouched");
+      eq(psql("select coalesce(sum(amount),0) from public.account_ledger where user_id='off23'").trim(),
+        "1000.0000000000", "the office is owed");
+    });
+
+    step("pressing again is the same payment, not a second one", () => {
+      const assignment = psql("select id from public.office_payment_assignments where transaction_id='f23-tx'").trim();
+      const out = j(`public.sarraf_office_payment_paid('${assignment}'::text,null::text,'flow-23-twice'::text)`);
+      if (!out.replayed) throw new Error("a second press was taken as a second payment");
+      eq(psql("select coalesce(sum(amount),0) from public.account_ledger where user_id='off23'").trim(),
+        "1000.0000000000", "the office is still owed exactly once");
+    });
+
+    step("an office cannot press somebody else's assignment", () => {
+      const assignment = psql("select id from public.office_payment_assignments where transaction_id='f23-tx'").trim();
+      be("customer");
+      if (!refused(`select public.sarraf_office_payment_paid('${assignment}','x','flow-23-steal')`)) {
+        throw new Error("somebody who is not an office reported an office payment");
+      }
+    });
+
+    step("the owner cannot pay back more than is owed", () => {
+      be("admin");
+      if (!refused(`select public.sarraf_office_settle('off23','usd',9999,'too much','flow-23-over')`)) {
+        throw new Error("the owner paid an office more than it was owed");
+      }
+    });
+
+    step("settling takes the account to zero and the money out of the safe", () => {
+      const out = j(`public.sarraf_office_settle('off23'::text,'usd'::text,null::numeric,
+        'حسابی نووسینگە درایەوە'::text,'flow-23-settle'::text)`);
+      eq(out.outstanding, 0, "what is left owed");
+      eq(psql("select coalesce(sum(amount),0) from public.account_ledger where user_id='off23'").trim(),
+        "0.0000000000", "the office's account");
+      eq(safe(), safeBefore - 1000, "the safe");
+      // And the liability is discharged in the journal too, not only on the account.
+      eq(psql(`select string_agg(l.account_id||' '||l.side, ' ' order by l.line_no)
+               from public.journal_lines l join public.journal_entries e on e.id=l.entry_id
+               where e.id='je-office-settle-'||md5('adm:flow-23-settle:off23')`).trim(),
+        "acc-2200 debit acc-1000 credit", "the settlement entry");
+    });
+
+    step("and there is nothing left to settle", () => {
+      if (!refused(`select public.sarraf_office_settle('off23','usd',null,'again','flow-23-again')`)) {
+        throw new Error("an office with a zero balance could still be paid");
+      }
+    });
+  });
+
   // ── the report ──────────────────────────────────────────────────────────────
   const failed = scenarios.filter((s) => !s.ok);
   for (const s of scenarios) {

@@ -127,23 +127,43 @@ test("an office payment needs immutable uploaded evidence, not a typed reference
   assert.match(migration, /owner_id=auth\.uid\(\)::text/);
   assert.match(migration, /\(metadata->>'size'\)::bigint between 1 and 10485760/);
   assert.match(migration, /not exists\(select 1 from public\.office_payment_evidence e where e\.storage_path=name\)/);
-  assert.match(officeUi, /storage\.from\("receipts"\)\.upload/);
-  assert.match(officeUi, /fetch\("\/api\/office-payment-evidence"/);
-  assert.doesNotMatch(officeUi, /p_image_sha256|subtle\.digest/);
+  // The office screen no longer uploads anything — the owner asked for the file to go — but the
+  // server keeps every guard. sarraf_office_payment_report still refuses a report without new
+  // immutable evidence, and the route that attests it is still the only way to attach some.
+  assert.doesNotMatch(officeUi, /storage\.from\("receipts"\)\.upload/,
+    "the office screen is asking for a photograph again");
   assert.match(evidenceRoute, /storage\.from\("receipts"\)\.download\(body\.storagePath\)/);
   assert.match(evidenceRoute, /createHash\("sha256"\)\.update\(bytes\)/);
   assert.match(evidenceRoute, /sniffEvidence\(bytes\)/);
   assert.match(evidenceRoute, /sarraf_office_payment_attach_evidence_server/);
-  assert.match(officeUi, /createSignedUrl\(row\.evidencePath, 300\)/);
 });
 
-test("the UI requires an exact office and exposes administrator confirmation", () => {
+test("the UI requires an exact office, and the office pays in one press", () => {
   assert.match(app, /f\.type === "buy" && f\.status === "pending" && !f\.officeId/);
   assert.match(app, /p_office_id: f\.officeId/);
   assert.doesNotMatch(app, /data\.users\.find\(\(u\) => u\.role === "office" && !u\.deleted\)/,
     "a pending purchase must not silently choose the first office");
-  assert.match(officeUi, /sarraf_office_payment_confirm/);
-  assert.match(officeUi, /canConfirm && row\.status === "paid_reported" && outstanding <= 0/);
+
+  // One press. The owner asked for «بینینی ئەوەی مامەڵيکە هی کێێە و بڕەکەی چەندە و پارەم دا» and
+  // nothing else, so the four statuses, the typed amount, the reference and the uploaded
+  // photograph are gone — each of them was a way for a real payment to go unrecorded.
+  assert.match(officeUi, /sarraf_office_payment_paid/);
+  assert.doesNotMatch(officeUi, /sarraf_office_payment_report/,
+    "the office screen is back to reporting through the four-status state machine");
+  assert.doesNotMatch(officeUi, /storage\.from\("receipts"\)\.upload/,
+    "the office screen asks for an evidence file again");
+  assert.doesNotMatch(officeUi, /p_reference/,
+    "the office screen asks for a payment reference again");
+  assert.match(officeUi, /sarraf_office_board/,
+    "the screen must read its list, its totals and what it is owed from one call");
+});
+
+test("the owner settles the office account through the command that moves all three books", () => {
+  // Settling through the ordinary account move would take the office's balance to zero and leave
+  // acc-2200 credited for ever: the operational account says paid, the journal says owed.
+  assert.match(app, /sarraf_office_settle/);
+  assert.match(app, /p_office_id: officeId/);
+  assert.match(app, /onClick=\{\(\) => officeSettle\(officeId, c\.id, v\)\}/);
 });
 
 test("pending transactions create an explicit directional debt from server-owned fields", () => {
