@@ -63,7 +63,10 @@ test("the landing redirect happens once, not on every render", () => {
 const hub = (() => {
   const start = source.indexOf("function AdminCenterHub(");
   assert.ok(start > 0, "the admin centre hub is gone");
-  const end = source.indexOf("\n  return (", start);
+  // The whole component, markup included: what the screen shows and in what order is the thing
+  // being checked, and that lives after the return.
+  const end = source.indexOf("\nconst Pill = ", start);
+  assert.ok(end > start, "the hub is no longer followed by Pill");
   return source.slice(start, end);
 })();
 
@@ -89,18 +92,34 @@ test("the manager's own screens are not listed inside a business's admin centre"
     "the hub still filters rows by rank, which means it still holds rows for another rank");
 });
 
-// Eleven entries under one heading is not a list, it is a wall: nobody scans it, they hunt
-// through it. Nothing was removed — every screen that was reachable still is.
-test("no section of the admin centre is a wall of entries", () => {
-  const sections = hub.split(/title: label\(/).slice(1);
-  assert.ok(sections.length >= 4, `expected the hub to be grouped, found ${sections.length} sections`);
-  for (const section of sections) {
-    const count = (section.match(/^\s{8}\["/gm) || []).length;
-    assert.ok(count <= 4, `a section holds ${count} entries; four is the most that reads as a group`);
-  }
+// It was fifteen cards under five headings that said the same thing every morning. The owner's
+// answer to "what is your day made of" was «بە گشتی فیشەکان», so the screen is the day: receipts
+// first, then the rates without which nothing can be valued, then whatever is waiting.
+test("the screen opens on the receipts, because that is most of the day", () => {
+  const receipts = hub.indexOf('id="today-receipts"');
+  const rates = hub.indexOf('id="today-rates"');
+  const tools = hub.indexOf('id="today-tools"');
+  assert.ok(receipts > 0, "the receipts section is gone");
+  assert.ok(rates > receipts, "the rates are shown above the receipts");
+  assert.ok(tools > rates, "the tools are shown above the work");
 });
 
-test("every screen the admin centre used to offer is still offered", () => {
+// A screen that prints four zeroes every morning is a screen that teaches you not to read it.
+test("a line with nothing waiting behind it is not drawn", () => {
+  assert.match(hub, /\{approvals > 0 && \(/, "approvals are drawn even when there are none");
+  assert.match(hub, /\{unpaid > 0 && \(/, "unpaid transactions are drawn even when there are none");
+  assert.match(hub, /\{waiting\.length > 0 && \(/, "the batch call to action is drawn on an empty day");
+  assert.match(hub, /officesOwed\.map/, "an office owed nothing still gets a line");
+});
+
+// Every count comes from the same data the screen it links to reads, so a summary saying four
+// cannot lead to a list showing three.
+test("the counts are read, not stored", () => {
+  assert.match(hub, /const stageOf = \(b\) =>/, "the screen no longer derives the batch stage itself");
+  assert.match(hub, /unpricedCurrencies\(data\?\.currencies \|\| \[\]\)/, "the rates check is not the one the rest of the app uses");
+});
+
+test("every screen the admin centre used to offer is still one press away", () => {
   for (const id of ["action-inbox", "approvals", "close", "receipt-review", "receipt-forwarding",
                     "partner-holdings", "debt-center", "cashbox", "partner-accounts",
                     "office-payments", "insights", "integrity", "audit", "export-audit", "backup"]) {
@@ -111,12 +130,15 @@ test("every screen the admin centre used to offer is still offered", () => {
 // Two screens called "پشکنینی فیش" meant opening the wrong one and concluding the right one was
 // broken. Names inside one navigation must be distinct.
 test("no two entries share a name", () => {
-  const names = [...hub.matchAll(/label\("([^"]+)", "([^"]+)"/g)]
-    .map((m) => m[2])
-    .filter((n) => n !== "Daily operations");
-  const seen = new Set();
-  for (const n of names) {
-    assert.ok(!seen.has(n), `"${n}" names two different screens`);
-    seen.add(n);
+  // Only the entries themselves — `["id", label(…), Icon]`. A name repeated in the prose of a
+  // tile that points at the same screen is the screen being called what it is called, twice,
+  // which is the opposite of the problem: two different destinations wearing one name.
+  const entries = [...hub.matchAll(/\["([a-z-]+)", label\("[^"]+", "([^"]+)"/g)];
+  assert.ok(entries.length >= 10, `expected the tools to be listed, found ${entries.length}`);
+  const seen = new Map();
+  for (const [, id, name] of entries) {
+    assert.ok(!seen.has(name) || seen.get(name) === id,
+      `"${name}" names both ${seen.get(name)} and ${id}`);
+    seen.set(name, id);
   }
 });

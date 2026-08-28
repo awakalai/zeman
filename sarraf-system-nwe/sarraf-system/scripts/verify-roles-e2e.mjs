@@ -84,24 +84,24 @@ const USERS = {
 const ROLE_EXPECTATIONS = {
   admin: {
     // The admin owns the whole system; these are the surfaces that must exist for them.
-    present: ["ناوەندی بەڕێوەبردن", "مامەڵە"],
+    present: ["کاری ئەمڕۆ", "مامەڵە"],
     absent: [],
   },
   customer: {
     present: ["فیش"],
     // A customer must never be offered an operator surface.
-    absent: ["ناوەندی بەڕێوەبردن", "بەستنی ڕۆژ", "پاراستنی داتا", "ناردنی فیش بۆ خاوەنەکەی"],
+    absent: ["کاری ئەمڕۆ", "بەستنی ڕۆژ", "پاراستنی داتا", "ناردنی فیش بۆ خاوەنەکەی"],
   },
   partner: {
     present: ["فیش"],
-    absent: ["ناوەندی بەڕێوەبردن", "بەستنی ڕۆژ", "پاراستنی داتا", "ناردنی فیش بۆ خاوەنەکەی"],
+    absent: ["کاری ئەمڕۆ", "بەستنی ڕۆژ", "پاراستنی داتا", "ناردنی فیش بۆ خاوەنەکەی"],
   },
   office: {
-    absent: ["ناوەندی بەڕێوەبردن", "بەستنی ڕۆژ", "پاراستنی داتا"],
+    absent: ["کاری ئەمڕۆ", "بەستنی ڕۆژ", "پاراستنی داتا"],
     present: ["پارەدانی نووسینگە"],
   },
   investor: {
-    absent: ["ناوەندی بەڕێوەبردن", "بەستنی ڕۆژ", "پاراستنی داتا"],
+    absent: ["کاری ئەمڕۆ", "بەستنی ڕۆژ", "پاراستنی داتا"],
     present: [],
   },
 };
