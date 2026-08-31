@@ -67,6 +67,30 @@ select round(sum(case when l.side = 'debit' then l.base_amount else 0 end), 6) a
  where e.status = 'posted';
 
 \echo ''
+\echo '════════ 2.c ئەو مامەڵانەی ژورناڵ حسابیان ناکات — بە ناو ════════'
+\echo '   پێویستە: بەتاڵ. گەر نا، ئەمانە بە ناو دیارن و دەکرێت چارەسەر بکرێن'
+\echo ''
+
+select transaction_id as "transaction", code, date, transaction_status as "tx status",
+       journal_status as "journal", gap as "why"
+  from public.v_ledger_journal_gaps
+ order by date desc, 1
+ limit 50;
+
+\echo ''
+\echo '════════ 2.d ژورناڵی ڕەشنووس — چاوەڕوانی چین؟ ════════'
+\echo '   ڕەشنووس ناچێتە باڵانسەوە. هەر ڕەشنووسێک پارەیەکە کە کتێبەکان نایبینن'
+\echo ''
+
+select e.id as "entry", e.source_type as "source", e.transaction_id as "transaction",
+       e.business_date as "date", e.reason as "why",
+       (select string_agg(distinct l.currency, ', ')
+          from public.journal_lines l where l.entry_id = e.id) as "currencies"
+  from public.v_journal_drafts e
+ order by e.business_date desc
+ limit 50;
+
+\echo ''
 \echo '════════ 3. ڕیزەکانی بێ بازرگانی (tenant_id = null) ════════'
 \echo '   پێویستە: هەموویان سفر — یان بە ڕوونی خاوەنی پلاتفۆرم بن'
 \echo ''
@@ -116,6 +140,30 @@ select
      where d.storage_path is not null
        and not exists (select 1 from storage.objects o where o.bucket_id='receipts' and o.name = d.storage_path)) as "missing file",
   (select (b.public)::text from storage.buckets b where b.id = 'receipts') as "bucket public";
+
+\echo ''
+\echo '════════ 5.b تۆمارێک کە فایلەکەی نەماوە ════════'
+\echo '   پێویستە: بەتاڵ. هەر ڕیزێک لێرە فیشێکە کە وێنەکەی لەدەست چووە'
+\echo ''
+
+select d.id as "document", d.batch_id as "batch", d.state as "state", d.storage_path as "path", d.received_at as "when"
+  from public.receipt_documents d
+ where d.storage_path is not null
+   and not exists (select 1 from storage.objects o where o.bucket_id = 'receipts' and o.name = d.storage_path)
+ order by d.received_at desc
+ limit 50;
+
+\echo ''
+\echo '════════ 5.c فایلی بێ تۆمار — بەپێی مانگ ════════'
+\echo '   ئەمانە جێماوی بارکردنی ناتەواون. پێش سڕینەوە پێویستە پاڵپشتێکی سەلمێندراو هەبێت'
+\echo ''
+
+select to_char(o.created_at, 'YYYY-MM') as "month", count(*) as "unreferenced files",
+       pg_size_pretty(coalesce(sum((o.metadata->>'size')::bigint), 0)) as "size"
+  from storage.objects o
+ where o.bucket_id = 'receipts'
+   and not exists (select 1 from public.receipt_documents d where d.storage_path = o.name)
+ group by 1 order by 1 desc;
 
 \echo ''
 \echo '════════ 6. فەرمانەکان: کێ بانگیان دەکات ════════'
