@@ -8166,11 +8166,10 @@ function BatchDetail({ id, back, usr, data, profile, onMakeTx, flash, reloadBatc
   const partners = data.users.filter((u) => u.role === "partner" && !u.deleted);
 
   const load = async () => {
-    const [bb, rr, ii, ee, aa, cc, pp] = await Promise.all([
+    const [bb, rr, ii, aa, cc, pp] = await Promise.all([
       supabase.from("receipt_batches").select("*").eq("id", id).single(),
       supabase.from("receipts").select("*").eq("batch_id", id).order("created_at"),
       supabase.from("receipt_intake_items").select("*").eq("batch_id", id).order("created_at"),
-      supabase.from("receipt_events").select("*").eq("batch_id", id).order("created_at", { ascending: true }),
       supabase.from("receipt_audit_events").select("*").eq("batch_id", id).order("created_at", { ascending: true }),
       supabase.rpc("sarraf_receipt_match_candidates", { p_batch_id: id, p_limit: 5 }),
       loadReceiptPolicy(supabase).catch(() => null),
@@ -8184,7 +8183,6 @@ function BatchDetail({ id, back, usr, data, profile, onMakeTx, flash, reloadBatc
       setSummaryError(error?.message || "کۆکانەی سێرڤەر بار نەبوو");
     }
     setB(bb.data || null); setRecs(rr.data || []); setIntakeItems(ii.error ? [] : (ii.data || []));
-    const legacyEvents = ee.error ? [] : (ee.data || []);
     const auditedEvents = aa.error ? [] : (aa.data || []).map((event) => ({
       id: `audit-${event.id}`,
       event_type: event.event_type,
@@ -8192,7 +8190,7 @@ function BatchDetail({ id, back, usr, data, profile, onMakeTx, flash, reloadBatc
       actor_user_id: event.actor_id,
       detail: event.metadata?.reason || event.metadata?.decision || null,
     }));
-    setEvents([...legacyEvents, ...auditedEvents].sort((left, right) => new Date(left.created_at) - new Date(right.created_at)));
+    setEvents(auditedEvents.sort((left, right) => new Date(left.created_at) - new Date(right.created_at)));
     setCandidates(cc.error ? [] : (cc.data || []));
     setReceiptPolicy(pp || null);
     setPick(Object.fromEntries((rr.data || []).map((r) => [r.id, r.partner_id || ""])));
