@@ -1060,6 +1060,60 @@ try {
     }
   });
 
+  // ── money that belongs to no business ───────────────────────────────────────
+  //
+  // tenant_id defaults to sarraf_tenant(), which reads auth.uid(). A route holding the service
+  // key has no auth.uid(); nor does a trigger inside a SECURITY DEFINER command, nor a
+  // maintenance connection. The default then yields null, and because every tenant policy on
+  // these tables is RESTRICTIVE the row becomes invisible to everybody — including the business
+  // that created it. Money nobody can see is worse than money in the wrong place.
+  check("a batch written with no session is still given its business", () => {
+    psql(`insert into public.receipt_batches(id,customer_id,customer_name,direction,status,currency,uploaded_by)
+          values ('bat-nosession','iso-a','A','sell','pending','CNY','iso-a')`);
+    const owner = psql(`select coalesce(tenant_id,'<none>') from public.receipt_batches where id='bat-nosession'`).trim();
+    if (owner !== "t-sarkhel") throw new Error(`the batch went to ${owner}, not to the uploader's business`);
+  });
+
+  check("a receipt takes the business of the batch it arrived in", () => {
+    psql(`insert into public.receipts(id,batch_id,direction,amount,fee,currency,status)
+          values ('rec-nosession','bat-b','sell',100,1,'CNY','ok')`);
+    const owner = psql(`select coalesce(tenant_id,'<none>') from public.receipts where id='rec-nosession'`).trim();
+    if (owner !== "t-watan") throw new Error(`the receipt went to ${owner}, not to its batch's business`);
+  });
+
+  check("a ledger line takes the business of the transaction it accounts for", () => {
+    // A pending transaction needs a registered customer, and this fixture has none in t-watan.
+    psql(`insert into public.app_users(id,name,role,tenant_id) values ('iso-cust-b','Customer B','customer','t-watan')
+          on conflict (id) do nothing`);
+    psql(`insert into public.txs(id,code,type,cp_id,cur_id,amount,rate,against_id,total,status,date,tenant_id)
+          values ('tx-nosession',990001,'buy','iso-cust-b','cny',100,1,'usd',100,'pending',current_date,'t-watan')`);
+    psql(`insert into public.ledger(id,type,owner,cur_id,amount,tx_id,date)
+          values ('led-nosession','settlement','main','cny',100,'tx-nosession',current_date)`);
+    const owner = psql(`select coalesce(tenant_id,'<none>') from public.ledger where id='led-nosession'`).trim();
+    if (owner !== "t-watan") throw new Error(`the ledger line went to ${owner}, not to its transaction's business`);
+  });
+
+  check("a row that names no business at all is refused, not silently hidden", () => {
+    let refused = "";
+    try {
+      psql(`insert into public.receipt_batches(id,customer_id,customer_name,direction,status,currency)
+            values ('bat-orphan','nobody-at-all','X','sell','pending','CNY')`);
+    } catch (error) { refused = String(error.message || error); }
+    if (!refused) throw new Error("a batch belonging to no business was accepted");
+    if (!/belongs to no business/.test(refused)) {
+      throw new Error(`refused, but for the wrong reason: ${refused.slice(0, 200)}`);
+    }
+    const landed = psql(`select count(*) from public.receipt_batches where id='bat-orphan'`).trim();
+    if (landed !== "0") throw new Error("the refused batch was written anyway");
+  });
+
+  check("a row that says its business is believed", () => {
+    psql(`insert into public.receipt_batches(id,customer_id,customer_name,direction,status,currency,uploaded_by,tenant_id)
+          values ('bat-explicit','iso-a','A','sell','pending','CNY','iso-a','t-watan')`);
+    const owner = psql(`select tenant_id from public.receipt_batches where id='bat-explicit'`).trim();
+    if (owner !== "t-watan") throw new Error(`the row said t-watan and landed in ${owner}`);
+  });
+
   // ── and the manager, who is meant to see everything ─────────────────────────
   check("the manager still sees both businesses", () => {
     const mgr = psql(`select coalesce(auth_id::text,'') from public.app_users
