@@ -1114,6 +1114,46 @@ try {
     if (owner !== "t-watan") throw new Error(`the row said t-watan and landed in ${owner}`);
   });
 
+  // ── the record-keeping tables, where the rule is softer on purpose ──────────
+  //
+  // On a transaction or a ledger line a row with no business is refused: writing money nobody
+  // can see is worse than failing. On a log it is not. A trigger that could veto a payment
+  // because it failed to label the audit entry would turn a record-keeping problem into an
+  // outage — so here the business is worked out, and a row that names nothing at all is still
+  // written. INSPECT is what reports those.
+  check("a receipt's own history takes the business of the receipt", () => {
+    psql(`insert into public.receipt_documents(id,flow,state,batch_id,uploader_id,storage_path,tenant_id)
+          values ('doc-story','customer_sells_to_zeman','created','bat-b','iso-b','ingest/bat-b/doc-story.jpg','t-watan')`);
+    psql(`insert into public.receipt_state_transitions(document_id,from_state,to_state,actor_id)
+          values ('doc-story','created','uploaded','iso-b')`);
+    // The document insert fires its own transition as well as the one written here, so ask for
+    // the distinct answer rather than a row: what matters is that no step landed unlabelled.
+    const owner = psql(`select string_agg(distinct coalesce(tenant_id,'<none>'), ',')
+                          from public.receipt_state_transitions where document_id='doc-story'`).trim();
+    if (owner !== "t-watan") throw new Error(`the steps went to ${owner}, not all to its receipt's business`);
+  });
+
+  check("an audit line takes the business of the person who acted", () => {
+    psql(`insert into public.audit(id,date,user_id,action,detail)
+          values ('aud-nosession',now(),'iso-a','ڕاهێنان','test')`);
+    const owner = psql(`select coalesce(tenant_id,'<none>') from public.audit where id='aud-nosession'`).trim();
+    if (owner !== "t-sarkhel") throw new Error(`the audit line went to ${owner}, not to the actor's business`);
+  });
+
+  check("a note addressed to nobody takes the business of what it points at", () => {
+    psql(`insert into public.notes(id,user_id,kind,title,body,ref_id)
+          values ('note-nosession',null,'receipt','t','b','bat-a')`);
+    const owner = psql(`select coalesce(tenant_id,'<none>') from public.notes where id='note-nosession'`).trim();
+    if (owner !== "t-sarkhel") throw new Error(`the note went to ${owner}, not to its batch's business`);
+  });
+
+  check("a log entry that names nothing is still written, not allowed to fail the operation", () => {
+    psql(`insert into public.audit(id,date,user_id,action,detail)
+          values ('aud-orphan',now(),null,'ڕاهێنان','no actor at all')`);
+    const landed = psql(`select count(*) from public.audit where id='aud-orphan'`).trim();
+    if (landed !== "1") throw new Error("an unlabelled audit line was refused, which would take the operation down with it");
+  });
+
   // ── and the manager, who is meant to see everything ─────────────────────────
   check("the manager still sees both businesses", () => {
     const mgr = psql(`select coalesce(auth_id::text,'') from public.app_users

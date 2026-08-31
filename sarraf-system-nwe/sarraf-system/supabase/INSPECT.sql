@@ -127,6 +127,45 @@ select t as "table", latest as "newest tenantless"
   ) x where latest is not null order by latest desc;
 
 \echo ''
+\echo '════════ ٤.b چاکسازی پێش ئەنجامدان — چی دەگۆڕێت ════════'
+\echo '   ئەمە هیچ ناگۆڕێت. تەنها دەڵێت 202608310002 چەند ڕیزی دەگۆڕی'
+\echo ''
+
+select 'receipt_state_transitions' as "table",
+       count(*) filter (where s.tenant_id is null) as "no business",
+       count(*) filter (where s.tenant_id is null and d.tenant_id is not null) as "would be repaired",
+       count(*) filter (where s.tenant_id is null and d.tenant_id is null) as "would stay",
+       'دەگۆڕدرێت' as "what happens"
+  from public.receipt_state_transitions s
+  left join public.receipt_documents d on d.id = s.document_id
+union all
+select 'notes',
+       count(*) filter (where n.tenant_id is null),
+       count(*) filter (where n.tenant_id is null and coalesce(
+         (select u.tenant_id from public.app_users u where u.id = n.user_id),
+         (select b.tenant_id from public.receipt_batches b where b.id = n.ref_id),
+         (select t.tenant_id from public.txs t where t.id = n.ref_id)) is not null),
+       count(*) filter (where n.tenant_id is null and coalesce(
+         (select u.tenant_id from public.app_users u where u.id = n.user_id),
+         (select b.tenant_id from public.receipt_batches b where b.id = n.ref_id),
+         (select t.tenant_id from public.txs t where t.id = n.ref_id)) is null),
+       'دەگۆڕدرێت'
+  from public.notes n
+union all
+select 'audit', count(*) filter (where tenant_id is null), 0, count(*) filter (where tenant_id is null),
+       'دەست لێ نادرێت — append-only' from public.audit
+union all
+select 'receipt_extractions', count(*) filter (where tenant_id is null), 0, count(*) filter (where tenant_id is null),
+       'دەست لێ نادرێت — append-only' from public.receipt_extractions
+union all
+select 'receipt_ocr_attempts', count(*) filter (where tenant_id is null), 0, count(*) filter (where tenant_id is null),
+       'دەست لێ نادرێت — append-only' from public.receipt_ocr_attempts
+union all
+select 'system_event_log', count(*) filter (where tenant_id is null), 0, count(*) filter (where tenant_id is null),
+       'دەست لێ نادرێت — append-only' from public.system_event_log
+ order by 2 desc, 1;
+
+\echo ''
 \echo '════════ 5. یەکپارچەیی ستۆرەج ════════'
 \echo '   پێویستە: هیچ فایلێکی بێ تۆمار، هیچ تۆمارێکی بێ فایل'
 \echo ''
