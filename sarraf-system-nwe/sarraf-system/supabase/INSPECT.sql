@@ -24,10 +24,47 @@ select
 
 \echo ''
 \echo '════════ 2. تەندروستی سیستەم ════════'
-\echo '   پێویستە: ok = true'
+\echo '   پێویستە: هەموو FAILـەکان سفر'
 \echo ''
 
-select public.sarraf_system_health()::text as "health";
+-- sarraf_system_health() داوای ئەکتەرێکی ئەدمین دەکات، و ئەم پەیوەندییە وەک postgresـە بێ
+-- هیچ auth.uid()ـێک — بۆیە «not authorized» دەداتەوە. هەمان ڕاستییەکان لە هەمان ڤیوەکانەوە
+-- دەخوێندرێنەوە کە خۆی دەیانخوێنێتەوە.
+select 'مامەڵەی بێ دەفتەر' as "check",
+       (select count(*) from public.txs t where not t.deleted
+          and not exists (select 1 from public.ledger l where l.tx_id = t.id)) as "count", 'FAIL' as "severity"
+union all
+select 'دەفتەر بۆ مامەڵەیەکی نەمان',
+       (select count(*) from public.ledger l where l.tx_id is not null
+          and not exists (select 1 from public.txs t where t.id = l.tx_id)), 'FAIL'
+union all
+select 'یاساکانی A/B/C',
+       (select count(*) from public.v_transaction_business_flow_integrity where issue is not null), 'FAIL'
+union all
+select 'بەستنی دەفتەر و ژورناڵ',
+       (select count(*) from public.v_ledger_journal_gaps), 'FAIL'
+union all
+select 'سەرچاوەی ژورناڵ',
+       (select count(*) from public.v_journal_orphans), 'FAIL'
+union all
+select 'ژورناڵی ڕەشنووس، چاوەڕوانی نرخ',
+       (select count(*) from public.v_journal_drafts), 'WARN'
+union all
+select 'مامەڵەی چاوەڕوانی بێ بەستن',
+       (select count(*) from public.v_pending_transaction_gaps), 'WARN'
+order by 3, 2 desc;
+
+\echo ''
+\echo '════════ 2.b باڵانسی تاقیکردنەوە ════════'
+\echo '   پێویستە: جیاوازی = 0'
+\echo ''
+
+select round(sum(case when l.side = 'debit' then l.base_amount else 0 end), 6) as "debit",
+       round(sum(case when l.side = 'credit' then l.base_amount else 0 end), 6) as "credit",
+       round(sum(case when l.side = 'debit' then l.base_amount else -l.base_amount end), 6) as "difference"
+  from public.journal_lines l
+  join public.journal_entries e on e.id = l.entry_id
+ where e.status = 'posted';
 
 \echo ''
 \echo '════════ 3. ڕیزەکانی بێ بازرگانی (tenant_id = null) ════════'
