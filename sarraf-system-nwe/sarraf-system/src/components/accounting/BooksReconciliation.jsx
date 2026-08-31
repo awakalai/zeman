@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { AlertTriangle, CheckCircle2, Loader2, RefreshCw, Scale } from "lucide-react";
-import { loadBooksReconciliation, loadGaps } from "../../services/booksReconciliation";
+import { AlertTriangle, CheckCircle2, Loader2, RefreshCw, Scale, Wand2 } from "lucide-react";
+import { loadBooksReconciliation, loadGaps, finishUnvaluedEntry } from "../../services/booksReconciliation";
 import "./debt-center.css";
 import { errorText } from "../../services/userFacingError";
 
@@ -15,9 +15,39 @@ const COPY = {
     difference: "جیاوازی", checkedAt: "پشکنراوە",
     gaps: "ئەو مامەڵانەی کێشەیان هەیە", noGaps: "هیچ مامەڵەیەکی کێشەدار نییە",
     unknown: "هەڵسەنگاندنی دەفتەر بەردەست نییە",
+    finish: "تەواوی بکە", finishing: "تەواوکردن...",
+    finished: "تۆمارەکە تەواو کرا و چووە دەفتەرەوە",
+    finishHint: "نرخەکە ئێستا هەیە — بە یەک لێدان ئەم تۆمارە دەچێتە دەفتەرەکەوە",
+  },
+  en: {
+    title: "Do the books agree",
+    subtitle: "The old ledger and the double-entry journal record the same money. This checks that they say the same thing",
+    refresh: "Check again", loading: "Checking...",
+    agreed: "Both sets of books agree ✓",
+    disagreed: "They do not agree — see below",
+    transactions: "Transactions", posted: "Posted", ledgerRows: "Old ledger rows",
+    difference: "Difference", checkedAt: "Checked",
+    gaps: "The transactions with a problem", noGaps: "No transaction has a problem",
+    unknown: "The balance could not be measured",
+    finish: "Finish it", finishing: "Finishing...",
+    finished: "The entry was valued and posted",
+    finishHint: "The rate exists now — one press puts this entry into the books",
+  },
+  ar: {
+    title: "هل تتطابق الدفاتر",
+    subtitle: "الدفتر القديم ودفتر القيد المزدوج يسجّلان المال نفسه. هنا يتم التحقق من تطابقهما",
+    refresh: "افحص مرة أخرى", loading: "جارٍ الفحص...",
+    agreed: "الدفتران متطابقان ✓",
+    disagreed: "غير متطابقين — انظر أدناه",
+    transactions: "المعاملات", posted: "مُرحَّل", ledgerRows: "سطور الدفتر القديم",
+    difference: "الفرق", checkedAt: "فُحص",
+    gaps: "المعاملات التي بها مشكلة", noGaps: "لا توجد معاملة بها مشكلة",
+    unknown: "تعذّر قياس التوازن",
+    finish: "أكمِله", finishing: "جارٍ الإكمال...",
+    finished: "تم تقييم القيد وترحيله",
+    finishHint: "السعر متوفر الآن — ضغطة واحدة تُدخل هذا القيد إلى الدفاتر",
   },
 };
-COPY.en = COPY.ku; COPY.ar = COPY.ku;
 
 const money = (n) => (n == null ? "—" : Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
 
@@ -26,25 +56,51 @@ export function BooksReconciliation({ client, lang = "ku", flash = () => {} }) {
   const [result, setResult] = useState(null);
   const [gaps, setGaps] = useState([]);
   const [state, setState] = useState("loading");
+  const [finishing, setFinishing] = useState(null);
+  // One key per entry, made once and kept. A retry after a lost response is then the same act,
+  // not a second one — which is what the command's idempotency is there for.
+  const keysRef = useRef(new Map());
   const flashRef = useRef(flash);
   flashRef.current = flash;
 
   const load = useCallback(async () => {
     setState("loading");
     try {
-      const summary = await loadBooksReconciliation(client);
+      const summary = await loadBooksReconciliation(client, lang);
       setResult(summary);
       // Only fetched when there is something to show; a clean reconciliation needs no list.
-      setGaps(summary.agreed ? [] : await loadGaps(client).catch(() => []));
+      setGaps(summary.agreed ? [] : await loadGaps(client, 100, lang).catch(() => []));
       setState("ready");
     } catch (e) {
       console.error("books reconciliation", e);
       flashRef.current(errorText(e));
       setState("error");
     }
-  }, [client]);
+  }, [client, lang]);
 
   useEffect(() => { load(); }, [load]);
+
+  // An entry that could not be valued when the trade happened, finished now that the rate is
+  // there. Before this there was nowhere in the whole system to do it: the posting trigger runs
+  // once per transaction and refuses to act if an entry already exists, so a draft stayed a
+  // draft for ever and the money stayed out of the books.
+  const finish = useCallback(async (gap) => {
+    if (!gap?.entryId) return;
+    setFinishing(gap.entryId);
+    try {
+      if (!keysRef.current.has(gap.entryId)) {
+        keysRef.current.set(gap.entryId, `finish-draft:${gap.entryId}:${Date.now()}`);
+      }
+      await finishUnvaluedEntry(client, gap.entryId, keysRef.current.get(gap.entryId));
+      flashRef.current(copy.finished, true);
+      await load();
+    } catch (e) {
+      console.error("finish unvalued entry", e);
+      flashRef.current(errorText(e));
+    } finally {
+      setFinishing(null);
+    }
+  }, [client, copy.finished, load]);
 
   return (
     <section className="debt-panel">
@@ -127,6 +183,19 @@ export function BooksReconciliation({ client, lang = "ku", flash = () => {} }) {
                         <span className="recon-row-text">{g.text}</span>
                       </span>
                       <span className="recon-row-meta">
+                        {g.canFinish && (
+                          <button
+                            type="button"
+                            className="debt-refresh recon-finish"
+                            title={copy.finishHint}
+                            onClick={() => finish(g)}
+                            disabled={finishing === g.entryId}
+                          >
+                            {finishing === g.entryId
+                              ? <><Loader2 className="recon-spin" /> {copy.finishing}</>
+                              : <><Wand2 /> {copy.finish}</>}
+                          </button>
+                        )}
                         <span className="recon-badge">{g.journalStatus}</span>
                       </span>
                     </div>

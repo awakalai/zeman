@@ -11,30 +11,58 @@
  */
 
 export const GAP = Object.freeze({
-  no_journal_entry: "مامەڵەکە تۆمار کراوە بەڵام نەگەیشتووەتە دەفتەری ژمێریاری",
-  entry_unvalued: "بە دۆلار هەڵنەسەنگێندراوە — نرخی دراوەکە دانەنراوە",
-  entry_reversed: "تۆمارەکەی پێچەوانە کراوەتەوە",
+  ku: {
+    no_journal_entry: "مامەڵەکە تۆمار کراوە بەڵام نەگەیشتووەتە دەفتەری ژمێریاری",
+    entry_unvalued: "بە دۆلار هەڵنەسەنگێندراوە — نرخی دراوەکە دانەنراوە",
+    entry_reversed: "تۆمارەکەی پێچەوانە کراوەتەوە",
+  },
+  en: {
+    no_journal_entry: "Recorded as a transaction but it never reached the journal",
+    entry_unvalued: "Not valued in dollars — the currency had no rate",
+    entry_reversed: "Its entry was reversed",
+  },
+  ar: {
+    no_journal_entry: "سُجّلت كمعاملة لكنها لم تصل إلى دفتر القيد",
+    entry_unvalued: "لم تُقيَّم بالدولار — لم يكن للعملة سعر",
+    entry_reversed: "تم عكس قيدها",
+  },
 });
-export const gapText = (code) => GAP[code] || code;
+export const gapText = (code, lang = "ku") => (GAP[lang] || GAP.ku)[code] || code;
 
 export const FINDING = Object.freeze({
-  missing_entries: "مامەڵە بێ تۆماری ژمێریاری",
-  unvalued_entries: "تۆماری هەڵنەسەنگێندراو",
-  orphan_entries: "تۆماری بێ مامەڵە",
-  ledger_rows_without_entry: "ڕیزی دەفتەری کۆن بێ تۆماری ژمێریاری",
-  trial_balance: "دەفتەر هاوسەنگ نییە",
+  ku: {
+    missing_entries: "مامەڵە بێ تۆماری ژمێریاری",
+    unvalued_entries: "تۆماری هەڵنەسەنگێندراو",
+    orphan_entries: "تۆماری بێ مامەڵە",
+    ledger_rows_without_entry: "ڕیزی دەفتەری کۆن بێ تۆماری ژمێریاری",
+    trial_balance: "دەفتەر هاوسەنگ نییە",
+  },
+  en: {
+    missing_entries: "Transactions with no journal entry",
+    unvalued_entries: "Entries that could not be valued",
+    orphan_entries: "Entries with no transaction",
+    ledger_rows_without_entry: "Old ledger rows with no journal entry",
+    trial_balance: "The books do not balance",
+  },
+  ar: {
+    missing_entries: "معاملات بلا قيد",
+    unvalued_entries: "قيود تعذّر تقييمها",
+    orphan_entries: "قيود بلا معاملة",
+    ledger_rows_without_entry: "سطور دفتر قديم بلا قيد",
+    trial_balance: "الدفاتر غير متوازنة",
+  },
 });
-export const findingText = (code) => FINDING[code] || code;
+export const findingText = (code, lang = "ku") => (FINDING[lang] || FINDING.ku)[code] || code;
 
 const count = (v) => {
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
 };
 
-export async function loadBooksReconciliation(client) {
+export async function loadBooksReconciliation(client, lang = "ku") {
   const { data, error } = await client.rpc("sarraf_ledger_journal_reconciliation");
   if (error) throw error;
-  return summarise(data);
+  return summarise(data, lang);
 }
 
 /**
@@ -44,7 +72,7 @@ export async function loadBooksReconciliation(client) {
  * left out of the findings rather than reported as zero. "Not measured" and "measured as none"
  * are different claims.
  */
-export function summarise(raw) {
+export function summarise(raw, lang = "ku") {
   const trial = raw?.trial_balance || null;
   const balanced = trial ? trial.balanced === true : null;
 
@@ -52,12 +80,12 @@ export function summarise(raw) {
   for (const key of ["missing_entries", "unvalued_entries", "orphan_entries", "ledger_rows_without_entry"]) {
     const value = raw?.[key];
     if (value == null) continue;
-    if (count(value) > 0) findings.push({ code: key, text: findingText(key), count: count(value) });
+    if (count(value) > 0) findings.push({ code: key, text: findingText(key, lang), count: count(value) });
   }
   if (balanced === false) {
     findings.push({
       code: "trial_balance",
-      text: findingText("trial_balance"),
+      text: findingText("trial_balance", lang),
       count: 1,
       difference: trial?.difference == null ? null : Number(trial.difference),
     });
@@ -77,10 +105,10 @@ export function summarise(raw) {
 }
 
 /** The transactions behind a "missing" or "unvalued" count, so the operator can go and fix them. */
-export async function loadGaps(client, limit = 100) {
+export async function loadGaps(client, limit = 100, lang = "ku") {
   const { data, error } = await client
     .from("v_ledger_journal_gaps")
-    .select("transaction_id,code,date,transaction_status,journal_status,gap")
+    .select("transaction_id,code,date,transaction_status,journal_status,gap,entry_id")
     .order("date", { ascending: false })
     .limit(limit);
   if (error) throw error;
@@ -91,6 +119,26 @@ export async function loadGaps(client, limit = 100) {
     transactionStatus: r.transaction_status,
     journalStatus: r.journal_status,
     gap: r.gap,
-    text: gapText(r.gap),
+    entryId: r.entry_id,
+    text: gapText(r.gap, lang),
+    // The only gap an operator can close from here. A transaction with no entry at all, or one
+    // that was reversed, is a different problem and needs a different answer.
+    canFinish: r.gap === "entry_unvalued" && !!r.entry_id,
   }));
+}
+
+/**
+ * Finish an entry that could not be valued when the trade happened.
+ *
+ * The command key is what makes a second press — or a retry after a lost response — the same
+ * act rather than a second one. It is generated here, once per attempt, and reused if the caller
+ * retries with the same one.
+ */
+export async function finishUnvaluedEntry(client, entryId, commandKey) {
+  const { data, error } = await client.rpc("sarraf_resolve_journal_draft", {
+    p_entry_id: entryId,
+    p_command_key: commandKey,
+  });
+  if (error) throw error;
+  return data;
 }
