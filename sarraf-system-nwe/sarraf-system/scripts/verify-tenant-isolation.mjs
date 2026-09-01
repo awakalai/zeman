@@ -1603,6 +1603,67 @@ try {
       "one customer reading another's receipt summary");
   });
 
+  // ── the balance nobody could explain ────────────────────────────────────────
+  //
+  // The owner reported a CNY cashbox that goes negative for no visible reason. It is not one bad
+  // transaction: the cashbox figure is a residual — every ledger row that names no partner —
+  // and nothing constrains a residual to stay positive. 202609010009 does not change the number,
+  // it makes the number explainable, which is what §8 asks for first.
+  //
+  // A reporting function that has never seen a negative balance proves nothing, so this
+  // manufactures one and checks that it is found and named.
+  check("the explain view names the movement that took a balance below zero", () => {
+    psql(`
+      begin;
+      set local session_replication_role = replica;
+      delete from public.ledger where id like 'neg-%';
+      insert into public.ledger(id,type,owner,cur_id,amount,date,tenant_id) values
+        ('neg-1','deposit','self','CNY', 100, now() - interval '3 days','t-sarkhel'),
+        ('neg-2','withdraw','self','CNY', -40, now() - interval '2 days','t-sarkhel'),
+        ('neg-3','withdraw','self','CNY',-200, now() - interval '1 days','t-sarkhel');
+      commit;`);
+    const out = asUser(A_UID,
+      `select public.sarraf_balance_first_negative('CNY','owner')::text`).trim();
+    if (!out.includes('"ever_negative" : true') && !out.includes('"ever_negative": true')) {
+      throw new Error(`it did not report a negative balance: ${out.slice(0, 300)}`);
+    }
+    // neg-3 is the one that crosses: 100, then 60, then -140.
+    if (!out.includes("neg-3")) throw new Error(`it blamed the wrong movement: ${out.slice(0, 300)}`);
+    if (!out.includes("-140")) throw new Error(`the balance after is wrong: ${out.slice(0, 300)}`);
+  });
+
+  check("the running balance is reported after every movement, in order", () => {
+    const seen = asUser(A_UID,
+      `select coalesce(string_agg(ledger_id || '=' || running_balance::text, ',' order by seq),'<none>')
+         from public.sarraf_explain_balance('CNY','owner')
+        where ledger_id like 'neg-%'`).trim();
+    if (seen !== "neg-1=100.0000000000,neg-2=60.0000000000,neg-3=-140.0000000000") {
+      throw new Error(`running balance reads: ${seen}`);
+    }
+  });
+
+  // Its own currency rather than a delete: the ledger is append-only and refuses one, which is
+  // the protection working. The first version of this check tried to tidy up and was told so.
+  check("a balance that never went negative says so plainly", () => {
+    psql(`
+      begin;
+      set local session_replication_role = replica;
+      insert into public.ledger(id,type,owner,cur_id,amount,date,tenant_id) values
+        ('pos-1','deposit','self','XTS', 500, now() - interval '2 days','t-sarkhel'),
+        ('pos-2','withdraw','self','XTS',-120, now() - interval '1 days','t-sarkhel')
+      on conflict (id) do nothing;
+      commit;`);
+    const out = asUser(A_UID,
+      `select public.sarraf_balance_first_negative('XTS','owner')::text`).trim();
+    if (!out.includes("false")) throw new Error(`it invented a negative: ${out.slice(0, 300)}`);
+    if (!out.includes("380")) throw new Error(`the final balance is wrong: ${out.slice(0, 300)}`);
+  });
+
+  check("a customer cannot read the owner's balance explanation", () => {
+    refused(CUS_UID, "select * from public.sarraf_explain_balance('CNY','owner')",
+      "a customer reading the owner's cashbox movements");
+  });
+
   // ── and the manager, who is meant to see everything ─────────────────────────
   check("the manager still sees both businesses", () => {
     const mgr = psql(`select coalesce(auth_id::text,'') from public.app_users

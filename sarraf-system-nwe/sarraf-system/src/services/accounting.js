@@ -317,3 +317,60 @@ export async function loadDailyAccountingRates(client, effectiveDate = new Date(
   }
   return rates;
 }
+
+/**
+ * Every movement behind one currency's balance, with the running total after each.
+ *
+ * The owner reported a CNY cashbox that goes negative for no visible reason. It is not one bad
+ * transaction: the cashbox figure is a residual — every ledger row naming no partner — and
+ * nothing constrains a residual to stay positive. Mirrors public.sarraf_explain_balance.
+ *
+ * `holder` is "owner", "partner" (with holderId) or "all".
+ */
+export async function explainBalance(client, currencyId, { holder = "owner", holderId = null, limit = 500 } = {}) {
+  const { data, error } = await client.rpc("sarraf_explain_balance", {
+    p_cur_id: currencyId, p_holder: holder, p_holder_id: holderId, p_limit: limit,
+  });
+  if (error) throw error;
+  return (data || []).map((r) => ({
+    seq: Number(r.seq),
+    ledgerId: r.ledger_id,
+    movedAt: r.moved_at,
+    entryType: r.entry_type,
+    amount: Number(r.amount),
+    runningBalance: Number(r.running_balance),
+    wentNegative: r.went_negative === true,
+    partnerId: r.partner_id || null,
+    partnerName: r.partner_name || null,
+    txId: r.tx_id || null,
+    note: r.note || null,
+  }));
+}
+
+/** Which movement took a balance below zero first, or a plain "it never did". */
+export async function firstNegativeMovement(client, currencyId, { holder = "owner", holderId = null } = {}) {
+  const { data, error } = await client.rpc("sarraf_balance_first_negative", {
+    p_cur_id: currencyId, p_holder: holder, p_holder_id: holderId,
+  });
+  if (error) throw error;
+  const answer = data || {};
+  return {
+    currency: answer.currency || currencyId,
+    holder: answer.holder || holder,
+    everNegative: answer.ever_negative === true,
+    finalBalance: Number(answer.final_balance ?? 0),
+    firstNegative: answer.first_negative
+      ? {
+        seq: Number(answer.first_negative.seq),
+        ledgerId: answer.first_negative.ledger_id,
+        movedAt: answer.first_negative.moved_at,
+        entryType: answer.first_negative.entry_type,
+        amount: Number(answer.first_negative.amount),
+        balanceAfter: Number(answer.first_negative.balance_after),
+        txId: answer.first_negative.transaction || null,
+        partnerName: answer.first_negative.partner || null,
+        note: answer.first_negative.note || null,
+      }
+      : null,
+  };
+}
