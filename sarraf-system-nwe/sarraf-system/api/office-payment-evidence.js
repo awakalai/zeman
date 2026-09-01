@@ -6,6 +6,7 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
+import { ACTOR_COLUMNS, sameTenant } from "./_tenant.js";
 
 const MAX_BYTES = 10 * 1024 * 1024;
 const windows = new Map();
@@ -97,7 +98,7 @@ export default async function handler(req, res) {
     const authResult = await auth.auth.getUser(token);
     const authId = authResult.data?.user?.id;
     if (authResult.error || !authId) throw failure(401, "session_expired", "session expired");
-    const actorResult = await service.from("app_users").select("id,role,deleted")
+    const actorResult = await service.from("app_users").select(ACTOR_COLUMNS)
       .eq("auth_id", authId).eq("deleted", false).maybeSingle();
     const actor = actorResult.data;
     if (actorResult.error) throw failure(503, "actor_lookup_failed", "account lookup is unavailable", true);
@@ -109,9 +110,14 @@ export default async function handler(req, res) {
     rateLimit(actor.id, ip);
 
     const assignmentResult = await service.from("office_payment_assignments")
-      .select("id,office_id,status").eq("id", body.assignmentId).maybeSingle();
+      .select("id,office_id,status,tenant_id").eq("id", body.assignmentId).maybeSingle();
     if (assignmentResult.error) throw failure(503, "assignment_lookup_failed", "assignment lookup is unavailable", true);
-    if (!assignmentResult.data?.id || assignmentResult.data.office_id !== actor.id) {
+    // Two conditions, not one. office_id already binds the assignment to this account; the
+    // business is checked as well so that a row which somehow carries the wrong tenant cannot
+    // be reached through the service key, which has no row level security to fall back on.
+    if (!assignmentResult.data?.id
+      || assignmentResult.data.office_id !== actor.id
+      || !sameTenant(actor, assignmentResult.data)) {
       throw failure(403, "assignment_not_owned", "assignment is outside this office");
     }
     if (["confirmed", "cancelled", "rejected"].includes(assignmentResult.data.status)) {

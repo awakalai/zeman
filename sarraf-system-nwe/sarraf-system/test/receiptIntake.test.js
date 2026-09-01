@@ -314,3 +314,73 @@ test("recording the reason can fail without losing the receipt", async () => {
   assert.equal(result.state, "stored_retryable");
   assert.equal(result.evidenceKept, true);
 });
+
+/**
+ * An upload that never arrived has to say so.
+ *
+ * When the upload to Storage failed, this called onStage(uploadFailed, …) — a callback inside
+ * the browser — and threw. Nothing told the database. The document stayed at `uploading`, which
+ * is the state its batch waits on, so the batch waited for an image that was never coming and
+ * the person who sent it was never told. The live database was carrying five of these from
+ * August when it was first inspected: 26 and 27 August, still `uploading` on the 31st.
+ */
+test("a failed upload is reported to the database, not only to the screen", async () => {
+  const client = stubClient({ uploadError: { message: "network error", code: "upload_failed" } });
+  await assert.rejects(() => intakeReceipt({
+    client, blob, transactionId: "tx-1", documentId: "doc-lost",
+    fetchImpl: async () => jsonResponse({}),
+  }), (e) => e.stage === "upload");
+
+  const told = client.calls.rpc.find((c) => c.fn === "sarraf_receipt_upload_failed");
+  assert.ok(told, "the database was never told the upload failed");
+  assert.equal(told.args.p_document_id, "doc-lost");
+  assert.equal(told.args.p_code, "upload_failed");
+});
+
+test("the report happens before the caller is told, so a thrown error cannot skip it", async () => {
+  const client = stubClient({ uploadError: { message: "network error" } });
+  const order = [];
+  const wrapped = {
+    ...client,
+    rpc(fn, args) { if (fn === "sarraf_receipt_upload_failed") order.push("told"); return client.rpc(fn, args); },
+    storage: client.storage, auth: client.auth, calls: client.calls,
+  };
+  await assert.rejects(() => intakeReceipt({
+    client: wrapped, blob, transactionId: "tx-1", documentId: "doc-lost-2",
+    onStage: (stage) => { if (stage === INTAKE_STAGE.uploadFailed) order.push("screen"); },
+    fetchImpl: async () => jsonResponse({}),
+  }));
+  assert.deepEqual(order, ["told", "screen"]);
+});
+
+test("a report that itself fails does not replace the upload's own error", async () => {
+  // Best effort: the sweep closes whatever this could not. What must not happen is the reason
+  // the uploader sees turning into "could not write the reason".
+  const client = stubClient({
+    uploadError: { message: "network error", code: "upload_failed" },
+    rpc: { sarraf_receipt_upload_failed: Promise.reject(new Error("write refused")) },
+  });
+  await assert.rejects(() => intakeReceipt({
+    client, blob, transactionId: "tx-1", documentId: "doc-lost-3",
+    fetchImpl: async () => jsonResponse({}),
+  }), (e) => e.stage === "upload" && e.evidenceKept === false);
+});
+
+test("an upload that succeeded reports nothing", async () => {
+  const client = stubClient();
+  await intakeReceipt({
+    client, blob, transactionId: "tx-1", documentId: "doc-fine",
+    fetchImpl: async () => jsonResponse({ documentId: "doc-fine", state: "parsed" }),
+  });
+  assert.equal(client.calls.rpc.some((c) => c.fn === "sarraf_receipt_upload_failed"), false);
+});
+
+test("an object that is already there is a replay, not a failure", async () => {
+  const client = stubClient({ uploadError: { message: "The resource already exists" } });
+  const result = await intakeReceipt({
+    client, blob, transactionId: "tx-1", documentId: "doc-again",
+    fetchImpl: async () => jsonResponse({ documentId: "doc-again", state: "parsed" }),
+  });
+  assert.equal(result.documentId, "doc-again");
+  assert.equal(client.calls.rpc.some((c) => c.fn === "sarraf_receipt_upload_failed"), false);
+});

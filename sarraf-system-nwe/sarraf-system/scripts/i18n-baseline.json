@@ -1,12 +1,11 @@
 {
-  "total": 1073,
+  "total": 1041,
   "counts": {
-    "src/App.jsx": 683,
+    "src/App.jsx": 682,
     "src/brand/brand.js": 1,
-    "src/components/accounting/BooksReconciliation.jsx": 9,
     "src/components/accounting/CashboxPanel.jsx": 12,
     "src/components/accounting/ManagerCenter.jsx": 11,
-    "src/components/accounting/ManagerConsole.jsx": 15,
+    "src/components/accounting/ManagerConsole.jsx": 1,
     "src/components/accounting/PartnerAccounts.jsx": 7,
     "src/components/accounting/PartnerHoldings.jsx": 23,
     "src/components/operations/ExportAuditCenter.jsx": 2,
@@ -20,7 +19,6 @@
     "src/services/adminRanks.js": 17,
     "src/services/backupIntegrity.js": 6,
     "src/services/batchSummary.js": 1,
-    "src/services/booksReconciliation.js": 8,
     "src/services/commandRetry.js": 1,
     "src/services/currencyRate.js": 2,
     "src/services/dayClose.js": 2,

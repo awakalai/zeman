@@ -123,9 +123,32 @@ for (const file of migrations) {
   if (holding) fail(`migration leaves sarraf_definer able to create objects in public: ${file}`);
 }
 
+// A route that holds the service key has had row level security switched off for everything it
+// reads and writes; every tenant boundary the database would have enforced has to be enforced
+// there, in JavaScript. Three of the four such routes decided authorization by role alone, and
+// an administrator is an administrator of one business — so "is an admin" authorised reading
+// another business's receipt images and opening a batch against another business's customer.
+//
+// The rule cannot check that the comparison is correct, but it can check that the route asked
+// the question at all: it must load the actor's business and compare it against something.
+const serviceKeyRoutes = tracked.filter((file) =>
+  /^api\/[^/]+\.js$/.test(file)
+  && /SUPABASE_SECRET_KEY|SUPABASE_SERVICE_ROLE_KEY/.test(text(file)));
+if (serviceKeyRoutes.length === 0) fail("no service-key route found; the tenant rule below is checking nothing");
+for (const file of serviceKeyRoutes) {
+  const source = text(file);
+  const asksForTheBusiness = /ACTOR_COLUMNS|select\((?:["'`][^"'`]*tenant_id)/.test(source);
+  const comparesIt = /sameTenant\(|withinTenant\(|authorizeTarget\(/.test(source);
+  if (!asksForTheBusiness || !comparesIt) {
+    fail(`service-key route decides authorization without the business: ${file}`
+      + ` (loads it: ${asksForTheBusiness}, compares it: ${comparesIt})`);
+  }
+}
+
 const workflow = text("../../.github/workflows/verify.yml");
 for (const required of ["npm ci", "npm test", "npm run build", "npm run verify:accounting", "npm run verify:roles", "npm audit --audit-level=high"]) {
   if (!workflow.includes(required)) fail(`CI is missing required gate: ${required}`);
 }
 
-console.log(`Source contracts passed across ${tracked.length} tracked files and ${migrations.length} migrations.`);
+console.log(`Source contracts passed across ${tracked.length} tracked files, ${migrations.length} migrations`
+  + ` and ${serviceKeyRoutes.length} service-key route(s).`);

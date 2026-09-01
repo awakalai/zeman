@@ -3097,6 +3097,75 @@ try {
     if (!ledgerRefused) throw new Error("the ledger can be deleted from again");
   });
 
+  // ── a draft is money the books cannot see ───────────────────────────────────
+  //
+  // The live database carried two of these from 27 August: completed trades whose journal entry
+  // was written as a draft because the currency had no USD rate that day, and which nothing in
+  // the system could ever finish. What matters most is not that they can now be finished, but
+  // that finishing one produces exactly the books a live trade would have — same accounts, same
+  // sides, same base amounts — because both go through the same statements.
+  check("a trade whose currency has no rate is drafted, not posted wrong", () => {
+    psql(`update public.currencies set buy_rate=null, sell_rate=null, rate=null where id='xxx'`);
+    psql(`insert into public.txs(id,code,type,cp_id,cur_id,amount,rate,against_id,total,status,date,tenant_id)
+          values ('tx-draft',970001,'buy','u-a','xxx',1000,2,'usd',2000,'completed',current_date,'t-sarkhel')`);
+    const status = psql(`select status from public.journal_entries where id='je-tx-tx-draft'`).trim();
+    const lines = psql(`select count(*) from public.journal_lines where entry_id='je-tx-tx-draft'`).trim();
+    if (status !== "draft") throw new Error(`the entry was ${status}, expected draft`);
+    if (lines !== "0") throw new Error(`a draft carried ${lines} line(s); a draft posts nothing`);
+  });
+
+  check("finishing the draft posts the same books a live trade would have", () => {
+    // The same trade, run again with the rate in place, is the yardstick.
+    psql(`update public.currencies set buy_rate=1.9, sell_rate=2.1, rate=2 where id='xxx'`);
+    psql(`insert into public.txs(id,code,type,cp_id,cur_id,amount,rate,against_id,total,status,date,tenant_id)
+          values ('tx-live',970002,'buy','u-a','xxx',1000,2,'usd',2000,'completed',current_date,'t-sarkhel')`);
+    const out = JSON.parse(psql(
+      `select public.sarraf_resolve_journal_draft('je-tx-tx-draft','resolve-once')::text`));
+    if (out.status !== "posted") throw new Error(`the draft came back ${out.status}`);
+
+    // Account, side, original amount and base amount, in line order. The rate_source is expected
+    // to differ — that is the one thing the resolved entry says about itself.
+    const shape = (id) => psql(`select coalesce(string_agg(
+        account_id || '|' || side || '|' || currency || '|' ||
+        round(amount, 6) || '|' || round(base_amount, 6), ' ; ' order by line_no), '')
+      from public.journal_lines where entry_id = '${id}'`).trim();
+    const resolved = shape("je-tx-tx-draft");
+    const live = shape("je-tx-tx-live");
+    if (!resolved) throw new Error("the resolved entry has no lines");
+    if (resolved !== live) throw new Error(`resolved ≠ live\n        resolved: ${resolved}\n        live:     ${live}`);
+  });
+
+  check("a resolved entry says of itself that it was valued later", () => {
+    const sources = psql(`select string_agg(distinct rate_source, ',')
+                            from public.journal_lines where entry_id='je-tx-tx-draft'`).trim();
+    if (sources !== "currency_mid_at_resolution") throw new Error(`rate_source was ${sources}`);
+  });
+
+  check("finishing the same draft twice does not double the books", () => {
+    const out = JSON.parse(psql(
+      `select public.sarraf_resolve_journal_draft('je-tx-tx-draft','resolve-once')::text`));
+    if (out.replayed !== true) throw new Error("a replay was treated as a new command");
+    const lines = psql(`select count(*) from public.journal_lines where entry_id='je-tx-tx-draft'`).trim();
+    if (lines !== psql(`select count(*) from public.journal_lines where entry_id='je-tx-tx-live'`).trim()) {
+      throw new Error(`the replay changed the line count to ${lines}`);
+    }
+  });
+
+  mustFail("a draft whose currency still has no rate is refused, not posted empty",
+    `update public.currencies set buy_rate=null, sell_rate=null, rate=null where id='xxx';
+     insert into public.txs(id,code,type,cp_id,cur_id,amount,rate,against_id,total,status,date,tenant_id)
+       values ('tx-draft2',970003,'buy','u-a','xxx',500,2,'usd',1000,'completed',current_date,'t-sarkhel');
+     select public.sarraf_resolve_journal_draft('je-tx-tx-draft2','resolve-still-unrated');`);
+
+  check("the trial balance still reconciles after a draft is finished", () => {
+    psql(`update public.currencies set buy_rate=1.9, sell_rate=2.1, rate=2 where id='xxx'`);
+    const difference = psql(`select round(sum(case when l.side='debit' then l.base_amount else -l.base_amount end), 6)
+                               from public.journal_lines l
+                               join public.journal_entries e on e.id = l.entry_id
+                              where e.status = 'posted'`).trim();
+    if (Number(difference) !== 0) throw new Error(`the books are out by ${difference}`);
+  });
+
   check("a second reset cannot empty a system that has since gone live", () => {
     const out = JSON.parse(psql("select public.sarraf_reset_installation()::text"));
     if (out.done !== false) throw new Error(JSON.stringify(out));

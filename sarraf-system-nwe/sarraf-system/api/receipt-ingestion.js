@@ -9,6 +9,7 @@ const INGEST_WINDOW_SECONDS = Number(process.env.INGEST_RATE_WINDOW || 60);
 // delivery working while an older production database is missing that RPC.
 
 import { randomBytes } from "node:crypto";
+import { ACTOR_COLUMNS, isTenantless, sameTenant } from "./_tenant.js";
 import { createClient } from "@supabase/supabase-js";
 
 const serverConfig = () => ({
@@ -89,7 +90,7 @@ async function requireActor(req, authClient, service) {
   const { data: userData, error: userError } = await authClient.auth.getUser(token);
   if (userError || !userData?.user?.id) throw httpError(401, "session_expired", "session expired");
   const { data: actor, error } = await service.from("app_users")
-    .select("id,auth_id,name,role,deleted")
+    .select(`${ACTOR_COLUMNS},auth_id,name`)
     .eq("auth_id", userData.user.id)
     .eq("deleted", false)
     .maybeSingle();
@@ -97,24 +98,35 @@ async function requireActor(req, authClient, service) {
   return { actor, token };
 }
 
+// Who this batch is about, and whether this caller is allowed to say so.
+//
+// This route holds the service key, so none of the lookups below are filtered by row level
+// security: an id names a row anywhere on the platform. Being an administrator therefore
+// authorises nothing on its own — an administrator is an administrator of one business, and
+// the customer and partner named on a batch must belong to that same business. Without the
+// tenant conditions an administrator could open a batch against another business's customer,
+// and the portal read policy — which matches on customer_id — would then show that customer a
+// batch from a business they have never dealt with.
 async function validateContext(service, actor, batch) {
   const customerId = text(batch.customer_id, 140);
   const partnerId = text(batch.partner_id, 140);
+  // A manager has no business of their own. They do not send receipts; they sell the system.
+  if (isTenantless(actor)) throw httpError(403, "context_denied", "receipt context denied");
   const staff = actor.role === "admin" || actor.role === "office";
   if (!staff && !(actor.role === "customer" && customerId === actor.id) && !(actor.role === "partner" && partnerId === actor.id)) {
     throw httpError(403, "context_denied", "receipt context denied");
   }
   let customer = null;
   if (customerId) {
-    const result = await service.from("app_users").select("id,name,role,deleted").eq("id", customerId).eq("role", "customer").eq("deleted", false).maybeSingle();
-    if (result.error || !result.data) throw httpError(400, "invalid_customer", "invalid customer");
+    const result = await service.from("app_users").select("id,name,role,deleted,tenant_id").eq("id", customerId).eq("role", "customer").eq("deleted", false).maybeSingle();
+    if (result.error || !result.data || !sameTenant(actor, result.data)) throw httpError(400, "invalid_customer", "invalid customer");
     customer = result.data;
   }
   if (partnerId) {
-    const result = await service.from("app_users").select("id,role,deleted").eq("id", partnerId).eq("role", "partner").eq("deleted", false).maybeSingle();
-    if (result.error || !result.data) throw httpError(400, "invalid_partner", "invalid partner");
+    const result = await service.from("app_users").select("id,role,deleted,tenant_id").eq("id", partnerId).eq("role", "partner").eq("deleted", false).maybeSingle();
+    if (result.error || !result.data || !sameTenant(actor, result.data)) throw httpError(400, "invalid_partner", "invalid partner");
   }
-  return { customerId, customerName: customer?.name || text(batch.customer_name, 120), partnerId };
+  return { customerId, customerName: customer?.name || text(batch.customer_name, 120), partnerId, tenantId: actor.tenant_id };
 }
 
 async function validateStagedObjects(scoped, service, batchId, receipts) {
@@ -189,6 +201,11 @@ async function legacyCommit(service, actor, batch, receipts, context) {
     rejected_n: rejected,
     uploaded_by: actor.id,
     source: text(batch.source, 30) || "app",
+    // The column defaults to sarraf_tenant(), which reads auth.uid(). This path writes with the
+    // service key, where there is no auth.uid() — so the default yields null and the row would
+    // belong to no business at all: invisible to its own owner and hidden by every restrictive
+    // policy. The business is named explicitly instead.
+    tenant_id: context.tenantId,
   };
   const receiptRows = receipts.map((row) => ({
     id: row.id,
@@ -221,10 +238,11 @@ async function legacyCommit(service, actor, batch, receipts, context) {
     dup_of_who: text(row.dup_of_who, 160),
     uploaded_by: actor.id,
     raw: row.raw && typeof row.raw === "object" ? row.raw : {},
+    tenant_id: context.tenantId,
   }));
 
   if (!existing.data?.id) {
-    await insertCompat(service, "receipt_batches", batchRow, ["source", "rejected_n", "dup_n", "uploaded_by", "partner_id", "customer_name"]);
+    await insertCompat(service, "receipt_batches", batchRow, ["source", "rejected_n", "dup_n", "uploaded_by", "partner_id", "customer_name", "tenant_id"]);
   }
 
   // The compatibility path is intentionally resumable rather than compensating with DELETE.
@@ -242,6 +260,7 @@ async function legacyCommit(service, actor, batch, receipts, context) {
     await insertCompat(service, "receipts", missingRows, [
       "fee_original", "fee_discount", "platform", "net_amount", "counted", "reject_code", "reject_reason",
       "dup_of", "dup_of_date", "dup_of_who", "raw", "uploaded_by", "image_path", "bank", "note",
+      "tenant_id",
     ]);
   }
 
@@ -284,6 +303,7 @@ async function legacyCommit(service, actor, batch, receipts, context) {
         rule_code: accepted ? null : text(row.reject_code, 80) || "legacy_recovery_rejected",
         rule_reason: accepted ? null : text(row.reject_reason, 700) || "receipt held by recovery validation",
         raw: row.raw && typeof row.raw === "object" ? row.raw : {},
+        tenant_id: context.tenantId,
       };
     });
     if (intakeRows.length) {
@@ -301,6 +321,9 @@ async function legacyCommit(service, actor, batch, receipts, context) {
     body: `${receipts.length} فیش بۆ پشکنین گەیشت`,
     link: "receipts",
     ref_id: batch.id,
+    // notes normally takes its tenant from the recipient; this one is addressed to the whole
+    // administration of one business, so it has to say which.
+    tenant_id: context.tenantId,
   });
   if (notice.error && String(notice.error.code || "") !== "23505") {
     console.warn("[receipt-ingestion] admin notification skipped", { code: notice.error.code });
@@ -342,7 +365,7 @@ async function authorizeIngestionCommand(service, actorId, commandKey) {
   throw error;
 }
 
-export { validateCommand, authorizeIngestionCommand };
+export { validateCommand, authorizeIngestionCommand, validateContext };
 
 export default async function handler(req, res) {
   const trace = requestId();

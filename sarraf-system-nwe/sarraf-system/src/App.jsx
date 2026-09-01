@@ -1392,7 +1392,7 @@ export default function App() {
       }
       const d = {
         currencies: (c.data || []).map((r) => ({ id: r.id, code: r.code, name: r.name, symbol: r.symbol, dec: r.dec, external: !!r.external, rate: r.rate == null ? null : +r.rate, buyRate: r.buy_rate == null ? null : +r.buy_rate, sellRate: r.sell_rate == null ? null : +r.sell_rate, rateUpdated: r.rate_updated })),
-        users: (u.data || []).map((r) => ({ id: r.id, authId: r.auth_id, name: r.name, role: r.role, adminLevel: r.admin_level || null, rate: +r.rate || 0, scope: Array.isArray(r.scope_curs) ? r.scope_curs : [], phone: r.phone, address: r.address, note: r.note, deleted: r.deleted })),
+        users: (u.data || []).map((r) => ({ id: r.id, authId: r.auth_id, name: r.name, role: r.role, adminLevel: r.admin_level || null, tenantId: r.tenant_id || null, rate: +r.rate || 0, scope: Array.isArray(r.scope_curs) ? r.scope_curs : [], phone: r.phone, address: r.address, note: r.note, deleted: r.deleted })),
         ledger: (l.data || []).map((r) => ({
           id: r.id, type: r.type, owner: r.owner, investorId: r.investor_id, curId: r.cur_id,
           amount: +r.amount, partnerId: r.partner_id, txId: r.tx_id, note: r.note, date: r.date,
@@ -2386,10 +2386,15 @@ export default function App() {
   };
 
   const createUser = (f) => run(async () => {
-    // Eight, not twelve. Twelve was chosen here and nowhere else — Supabase itself accepts six —
-    // so the only thing it achieved was refusing passwords the owner had already decided on.
-    if (!f.name || !f.phone || !f.password || f.password.length < 8) {
-      flash("ناو، ژمارە، و وشەی نهێنی (لانیکەم ٨ پیت) پێویستن");
+    // Twelve, and the same twelve the server applies — api/_password.js is the one place the
+    // rule is written. It used to be eight here and eight on the server while the label said
+    // twelve, so the number a person read and the number that was checked were different.
+    //
+    // This check is only so the refusal arrives without a round trip. The server's is the one
+    // that matters, and it says more than a length: a password that is the account's own phone
+    // number, or one of the strings that get tried first, is refused there with its own reason.
+    if (!f.name || !f.phone || !f.password || f.password.length < 12) {
+      flash(tr("ناو، ژمارە، و وشەی نهێنی (لانیکەم ١٢ پیت) پێویستن"));
       return false;
     }
     await adminUserRequest({
@@ -2409,7 +2414,7 @@ export default function App() {
   const deleteUser = (u) => {
     if (!window.confirm(`ناچالاککردنی ئەکاونتی «${u.name}»؟ مێژووی دارایی دەمێنێتەوە.`)) return;
     run(async () => {
-      await adminUserRequest({ action: "deactivate", userId: u.id });
+      await adminUserRequest({ action: "deactivate", userId: u.id, tenantId: u.tenantId });
       flash("ئەکاونت ناچالاک کرا ✓");
     });
   };
@@ -2420,7 +2425,7 @@ export default function App() {
       flash("ڕێژە دەبێت لە نێوان ٠ تا ١٠٠ بێت");
       return false;
     }
-    await adminUserRequest({ action: "update_rate", userId: u.id, rate: n });
+    await adminUserRequest({ action: "update_rate", userId: u.id, rate: n, tenantId: u.tenantId });
     flash("ڕێژە نوێ کرایەوە ✓");
   });
 
@@ -8166,11 +8171,10 @@ function BatchDetail({ id, back, usr, data, profile, onMakeTx, flash, reloadBatc
   const partners = data.users.filter((u) => u.role === "partner" && !u.deleted);
 
   const load = async () => {
-    const [bb, rr, ii, ee, aa, cc, pp] = await Promise.all([
+    const [bb, rr, ii, aa, cc, pp] = await Promise.all([
       supabase.from("receipt_batches").select("*").eq("id", id).single(),
       supabase.from("receipts").select("*").eq("batch_id", id).order("created_at"),
       supabase.from("receipt_intake_items").select("*").eq("batch_id", id).order("created_at"),
-      supabase.from("receipt_events").select("*").eq("batch_id", id).order("created_at", { ascending: true }),
       supabase.from("receipt_audit_events").select("*").eq("batch_id", id).order("created_at", { ascending: true }),
       supabase.rpc("sarraf_receipt_match_candidates", { p_batch_id: id, p_limit: 5 }),
       loadReceiptPolicy(supabase).catch(() => null),
@@ -8184,7 +8188,6 @@ function BatchDetail({ id, back, usr, data, profile, onMakeTx, flash, reloadBatc
       setSummaryError(error?.message || "کۆکانەی سێرڤەر بار نەبوو");
     }
     setB(bb.data || null); setRecs(rr.data || []); setIntakeItems(ii.error ? [] : (ii.data || []));
-    const legacyEvents = ee.error ? [] : (ee.data || []);
     const auditedEvents = aa.error ? [] : (aa.data || []).map((event) => ({
       id: `audit-${event.id}`,
       event_type: event.event_type,
@@ -8192,7 +8195,7 @@ function BatchDetail({ id, back, usr, data, profile, onMakeTx, flash, reloadBatc
       actor_user_id: event.actor_id,
       detail: event.metadata?.reason || event.metadata?.decision || null,
     }));
-    setEvents([...legacyEvents, ...auditedEvents].sort((left, right) => new Date(left.created_at) - new Date(right.created_at)));
+    setEvents(auditedEvents.sort((left, right) => new Date(left.created_at) - new Date(right.created_at)));
     setCandidates(cc.error ? [] : (cc.data || []));
     setReceiptPolicy(pp || null);
     setPick(Object.fromEntries((rr.data || []).map((r) => [r.id, r.partner_id || ""])));
@@ -9702,7 +9705,7 @@ function UsersAdmin({ data, cur, createUser, deleteUser, setUserRate, flash, isO
             </div>
           )}
           <div><Lbl>{tr("ژمارەی مۆبایل * (لۆگین)")}</Lbl><Inp type="tel" dir="ltr" value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} placeholder="07701234567" /></div>
-          <div><Lbl>{tr("وشەی نهێنی * (لانیکەم ٨ پیت)")}</Lbl><Inp type="password" dir="ltr" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} placeholder="••••••" /></div>
+          <div><Lbl>{tr("وشەی نهێنی * (لانیکەم ١٢ پیت)")}</Lbl><Inp type="password" dir="ltr" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} placeholder="••••••" /></div>
           <div><Lbl>{tr("ناونیشان")}</Lbl><Inp value={f.address} onChange={(e) => setF({ ...f, address: e.target.value })} /></div>
           <div><Lbl>{tr("تێبینی")}</Lbl><Inp value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} /></div>
         </div>

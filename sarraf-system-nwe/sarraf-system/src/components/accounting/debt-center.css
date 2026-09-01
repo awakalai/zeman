@@ -287,3 +287,9 @@
   font-weight: 700;
 }
 .debt-press > svg { width: 15px; height: 15px; }
+
+/* The one action on a reconciliation row: finish an entry the rate has finally caught up with.
+   Sized down from the panel's refresh button so it reads as a row action, not a page action. */
+.recon-finish { padding: 4px 10px; font-size: 12px; gap: 5px; white-space: nowrap; }
+.recon-finish svg { width: 14px; height: 14px; }
+.recon-row-meta { display: inline-flex; align-items: center; gap: 8px; }

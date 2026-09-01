@@ -274,6 +274,41 @@ jobs:
           done
           echo "Applied $ran migration(s); recorded $marked as already applied without running."
 
+      # Two ledgers, one truth.
+      #
+      # This workflow records what it applied in public.schema_migrations. Supabase's own CLI
+      # reads a different table, supabase_migrations.schema_migrations, which was last written
+      # in the fortnight this database was migrated by hand — it holds 46 of the 90 versions
+      # that are actually applied.
+      #
+      # Nothing breaks while nobody runs the CLI. But `supabase db push` reads that second table,
+      # would conclude 44 migrations are outstanding, and would try to run them again against a
+      # database that already has them — six of them add constraints, and PostgreSQL has no
+      # `add constraint if not exists`. The failure would arrive during a deployment, on a live
+      # database, from a command that looked routine.
+      #
+      # So after every apply the second ledger is brought level with the first. Insert-only and
+      # idempotent: it never removes a version, never edits one, and adds nothing that is not
+      # already recorded as applied.
+      - name: Keep the two ledgers saying the same thing
+        if: ${{ !inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          psql -h "$DBHOST" -p "$DBPORT" -U "$DBUSER" -d postgres -v ON_ERROR_STOP=1 -q <<'SQL'
+          create schema if not exists supabase_migrations;
+          create table if not exists supabase_migrations.schema_migrations (
+            version text primary key
+          );
+          insert into supabase_migrations.schema_migrations (version)
+          select m.version from public.schema_migrations m
+          on conflict (version) do nothing;
+          SQL
+          both=$(psql -h "$DBHOST" -p "$DBPORT" -U "$DBUSER" -d postgres -tAc \
+            "select (select count(*) from public.schema_migrations) || ' / ' || (select count(*) from supabase_migrations.schema_migrations)")
+          echo "Ledgers (zeman / supabase): $both"
+          echo "### Migration ledgers" >> $GITHUB_STEP_SUMMARY
+          echo "zeman / supabase: $both — these must be equal." >> $GITHUB_STEP_SUMMARY
+
       - name: Say what the database looks like now
         if: ${{ !inputs.dry_run }}
         run: |

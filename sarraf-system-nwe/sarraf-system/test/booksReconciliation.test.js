@@ -121,3 +121,76 @@ test("the gaps behind a count come back named, so they can be fixed", async () =
   assert.equal(row.text, gapText("no_journal_entry"));
   assert.notEqual(row.text, row.gap, "the operator sees language, not a code");
 });
+
+/**
+ * A gap the operator can close.
+ *
+ * The live database carried two entries from 27 and 28 August: completed trades whose journal
+ * entry was written as a draft because the currency had no USD rate that day. Nothing in the
+ * system could ever finish one — the posting trigger runs once per transaction and refuses to
+ * act if an entry already exists — so the money stayed out of the books indefinitely.
+ *
+ * Only an unvalued entry can be closed from the reconciliation screen. A transaction with no
+ * entry at all, or one whose entry was reversed, is a different problem with a different answer,
+ * and offering the same button for all three would be offering to do the wrong thing.
+ */
+const gapRows = () => ([
+  { transaction_id: "tx-1", code: 1, date: "2026-08-27", transaction_status: "completed",
+    journal_status: "draft", gap: "entry_unvalued", entry_id: "je-tx-tx-1" },
+  { transaction_id: "tx-2", code: 2, date: "2026-08-26", transaction_status: "completed",
+    journal_status: "missing", gap: "no_journal_entry", entry_id: null },
+  { transaction_id: "tx-3", code: 3, date: "2026-08-25", transaction_status: "completed",
+    journal_status: "reversed", gap: "entry_reversed", entry_id: "je-tx-tx-3" },
+]);
+
+const gapClient = (rows) => ({
+  from: () => ({
+    select: () => ({ order: () => ({ limit: async () => ({ data: rows, error: null }) }) }),
+  }),
+});
+
+test("only an unvalued entry offers to be finished", async () => {
+  const gaps = await loadGaps(gapClient(gapRows()));
+  assert.deepEqual(gaps.map((g) => g.canFinish), [true, false, false]);
+});
+
+test("the entry id travels with the gap, or there is nothing to act on", async () => {
+  const gaps = await loadGaps(gapClient(gapRows()));
+  assert.equal(gaps[0].entryId, "je-tx-tx-1");
+  assert.equal(gaps[1].entryId, null);
+});
+
+test("finishing an entry sends the entry and its command key, and nothing else", async () => {
+  const { finishUnvaluedEntry } = await import("../src/services/booksReconciliation.js");
+  const seen = [];
+  const client = { rpc: async (name, args) => { seen.push([name, args]); return { data: { status: "posted" }, error: null }; } };
+  const out = await finishUnvaluedEntry(client, "je-tx-tx-1", "finish-draft:je-tx-tx-1:1");
+  assert.equal(out.status, "posted");
+  assert.deepEqual(seen, [["sarraf_resolve_journal_draft", {
+    p_entry_id: "je-tx-tx-1", p_command_key: "finish-draft:je-tx-tx-1:1",
+  }]]);
+});
+
+test("a refusal from the database is raised, not swallowed into a success", async () => {
+  const { finishUnvaluedEntry } = await import("../src/services/booksReconciliation.js");
+  const client = { rpc: async () => ({ data: null, error: new Error("no USD rate for this currency yet") }) };
+  await assert.rejects(() => finishUnvaluedEntry(client, "je-1", "k"), /no USD rate/);
+});
+
+test("the reason a transaction is missing from the books is readable in all three languages", () => {
+  for (const lang of ["ku", "en", "ar"]) {
+    for (const code of ["no_journal_entry", "entry_unvalued", "entry_reversed"]) {
+      const text = gapText(code, lang);
+      assert.notEqual(text, code, `${code} is untranslated in ${lang}`);
+    }
+    for (const code of ["missing_entries", "unvalued_entries", "orphan_entries",
+                        "ledger_rows_without_entry", "trial_balance"]) {
+      assert.notEqual(findingText(code, lang), code, `${code} is untranslated in ${lang}`);
+    }
+  }
+});
+
+test("an unknown code is shown as itself rather than as an empty line", () => {
+  assert.equal(gapText("something_new", "en"), "something_new");
+  assert.equal(findingText("something_new", "ar"), "something_new");
+});

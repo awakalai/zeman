@@ -973,6 +973,53 @@ try {
   //
   // This asks the question the ownership move answered once: is there any of them, today, whose
   // owner can ignore a policy?
+  // PostgreSQL grants EXECUTE on every new function to PUBLIC, and PUBLIC includes anon — the
+  // role a browser holds before anybody signs in. 202608310005 closed the nineteen that had it;
+  // this is what stops the twentieth from arriving. A migration that writes
+  // `grant execute ... to authenticated` and nothing else adds a grant without removing the one
+  // that was already there, which is exactly how all nineteen happened.
+  check("nothing a signed-out browser holds can call a command", () => {
+    const open = psql(`
+      select coalesce(string_agg(p.oid::regprocedure::text, ', ' order by p.proname), '')
+        from pg_proc p
+       where p.pronamespace = 'public'::regnamespace
+         and p.prosecdef
+         and has_function_privilege('anon', p.oid, 'execute')`).trim();
+    if (open) throw new Error(`a signed-out browser may call: ${open}`);
+  });
+
+  // A trigger function is run by the trigger mechanism, which checks EXECUTE when the trigger is
+  // created and not when it fires. A grant on one is surface with nothing behind it.
+  check("no trigger function is callable by anybody", () => {
+    const open = psql(`
+      select coalesce(string_agg(p.oid::regprocedure::text, ', ' order by p.proname), '')
+        from pg_proc p
+       where p.pronamespace = 'public'::regnamespace
+         and p.proname like 'sarraf%'
+         and p.prorettype = 'pg_catalog.trigger'::regtype
+         and (has_function_privilege('authenticated', p.oid, 'execute')
+              or has_function_privilege('anon', p.oid, 'execute'))`).trim();
+    if (open) throw new Error(`a browser may call these trigger functions: ${open}`);
+  });
+
+  // FORCE is the other half of moving the definer functions to a nobypassrls role. Without it
+  // the table's owner is exempt from its own policies, so every function owned by that role
+  // reads and writes as though no policy existed.
+  check("every table that names a business obeys its own policies", () => {
+    const loose = psql(`
+      select coalesce(string_agg(c.relname || ' (' ||
+               case when not c.relrowsecurity then 'RLS off' else 'no FORCE' end || ')',
+               ', ' order by c.relname), '')
+        from pg_class c
+        join pg_namespace n on n.oid = c.relnamespace and n.nspname = 'public'
+       where c.relkind = 'r'
+         and exists (select 1 from information_schema.columns col
+                      where col.table_schema = 'public' and col.table_name = c.relname
+                        and col.column_name = 'tenant_id')
+         and (not c.relrowsecurity or not c.relforcerowsecurity)`).trim();
+    if (loose) throw new Error(`these can be written past their own policies: ${loose}`);
+  });
+
   check("no SECURITY DEFINER function can bypass row-level security", () => {
     const loose = psql(`
       select coalesce(string_agg(p.oid::regprocedure::text || ' (owned by ' || o.rolname || ')',
@@ -992,7 +1039,11 @@ try {
          -- is how the receipt reader was silently dead for nine days. The check below is what
          -- makes this exception safe: neither may be callable from a browser.
                                'sarraf_receipt_record_server_extraction',
-                               'sarraf_office_payment_attach_evidence_server')
+                               'sarraf_office_payment_attach_evidence_server',
+         -- And the third, for the same reason: api/admin-user.js asks it, holding the service
+         -- key and no session, which business the manager currently has open. A definer bound
+         -- by the tenant policies would answer null for every manager on every request.
+                               'sarraf_manager_support_tenant_for')
          and (o.rolbypassrls or o.rolsuper)`).trim();
     if (loose) throw new Error(`these run as a role that ignores every policy: ${loose}`);
   });
@@ -1003,7 +1054,8 @@ try {
         from pg_proc p
         join pg_namespace n on n.oid = p.pronamespace and n.nspname = 'public'
        where p.proname in ('sarraf_receipt_record_server_extraction',
-                           'sarraf_office_payment_attach_evidence_server')
+                           'sarraf_office_payment_attach_evidence_server',
+                           'sarraf_manager_support_tenant_for')
          and (has_function_privilege('authenticated', p.oid, 'execute')
               or has_function_privilege('anon', p.oid, 'execute'))`).trim();
     if (open) throw new Error(`a browser can call these, and they bypass tenancy: ${open}`);
@@ -1058,6 +1110,242 @@ try {
     if (detail > 200 || code > 40 || agent > 120) {
       throw new Error(`a field grew past its bound — detail/code/agent = ${worst}`);
     }
+  });
+
+  // ── money that belongs to no business ───────────────────────────────────────
+  //
+  // tenant_id defaults to sarraf_tenant(), which reads auth.uid(). A route holding the service
+  // key has no auth.uid(); nor does a trigger inside a SECURITY DEFINER command, nor a
+  // maintenance connection. The default then yields null, and because every tenant policy on
+  // these tables is RESTRICTIVE the row becomes invisible to everybody — including the business
+  // that created it. Money nobody can see is worse than money in the wrong place.
+  check("a batch written with no session is still given its business", () => {
+    psql(`insert into public.receipt_batches(id,customer_id,customer_name,direction,status,currency,uploaded_by)
+          values ('bat-nosession','iso-a','A','sell','pending','CNY','iso-a')`);
+    const owner = psql(`select coalesce(tenant_id,'<none>') from public.receipt_batches where id='bat-nosession'`).trim();
+    if (owner !== "t-sarkhel") throw new Error(`the batch went to ${owner}, not to the uploader's business`);
+  });
+
+  check("a receipt takes the business of the batch it arrived in", () => {
+    psql(`insert into public.receipts(id,batch_id,direction,amount,fee,currency,status)
+          values ('rec-nosession','bat-b','sell',100,1,'CNY','ok')`);
+    const owner = psql(`select coalesce(tenant_id,'<none>') from public.receipts where id='rec-nosession'`).trim();
+    if (owner !== "t-watan") throw new Error(`the receipt went to ${owner}, not to its batch's business`);
+  });
+
+  check("a ledger line takes the business of the transaction it accounts for", () => {
+    // A pending transaction needs a registered customer, and this fixture has none in t-watan.
+    psql(`insert into public.app_users(id,name,role,tenant_id) values ('iso-cust-b','Customer B','customer','t-watan')
+          on conflict (id) do nothing`);
+    psql(`insert into public.txs(id,code,type,cp_id,cur_id,amount,rate,against_id,total,status,date,tenant_id)
+          values ('tx-nosession',990001,'buy','iso-cust-b','cny',100,1,'usd',100,'pending',current_date,'t-watan')`);
+    psql(`insert into public.ledger(id,type,owner,cur_id,amount,tx_id,date)
+          values ('led-nosession','settlement','main','cny',100,'tx-nosession',current_date)`);
+    const owner = psql(`select coalesce(tenant_id,'<none>') from public.ledger where id='led-nosession'`).trim();
+    if (owner !== "t-watan") throw new Error(`the ledger line went to ${owner}, not to its transaction's business`);
+  });
+
+  check("a row that names no business at all is refused, not silently hidden", () => {
+    let refused = "";
+    try {
+      psql(`insert into public.receipt_batches(id,customer_id,customer_name,direction,status,currency)
+            values ('bat-orphan','nobody-at-all','X','sell','pending','CNY')`);
+    } catch (error) { refused = String(error.message || error); }
+    if (!refused) throw new Error("a batch belonging to no business was accepted");
+    if (!/belongs to no business/.test(refused)) {
+      throw new Error(`refused, but for the wrong reason: ${refused.slice(0, 200)}`);
+    }
+    const landed = psql(`select count(*) from public.receipt_batches where id='bat-orphan'`).trim();
+    if (landed !== "0") throw new Error("the refused batch was written anyway");
+  });
+
+  check("a row that says its business is believed", () => {
+    psql(`insert into public.receipt_batches(id,customer_id,customer_name,direction,status,currency,uploaded_by,tenant_id)
+          values ('bat-explicit','iso-a','A','sell','pending','CNY','iso-a','t-watan')`);
+    const owner = psql(`select tenant_id from public.receipt_batches where id='bat-explicit'`).trim();
+    if (owner !== "t-watan") throw new Error(`the row said t-watan and landed in ${owner}`);
+  });
+
+  // ── the record-keeping tables, where the rule is softer on purpose ──────────
+  //
+  // On a transaction or a ledger line a row with no business is refused: writing money nobody
+  // can see is worse than failing. On a log it is not. A trigger that could veto a payment
+  // because it failed to label the audit entry would turn a record-keeping problem into an
+  // outage — so here the business is worked out, and a row that names nothing at all is still
+  // written. INSPECT is what reports those.
+  check("a receipt's own history takes the business of the receipt", () => {
+    psql(`insert into public.receipt_documents(id,flow,state,batch_id,uploader_id,storage_path,tenant_id)
+          values ('doc-story','customer_sells_to_zeman','created','bat-b','iso-b','ingest/bat-b/doc-story.jpg','t-watan')`);
+    psql(`insert into public.receipt_state_transitions(document_id,from_state,to_state,actor_id)
+          values ('doc-story','created','uploaded','iso-b')`);
+    // The document insert fires its own transition as well as the one written here, so ask for
+    // the distinct answer rather than a row: what matters is that no step landed unlabelled.
+    const owner = psql(`select string_agg(distinct coalesce(tenant_id,'<none>'), ',')
+                          from public.receipt_state_transitions where document_id='doc-story'`).trim();
+    if (owner !== "t-watan") throw new Error(`the steps went to ${owner}, not all to its receipt's business`);
+  });
+
+  check("an audit line takes the business of the person who acted", () => {
+    psql(`insert into public.audit(id,date,user_id,action,detail)
+          values ('aud-nosession',now(),'iso-a','ڕاهێنان','test')`);
+    const owner = psql(`select coalesce(tenant_id,'<none>') from public.audit where id='aud-nosession'`).trim();
+    if (owner !== "t-sarkhel") throw new Error(`the audit line went to ${owner}, not to the actor's business`);
+  });
+
+  check("a note addressed to nobody takes the business of what it points at", () => {
+    psql(`insert into public.notes(id,user_id,kind,title,body,ref_id)
+          values ('note-nosession',null,'receipt','t','b','bat-a')`);
+    const owner = psql(`select coalesce(tenant_id,'<none>') from public.notes where id='note-nosession'`).trim();
+    if (owner !== "t-sarkhel") throw new Error(`the note went to ${owner}, not to its batch's business`);
+  });
+
+  check("a log entry that names nothing is still written, not allowed to fail the operation", () => {
+    psql(`insert into public.audit(id,date,user_id,action,detail)
+          values ('aud-orphan',now(),null,'ڕاهێنان','no actor at all')`);
+    const landed = psql(`select count(*) from public.audit where id='aud-orphan'`).trim();
+    if (landed !== "1") throw new Error("an unlabelled audit line was refused, which would take the operation down with it");
+  });
+
+  // ── an upload that never arrived ────────────────────────────────────────────
+  //
+  // Five of these were sitting in the live database from 26 and 27 August, still `uploading` on
+  // the 31st, each one holding its batch open for an image that was never coming.
+  check("the uploader can say the image never arrived", () => {
+    // The machine starts every document at `created`; `uploading` is the step after it.
+    psql(`insert into public.receipt_documents(id,flow,state,batch_id,uploader_id,storage_path,tenant_id,received_at)
+          values ('doc-lost','customer_sells_to_zeman','created','bat-a','iso-a','ingest/bat-a/doc-lost.jpg','t-sarkhel', now() - interval '3 hours')`);
+    psql(`update public.receipt_documents set state='uploading' where id='doc-lost'`);
+    const out = JSON.parse(asDefiner(A_UID,
+      `select public.sarraf_receipt_upload_failed('doc-lost','network')::text`));
+    if (out.moved !== true) throw new Error(`the document did not move: ${JSON.stringify(out)}`);
+    const state = psql(`select state from public.receipt_documents where id='doc-lost'`).trim();
+    if (state !== "upload_failed_retryable") throw new Error(`the document is ${state}`);
+  });
+
+  check("saying it twice is saying it once", () => {
+    const out = JSON.parse(asDefiner(A_UID,
+      `select public.sarraf_receipt_upload_failed('doc-lost','network')::text`));
+    if (out.moved !== false) throw new Error("a second report was treated as a new one");
+  });
+
+  check("one business cannot close another's abandoned upload", () => {
+    // The machine starts every document at `created`; `uploading` is the step after it.
+    psql(`insert into public.receipt_documents(id,flow,state,batch_id,uploader_id,storage_path,tenant_id,received_at)
+          values ('doc-lost-b','customer_sells_to_zeman','created','bat-b','iso-b','ingest/bat-b/doc-lost-b.jpg','t-watan', now() - interval '3 hours')`);
+    psql(`update public.receipt_documents set state='uploading' where id='doc-lost-b'`);
+    const out = JSON.parse(asDefiner(A_UID,
+      `select public.sarraf_receipt_close_abandoned_uploads(60)::text`));
+    if (String(out.documents || "").includes("doc-lost-b")) {
+      throw new Error("an administrator closed another business's upload");
+    }
+    const state = psql(`select state from public.receipt_documents where id='doc-lost-b'`).trim();
+    if (state !== "uploading") throw new Error(`the other business's document became ${state}`);
+  });
+
+  check("an upload still in flight is left alone", () => {
+    // The machine starts every document at `created`; `uploading` is the step after it.
+    psql(`insert into public.receipt_documents(id,flow,state,batch_id,uploader_id,storage_path,tenant_id,received_at)
+          values ('doc-now','customer_sells_to_zeman','created','bat-a','iso-a','ingest/bat-a/doc-now.jpg','t-sarkhel', now())`);
+    psql(`update public.receipt_documents set state='uploading' where id='doc-now'`);
+    asDefiner(A_UID, `select public.sarraf_receipt_close_abandoned_uploads(60)::text`);
+    const state = psql(`select state from public.receipt_documents where id='doc-now'`).trim();
+    if (state !== "uploading") throw new Error(`an upload started a moment ago was called abandoned (${state})`);
+  });
+
+  check("an upload cannot be called abandoned after a few seconds", () => {
+    let refused = false;
+    try { asDefiner(A_UID, `select public.sarraf_receipt_close_abandoned_uploads(1)::text`); }
+    catch { refused = true; }
+    if (!refused) throw new Error("a one-minute grace period was accepted");
+  });
+
+  // ── the vendor opens a business, and the owner can see it ───────────────────
+  //
+  // The manager belongs to no business and every policy lets them through. Without a record, a
+  // business that buys this system has no way to know whether the person who sold it has been in
+  // their accounts — which is the question a customer asks before trusting their ledger to
+  // somebody else's software.
+  const MGR = "cccccccc-0000-0000-0000-000000000001";
+
+  check("only the manager opens a support context", () => {
+    let refused = false;
+    try { asDefiner(A_UID, `select public.sarraf_manager_open_support('t-watan','ھۆکارێکی دووری')::text`); }
+    catch { refused = true; }
+    if (!refused) throw new Error("a business owner opened a support context");
+  });
+
+  check("a support context with no reason is not one", () => {
+    let refused = false;
+    try { asDefiner(MGR, `select public.sarraf_manager_open_support('t-watan','کورت')::text`); }
+    catch { refused = true; }
+    if (!refused) throw new Error("a four-character reason was accepted");
+  });
+
+  check("the manager opens one business and says why", () => {
+    const out = JSON.parse(asDefiner(MGR,
+      `select public.sarraf_manager_open_support('t-watan','پشکنینی داواکاری خاوەنەکە')::text`));
+    if (out.tenant_id !== "t-watan") throw new Error(JSON.stringify(out));
+    const open = asDefiner(MGR, `select coalesce(public.sarraf_manager_support_tenant(),'<none>')`).trim();
+    if (open !== "t-watan") throw new Error(`the open business is ${open}`);
+  });
+
+  check("opening a second business closes the first — two at once is not a context", () => {
+    asDefiner(MGR, `select public.sarraf_manager_open_support('t-sarkhel','کێشەیەکی چوونەژوورەوە')::text`);
+    const openRows = psql(`select count(*) from public.manager_support_sessions
+                            where manager_id='iso-mgr' and closed_at is null`).trim();
+    if (openRows !== "1") throw new Error(`${openRows} contexts are open at once`);
+    const open = asDefiner(MGR, `select coalesce(public.sarraf_manager_support_tenant(),'<none>')`).trim();
+    if (open !== "t-sarkhel") throw new Error(`the open business is ${open}`);
+  });
+
+  check("the owner of a business sees the context opened against theirs", () => {
+    const seen = asUser(A_UID, `select coalesce(string_agg(tenant_id, ','), '<none>')
+                                  from public.manager_support_sessions`).trim();
+    if (!seen.includes("t-sarkhel")) throw new Error(`the owner saw ${seen}`);
+  });
+
+  check("and does not see one opened against somebody else's", () => {
+    const seen = asUser(A_UID, `select coalesce(string_agg(distinct tenant_id, ','), '<none>')
+                                  from public.manager_support_sessions`).trim();
+    if (seen.includes("t-watan")) throw new Error(`the owner of t-sarkhel saw ${seen}`);
+  });
+
+  check("a record of who looked at your books cannot be tidied away", () => {
+    let refused = false;
+    try { psql(`delete from public.manager_support_sessions`); } catch { refused = true; }
+    if (!refused) throw new Error("the support record can be deleted");
+  });
+
+  check("an expired context is not an open one", () => {
+    // Both ends move: the row still has to satisfy its own constraints — an expiry before the
+    // opening is not an expired context, it is a nonsense one.
+    psql(`update public.manager_support_sessions
+             set opened_at = statement_timestamp() - interval '9 hours',
+                 expires_at = statement_timestamp() - interval '1 hour'
+           where closed_at is null`);
+    const open = asDefiner(MGR, `select coalesce(public.sarraf_manager_support_tenant(),'<none>')`).trim();
+    if (open !== "<none>") throw new Error(`an expired context still reads as ${open}`);
+  });
+
+  check("closing says how many it closed, and leaves none open", () => {
+    asDefiner(MGR, `select public.sarraf_manager_open_support('t-watan','دوایین پشکنین')::text`);
+    const out = JSON.parse(asDefiner(MGR, `select public.sarraf_manager_close_support('تەواو')::text`));
+    if (Number(out.closed) < 1) throw new Error(JSON.stringify(out));
+    const open = asDefiner(MGR, `select coalesce(public.sarraf_manager_support_tenant(),'<none>')`).trim();
+    if (open !== "<none>") throw new Error(`a context is still open: ${open}`);
+  });
+
+  check("the server can ask which business is open without a session", () => {
+    asDefiner(MGR, `select public.sarraf_manager_open_support('t-watan','پرسیاری سێرڤەر')::text`);
+    // No session at all — this is how api/admin-user.js reaches it, holding the service key.
+    const open = psql(`select coalesce(public.sarraf_manager_support_tenant_for('iso-mgr'),'<none>')`).trim();
+    if (open !== "t-watan") throw new Error(`the server was told ${open}`);
+  });
+
+  check("no browser can ask about another manager by name", () => {
+    const mayCall = psql(`select has_function_privilege('authenticated',
+      'public.sarraf_manager_support_tenant_for(text)', 'execute')`).trim();
+    if (mayCall !== "f") throw new Error("a browser may name any manager and read their context");
   });
 
   // ── and the manager, who is meant to see everything ─────────────────────────

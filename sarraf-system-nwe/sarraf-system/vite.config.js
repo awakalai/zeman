@@ -37,6 +37,15 @@ export default defineConfig({
       output: {
         manualChunks(id) {
           if (id.includes("/src/i18n/")) return "i18n";
+          // The shared layer, in its own chunk rather than inside one feature's.
+          //
+          // Without this line rollup put the services wherever it first needed them, which was
+          // portal-ui — and receipts-ui then imported portal-ui to reach them, while portal-ui
+          // already imported receipts-ui for CanonicalBatchSummary (one component used by both
+          // the reviewer and the sender, deliberately, so the totals cannot differ between them).
+          // Two chunks importing each other is a cycle rollup warns about and a browser has to
+          // fetch both of before either can run.
+          if (id.includes("/src/services/")) return "app-services";
           if (id.includes("/src/components/operations/")) return "operations-ui";
           if (id.includes("/src/components/receipts/")) return "receipts-ui";
           if (id.includes("/src/components/portal/")) return "portal-ui";

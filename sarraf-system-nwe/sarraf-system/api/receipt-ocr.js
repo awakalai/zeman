@@ -6,6 +6,7 @@
 // a financial or receipt verdict.
 
 import { createHash, randomUUID } from "node:crypto";
+import { ACTOR_COLUMNS, sameTenant, notFound } from "./_tenant.js";
 import { createClient } from "@supabase/supabase-js";
 import { readReceiptImage } from "./read-receipt.js";
 
@@ -121,7 +122,7 @@ async function requireActor(req, auth, service) {
   const authId = authResult.data?.user?.id;
   if (authResult.error || !authId) throw failure(401, "session_expired", "session expired");
   const actorResult = await service.from("app_users")
-    .select("id,role,deleted")
+    .select(ACTOR_COLUMNS)
     .eq("auth_id", authId)
     .eq("deleted", false)
     .maybeSingle();
@@ -167,12 +168,16 @@ export default async function handler(req, res) {
     checkRateLimit(`${actor.id}:${ip}`);
 
     const documentResult = await service.from("receipt_documents")
-      .select("id,uploader_id,state,storage_path,mime_type,image_sha256")
+      .select("id,uploader_id,state,storage_path,mime_type,image_sha256,tenant_id")
       .eq("id", body.documentId)
       .maybeSingle();
     const document = documentResult.data;
     if (documentResult.error) throw failure(503, "receipt_lookup_failed", "receipt lookup is unavailable", true);
-    if (!document?.id) throw failure(404, "receipt_not_found", "receipt not found");
+    if (!document?.id) throw notFound("receipt");
+    // This route holds the service key, so nothing below it is filtered by row level security.
+    // An administrator is an administrator of one business; without this line any administrator
+    // could read the image bytes of any receipt on the platform.
+    if (!sameTenant(actor, document)) throw notFound("receipt");
     if (document.uploader_id !== actor.id && actor.role !== "admin") {
       throw failure(403, "receipt_not_owned", "receipt is outside this assignment");
     }
