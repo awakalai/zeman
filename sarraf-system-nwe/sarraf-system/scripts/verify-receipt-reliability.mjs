@@ -349,6 +349,112 @@ try {
     if (loose) throw new Error(`${loose} step(s) of a receipt's story belong to no business`);
   });
 
+  // ── a receipt with no Order No. is not finished ─────────────────────────────
+  //
+  // Order No. is the principal operational reference in this business. The accept path refused
+  // only when BOTH identifiers were absent, so a receipt carrying a merchant order number and no
+  // Order No. was accepted. 202609010010 closes that with a trigger on the state column.
+  //
+  // Which column is which matters, and the names mislead: api/read-receipt.js says refNo comes
+  // from "Order No." and merchantOrderNo from "Merchant order No.". ref_no IS the Order No.
+  const seedDoc = (id, refNo, merchantNo) => psql(`
+    begin;
+    set local session_replication_role = replica;
+    delete from public.receipt_extractions where document_id = '${id}';
+    delete from public.receipt_documents where id = '${id}';
+    insert into public.receipt_documents(id,flow,state,uploader_id,customer_id,batch_id,
+      storage_path,mime_type,tenant_id)
+    values ('${id}','customer_sells_to_zeman','submitted','rl-cus','rl-cus','relb',
+            'ingest/relb/${id}.jpg','image/jpeg','t-sarkhel');
+    insert into public.receipt_extractions(document_id,version,currency,gross_amount,fee_amount,
+      net_amount,ref_no,merchant_order_no,raw,is_original)
+    values ('${id}',1,'CNY',100,0,100,${refNo === null ? "null" : `'${refNo}'`},
+            ${merchantNo === null ? "null" : `'${merchantNo}'`},'{}'::jsonb,true);
+    commit;`);
+
+  check("a receipt with no Order No. cannot be accepted", () => {
+    seedDoc("ord-none", null, "MERCH-1");
+    const stopped = refused(
+      `update public.receipt_documents set state='accepted' where id='ord-none'`,
+      `public.receipt_documents where id='ord-none' and state='accepted'`);
+    if (!stopped) throw new Error("a receipt with no Order No. was accepted");
+  });
+
+  check("the refusal says exactly what is wrong", () => {
+    seedDoc("ord-none2", null, null);
+    let message = "";
+    try { psql(`update public.receipt_documents set state='accepted' where id='ord-none2'`); }
+    catch (e) { message = String(e.message || e); }
+    if (!message.includes("Order No. is required.")) {
+      throw new Error(`the refusal read: ${message.slice(0, 200)}`);
+    }
+  });
+
+  check("a merchant order number alone is not an Order No.", () => {
+    // The exact gap this closes: the receipt has an identifier, just not the one that counts.
+    //
+    // Written against 'forwarded' at first, and it passed with the rule removed — the state
+    // machine refuses that jump on its own, so the check was measuring the wrong refusal.
+    // 'accepted' is a transition the state machine allows, which leaves only this rule to stop
+    // it, and removing the migration does make it fail.
+    seedDoc("ord-merch", null, "MERCH-9");
+    const stopped = refused(
+      `update public.receipt_documents set state='accepted' where id='ord-merch'`,
+      `public.receipt_documents where id='ord-merch' and state='accepted'`);
+    if (!stopped) throw new Error("a merchant order number was taken for an Order No.");
+  });
+
+  check("a receipt that has an Order No. goes forward as before", () => {
+    seedDoc("ord-good", "ORD-1234", null);
+    psql(`update public.receipt_documents set state='accepted' where id='ord-good'`);
+    const state = one(`select state::text from public.receipt_documents where id='ord-good'`);
+    if (state !== "accepted") throw new Error(`it stopped at ${state}`);
+  });
+
+  check("an administrator's correction lets a stopped receipt go forward", () => {
+    // The Needs Review path: the machine could not read the Order No., a person enters it, and
+    // the newest reading is what the rule consults.
+    seedDoc("ord-fixed", null, null);
+    psql(`insert into public.receipt_extractions(document_id,version,currency,gross_amount,
+            fee_amount,net_amount,ref_no,raw,is_original,corrected_by,correction_reason)
+          values ('ord-fixed',2,'CNY',100,0,100,'ORD-5678','{}'::jsonb,false,'rl-adm',
+                  'Order No. was legible on the image but the reading missed it')`);
+    psql(`update public.receipt_documents set state='accepted' where id='ord-fixed'`);
+    const state = one(`select state::text from public.receipt_documents where id='ord-fixed'`);
+    if (state !== "accepted") throw new Error(`the correction was not honoured: ${state}`);
+  });
+
+  check("a receipt already accepted is not re-judged by an unrelated update", () => {
+    // Nothing in history is re-opened: the rule holds for a move forward, not for every write.
+    //
+    // The first version of this asked whether the row still existed before and after, which is
+    // zero equals zero when the seed has failed — a check that measures nothing. It now sets up
+    // the harder case on purpose: a receipt that is accepted and whose newest reading has NO
+    // Order No., which is what a historical row looks like. An unrelated update must not
+    // re-open that judgement.
+    seedDoc("ord-hist", "ORD-9", null);
+    psql(`update public.receipt_documents set state='accepted' where id='ord-hist'`);
+    psql(`insert into public.receipt_extractions(document_id,version,currency,gross_amount,
+            fee_amount,net_amount,ref_no,raw,is_original,corrected_by,correction_reason)
+          values ('ord-hist',2,'CNY',100,0,100,null,'{}'::jsonb,false,'rl-adm',
+                  'a later reading that lost the Order No.')`);
+    psql(`update public.receipt_documents set mime_type='image/png' where id='ord-hist'`);
+    const state = one(`select state::text from public.receipt_documents where id='ord-hist'`);
+    if (state !== "accepted") throw new Error(`an accepted receipt was disturbed: ${state}`);
+  });
+
+  check("a rejected receipt is still allowed to be rejected without an Order No.", () => {
+    seedDoc("ord-rej", null, null);
+    // The table already insists a rejection says why, which is what keeps the image and the
+    // reason together for audit while the receipt is refused.
+    psql(`update public.receipt_documents
+             set state='rejected', rule_code='order_no_missing',
+                 rule_reason='Order No. is required.'
+           where id='ord-rej'`);
+    const state = one(`select state::text from public.receipt_documents where id='ord-rej'`);
+    if (state !== "rejected") throw new Error(`a receipt could not even be rejected: ${state}`);
+  });
+
   // ── the report ──────────────────────────────────────────────────────────────
   let failed = 0;
   for (const [ok, name] of checks) { console.log(`${ok ? "PASS" : "FAIL"}  ${name}`); if (!ok) failed++; }
