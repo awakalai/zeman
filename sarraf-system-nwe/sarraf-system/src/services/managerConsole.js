@@ -222,3 +222,79 @@ export async function loadSupportHistory(client, days = 90) {
     sessions: Array.isArray(data?.sessions) ? data.sessions : [],
   };
 }
+
+/**
+ * Which business needs the vendor, and why.
+ *
+ * loadTenants answers "what exists". This answers "where do I need to go" — the question
+ * somebody running the platform actually opens the console with. The live database had a
+ * business nobody had ever been inside and the console said nothing; it took a database
+ * inspection to find.
+ *
+ * Counts and states, never amounts. A count of entries waiting to be posted says the books need
+ * attention; the figures in them are the business's own.
+ */
+export async function loadAttention(client, quietDays = 30) {
+  const { data, error } = await client.rpc("sarraf_manager_attention", { p_quiet_days: quietDays });
+  if (error) throw error;
+  return {
+    quietDays: Number(data?.quiet_days) || quietDays,
+    checkedAt: data?.checked_at || null,
+    businesses: Array.isArray(data?.businesses) ? data.businesses : [],
+  };
+}
+
+/**
+ * What this business needs, in the order it matters, written for a person to read.
+ *
+ * A single "unhealthy" flag would collapse "nobody has ever signed in" and "quiet for forty
+ * days" into one colour, and they are different problems with different answers.
+ */
+export function attentionReasons(business, lang = "ku") {
+  const out = [];
+  const pick = (phrase) => say(phrase, lang);
+  if (business?.never_opened) out.push(pick(NEVER_OPENED));
+  if (business?.active === false) out.push(pick(SUSPENDED));
+  if (business?.quiet) out.push(pick(QUIET));
+  if (business?.waiting_to_claim > 0) out.push(`${pick(WAITING_TO_CLAIM)} (${business.waiting_to_claim})`);
+  if (business?.without_mfa > 0) out.push(`${pick(WITHOUT_MFA)} (${business.without_mfa})`);
+  if (business?.receipts_waiting > 0) out.push(`${pick(RECEIPTS_WAITING)} (${business.receipts_waiting})`);
+  if (business?.entries_unposted > 0) out.push(`${pick(ENTRIES_UNPOSTED)} (${business.entries_unposted})`);
+  return out;
+}
+
+const NEVER_OPENED = {
+  ku: "هێشتا کەس نەچووەتە ژوورەوە",
+  en: "Nobody has ever signed in",
+  ar: "لم يدخل أحد بعد",
+};
+const SUSPENDED = {
+  ku: "ڕاگیراوە — دەخوێندرێتەوە، مامەڵە ناکات",
+  en: "Suspended — reads, does not trade",
+  ar: "موقوف — يقرأ ولا يتاجر",
+};
+const QUIET = {
+  ku: "ماوەیەکە هیچ کارێکی نەکردووە",
+  en: "Nothing has happened for a while",
+  ar: "لم يحدث شيء منذ فترة",
+};
+const WAITING_TO_CLAIM = {
+  ku: "بانگهێشت وەرنەگیراوە",
+  en: "Invitation not accepted",
+  ar: "الدعوة لم تُقبل",
+};
+const WITHOUT_MFA = {
+  ku: "ئەکاونتی پارێزراو بێ MFA",
+  en: "Protected account with no second factor",
+  ar: "حساب محمي بلا عامل ثانٍ",
+};
+const RECEIPTS_WAITING = {
+  ku: "فیشی وەستاو",
+  en: "Receipts that stopped moving",
+  ar: "إيصالات متوقفة",
+};
+const ENTRIES_UNPOSTED = {
+  ku: "تۆماری ژورناڵی نەپۆستکراو",
+  en: "Journal entries not posted",
+  ar: "قيود غير مُرحَّلة",
+};

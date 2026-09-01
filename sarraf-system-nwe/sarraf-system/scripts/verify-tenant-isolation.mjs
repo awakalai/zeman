@@ -1457,6 +1457,56 @@ try {
     if (!refused) throw new Error("a business owner opened a new business");
   });
 
+  // ── which business needs the vendor today ───────────────────────────────────
+  //
+  // The live database had a business nobody had ever been inside — the owner had a login and
+  // had never passed the MFA gate — and the console said nothing. It took a database inspection
+  // to find, and the vendor would have found out when the customer rang.
+  check("the manager is told which business has never been opened", () => {
+    const out = JSON.parse(asDefiner(MGR, `select public.sarraf_manager_attention(30)::text`));
+    const rows = out.businesses || [];
+    if (!rows.length) throw new Error("no business was reported at all");
+    // The fixture's owners have no MFA factor, so every business reads as never opened — which
+    // is the honest answer for a database where nobody has signed in.
+    const named = rows.filter((r) => r.never_opened).map((r) => r.id);
+    if (!named.includes("t-watan")) throw new Error(`never-opened businesses: ${named.join(", ")}`);
+  });
+
+  check("a business nobody has opened outranks a business that is merely quiet", () => {
+    const out = JSON.parse(asDefiner(MGR, `select public.sarraf_manager_attention(1)::text`));
+    const rows = out.businesses || [];
+    const opened = rows.find((r) => !r.never_opened);
+    const never = rows.find((r) => r.never_opened);
+    if (never && opened && never.weight <= opened.weight) {
+      throw new Error("a business nobody has been inside did not come first");
+    }
+  });
+
+  check("and never an amount from anybody's books", () => {
+    const out = asDefiner(MGR, `select public.sarraf_manager_attention(30)::text`);
+    for (const forbidden of ["amount", "total", "balance", "profit", "rate"]) {
+      if (out.includes(`"${forbidden}"`)) {
+        throw new Error(`the manager's console reported ${forbidden} from a business's books`);
+      }
+    }
+  });
+
+  check("a business owner cannot read the vendor's console", () => {
+    let refused = false;
+    try { asDefiner(A_UID, `select public.sarraf_manager_attention(30)::text`); }
+    catch { refused = true; }
+    if (!refused) throw new Error("a business owner read which businesses need the vendor");
+  });
+
+  check("a suspended business is reported as needing attention", () => {
+    psql(`update public.tenants set active = false where id = 't-watan'`);
+    const out = JSON.parse(asDefiner(MGR, `select public.sarraf_manager_attention(30)::text`));
+    const watan = (out.businesses || []).find((r) => r.id === "t-watan");
+    if (!watan) throw new Error("the suspended business was not reported");
+    if (watan.active !== false) throw new Error("the suspended business reads as active");
+    psql(`update public.tenants set active = true where id = 't-watan'`);
+  });
+
   // ── and the manager, who is meant to see everything ─────────────────────────
   check("the manager still sees both businesses", () => {
     const mgr = psql(`select coalesce(auth_id::text,'') from public.app_users
