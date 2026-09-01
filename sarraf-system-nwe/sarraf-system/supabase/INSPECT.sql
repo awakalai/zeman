@@ -382,6 +382,30 @@ select coalesce(u.admin_level, u.role) as "rank", u.tenant_id as "business",
 \endif
 
 \echo ''
+\echo ''
+\echo '════════ ٨.c ژمارەی داواکاری — تووندکردنی یاساکە سەلامەتە؟ ════════'
+\echo '   یاسای ئێستا: ref_no یان merchant_order_no. §10 داوای ژمارەی داواکاری دەکات.'
+\echo '   گەر «تەنها ref_no» > 0 بێت، تووندکردن فیشی دروستی ئەمڕۆ ڕەت دەکاتەوە.'
+\echo ''
+
+-- Before requiring the Order No. specifically, ask what the tightening would cost. The accept
+-- path today takes coalesce(ref_no, merchant_order_no), so a receipt carrying only a serial
+-- reference is valid. If any accepted receipt lives in that column alone, demanding the merchant
+-- order number would refuse work the business has already done — and that is the owner's call,
+-- not mine.
+with newest as (
+  select distinct on (e.document_id) e.*
+    from public.receipt_extractions e order by e.document_id, e.version desc
+)
+select
+  count(*) as "extractions",
+  count(*) filter (where n.merchant_order_no is not null) as "has order no",
+  count(*) filter (where n.merchant_order_no is null and n.ref_no is not null) as "only ref_no",
+  count(*) filter (where n.merchant_order_no is null and n.ref_no is null) as "neither",
+  count(*) filter (where d.state = 'accepted' and n.merchant_order_no is null
+                     and n.ref_no is not null) as "ACCEPTED on ref_no alone"
+  from newest n join public.receipt_documents d on d.id = n.document_id;
+
 \echo '════════ 9. ژمارەکانی کار ════════'
 \echo ''
 
