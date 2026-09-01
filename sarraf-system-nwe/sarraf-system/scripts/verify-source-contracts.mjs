@@ -145,6 +145,61 @@ for (const file of serviceKeyRoutes) {
   }
 }
 
+// Nothing that looks like a credential may enter the source.
+//
+// Two live database passwords reached this project through a chat window earlier in its life.
+// They never entered a file, but nothing would have stopped them: no gate here looked, and a
+// password committed once is a password in the history for ever, however quickly it is deleted.
+//
+// What is looked for is the shape of a secret, not a wordlist:
+//
+//   · a connection string carrying a password — postgres://user:something@host
+//   · a JWT, which is what every Supabase anon and service key is
+//   · a PEM private key block
+//   · an assignment of a variable whose name says secret, to a literal long enough to be one
+//
+// The publishable/anon key is a JWT too and is meant to be in the browser, so it reaches the
+// client through an environment variable like every other deployment value; a literal one in
+// the source is still refused, because the file cannot tell you which key it is.
+//
+// The password part of a connection string is compared against the words people write when they
+// are describing the shape rather than carrying one. Documentation has to be able to say what a
+// connection string looks like — SECURITY.md and GUIDE.md both do — and a gate that refuses the
+// sentence explaining the rule is a gate somebody switches off.
+const A_PLACEHOLDER = /^(?:<[^>]*>|\{[^}]*\}|\$\{?[A-Z_]+\}?|x{3,}|\*{3,}|\.{3,}|password|PASSWORD|pass|your[-_]?password|yourpassword|secret|SECRET|changeme|例|…)$/;
+const CREDENTIAL_SHAPES = [
+  [/\bpostgres(?:ql)?:\/\/[^\s:@/]+:([^\s:@/]{3,})@/, "a connection string with a password in it"],
+  // Five characters is a short payload but a real one; the first version asked for ten and
+  // sailed past a token a test had written by hand.
+  [/\beyJ[A-Za-z0-9_-]{5,}\.eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}/, "a JWT"],
+  [/-----BEGIN [A-Z ]*PRIVATE KEY-----/, "a private key"],
+  [/\b(?:SUPABASE_(?:SERVICE_ROLE_KEY|SECRET_KEY|DB_PASSWORD)|SERVICE_ROLE_KEY|DB_PASSWORD)\s*[:=]\s*["'`][^"'`\n$]{12,}["'`]/,
+   "a secret assigned to a literal"],
+];
+// The rule needs to be able to describe itself without tripping over its own description, and
+// tests need to be able to name the shapes they check for.
+const DESCRIBES_ITSELF = new Set([
+  "scripts/verify-source-contracts.mjs",
+  "test/sourceContracts.test.js",
+  "SECURITY.md",
+]);
+for (const file of tracked) {
+  if (DESCRIBES_ITSELF.has(file)) continue;
+  if (file.startsWith("node_modules/")) continue;
+  const source = text(file);
+  for (const [shape, what] of CREDENTIAL_SHAPES) {
+    const found = shape.exec(source);
+    if (!found) continue;
+    // A captured group means the shape wanted the secret itself looked at, not just matched.
+    if (found[1] && A_PLACEHOLDER.test(found[1])) continue;
+    // Named, never printed: the whole point is that it does not reach a log.
+    const line = source.slice(0, found.index).split("\n").length;
+    fail(`${what} in ${file}:${line} — a credential must never enter the source. `
+       + `Move it to an environment variable, and rotate it: it is compromised from the moment `
+       + `it is written down.`);
+  }
+}
+
 const workflow = text("../../.github/workflows/verify.yml");
 for (const required of ["npm ci", "npm test", "npm run build", "npm run verify:accounting", "npm run verify:roles", "npm audit --audit-level=high"]) {
   if (!workflow.includes(required)) fail(`CI is missing required gate: ${required}`);

@@ -224,3 +224,57 @@ test("an owner is unaffected: they act in their own business with no context to 
   assert.equal(service.calls.some(([kind]) => kind === "rpc"), false,
     "an owner's act should not consult a support context at all");
 });
+
+/**
+ * Creating an account inside somebody's business is an act on that business.
+ *
+ * The other four actions all go through authorizeTarget, which demands the support context.
+ * `create` does not, because there is no target to authorize yet — so the context was never
+ * asked for on the one path that adds a person to a customer's business. A manager could put a
+ * new administrator into somebody's accounts with nothing recorded.
+ *
+ * The rule is asked directly there instead. These drive the exported helper, which is what that
+ * path consults.
+ */
+test("the manager's open business is what the create path is asked about", async () => {
+  const { openSupportContext } = await import("../api/admin-user.js");
+  const seen = [];
+  const service = { rpc: async (fn, args) => { seen.push([fn, args?.p_manager_id]); return { data: "t-a", error: null }; } };
+  const open = await openSupportContext(service, manager());
+  assert.equal(open, "t-a");
+  assert.deepEqual(seen, [["sarraf_manager_support_tenant_for", "mgr-1"]]);
+});
+
+test("no context open reads as no business open, not as any business", async () => {
+  const { openSupportContext } = await import("../api/admin-user.js");
+  const service = { rpc: async () => ({ data: null, error: null }) };
+  assert.equal(await openSupportContext(service, manager()), null);
+});
+
+test("a lookup that fails reads as no business open", async () => {
+  const { openSupportContext } = await import("../api/admin-user.js");
+  const service = { rpc: async () => { throw new Error("unavailable"); } };
+  assert.equal(await openSupportContext(service, manager()), null);
+});
+
+test("an owner is never asked about a support context — they have their own business", async () => {
+  const { openSupportContext } = await import("../api/admin-user.js");
+  let asked = false;
+  const service = { rpc: async () => { asked = true; return { data: "t-a", error: null }; } };
+  assert.equal(await openSupportContext(service, actorIn("t-a")), null);
+  assert.equal(asked, false);
+});
+
+test("the create path in the source asks the same question the other four do", async () => {
+  // Read rather than executed: the create branch needs Supabase Auth and a live service key,
+  // and what is being held is that the rule is present on that path at all — it was absent, and
+  // its absence looked exactly like the other four being correct.
+  const { readFileSync } = await import("node:fs");
+  const source = readFileSync(new URL("../api/admin-user.js", import.meta.url), "utf8");
+  const createBranch = source.slice(source.indexOf('if (action === "create")'),
+                                   source.indexOf('if (action === "deactivate")'));
+  assert.ok(createBranch.length > 200, "the create branch was not found");
+  assert.match(createBranch, /openSupportContext\(/,
+    "the create path does not ask whether the manager has opened this business");
+  assert.match(createBranch, /support_context_required/);
+});

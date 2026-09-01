@@ -1,12 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  AlertTriangle, Building2, CheckCircle2, KeyRound, Loader2, Plus, RefreshCw, ShieldCheck,
-  Unlock, Users,
+  AlertTriangle, Bell, Building2, CheckCircle2, KeyRound, Loader2, Plus, RefreshCw,
+  ShieldCheck, Unlock, Users,
 } from "lucide-react";
 import {
-  closeSupport, createTenant, currentSupport, healthProblems, loadAllAccounts, loadHealth,
-  loadSupportHistory, loadTenants, openSupport, setTenantActive,
-  supportReasonObjection, tenantIdObjection, tenantNameObjection,
+  attentionReasons, closeSupport, currentSupport, healthProblems, loadAllAccounts,
+  loadAttention, loadHealth, loadSupportHistory, loadTenants, openBusiness, openSupport,
+  ownerEmailObjection, ownerNameObjection, setTenantActive, supportReasonObjection,
+  tenantIdObjection, tenantNameObjection,
 } from "../../services/managerConsole.js";
 import { rankName, rankOf } from "../../services/adminRanks.js";
 import "./debt-center.css";
@@ -25,7 +26,10 @@ const COPY = {
   ku: {
     title: "کۆنسۆڵی ماناجەر",
     subtitle: "سەرخێڵەکان، ئەکاونتەکان و تەندروستیی سیستەم",
-    tabs: { tenants: "سەرخێڵەکان", accounts: "ئەکاونتەکان", health: "تەندروستی" },
+    tabs: {
+      attention: "چی پێویستی بە تۆیە", tenants: "سەرخێڵەکان",
+      accounts: "ئەکاونتەکان", health: "تەندروستی", support: "پشتگیری",
+    },
     refresh: "نوێکردنەوە", loading: "بارکردن...", failed: "بار نەبوو", working: "جێبەجێکردن...",
     notManager: "ئەم بەشە تەنها بۆ ماناجەرە",
     name: "ناو", id: "ناسنامە", accounts: "ئەکاونت", admins: "ئەدمین",
@@ -44,11 +48,16 @@ const COPY = {
     why: "هۆکار", forHowLong: "بۆ چەند خولەک", expires: "بەسەردەچێت",
     opened: "کرایەوە", closed: "داخرا", stillOpen: "کراوەیە", byWhom: "لەلایەن",
     history: "مێژووی پشتگیری", noHistory: "هیچ پشتگیرییەک نەکراوەتەوە",
+    needsYou: "چی پێویستی بە تۆیە", needsLead: "ئەمانە بەپێی گرنگی ڕیز کراون — سەرەوە ئەوەیە کە یەکەم جار سەیری بکە", needsNothing: "هیچ بازرگانییەک پێویستی بە تۆ نییە",
+    ownerName: "ناوی خاوەن", ownerEmail: "ئیمەیڵی خاوەن", ownerHint: "خاوەنەکە دوای بانگهێشتکردن لە Supabase یەکەم جار کە دەچێتە ژوورەوە دروست دەبێت",
   },
   en: {
     title: "Manager console",
     subtitle: "Businesses, accounts, and the health of the installation",
-    tabs: { tenants: "Businesses", accounts: "Accounts", health: "Health" },
+    tabs: {
+      attention: "What needs you", tenants: "Businesses",
+      accounts: "Accounts", health: "Health", support: "Support",
+    },
     refresh: "Refresh", loading: "Loading…", failed: "Could not load", working: "Working…",
     notManager: "This section is for managers only",
     name: "Name", id: "Id", accounts: "Accounts", admins: "Admins",
@@ -67,11 +76,16 @@ const COPY = {
     why: "Reason", forHowLong: "For how many minutes", expires: "Expires",
     opened: "Opened", closed: "Closed", stillOpen: "Open", byWhom: "By",
     history: "Support history", noHistory: "No support context has been opened",
+    needsYou: "What needs you", needsLead: "Ordered by what matters — the top one is where to look first", needsNothing: "No business needs you",
+    ownerName: "Owner's name", ownerEmail: "Owner's email", ownerHint: "The owner's account is made the first time they sign in, after you invite them in Supabase",
   },
   ar: {
     title: "لوحة المدير",
     subtitle: "الأعمال والحسابات وصحة النظام",
-    tabs: { tenants: "الأعمال", accounts: "الحسابات", health: "الصحة", support: "الدعم" },
+    tabs: {
+      attention: "ما يحتاج إليك", tenants: "الأعمال",
+      accounts: "الحسابات", health: "الصحة", support: "الدعم",
+    },
     refresh: "تحديث", loading: "جارٍ التحميل…", failed: "تعذّر التحميل", working: "جارٍ التنفيذ…",
     notManager: "هذا القسم للمدير فقط",
     name: "الاسم", id: "المعرّف", accounts: "الحسابات", admins: "مشرفون",
@@ -90,40 +104,42 @@ const COPY = {
     why: "السبب", forHowLong: "لكم دقيقة", expires: "ينتهي",
     opened: "فُتح", closed: "أُغلق", stillOpen: "مفتوح", byWhom: "بواسطة",
     history: "سجل الدعم", noHistory: "لم يُفتح أي دعم",
+    needsYou: "ما يحتاج إليك", needsLead: "مرتّبة حسب الأهمية — الأولى هي التي تُنظر أولًا", needsNothing: "لا يوجد عمل يحتاج إليك",
+    ownerName: "اسم المالك", ownerEmail: "بريد المالك", ownerHint: "يُنشأ حساب المالك عند أول تسجيل دخول، بعد دعوته من Supabase",
   },
 };
-COPY.ku.tabs.support = "پشتگیری";
-COPY.en.tabs.support = "Support";
 const localeKey = (lang) => (lang === "en" ? "en" : lang === "ar" ? "ar" : "ku");
 const day = (v) => (v ? String(v).slice(0, 10) : null);
 
 export function ManagerConsole({ client, lang = "ku", isManager = false, flash = () => {} }) {
   const copy = COPY[localeKey(lang)];
-  const [tab, setTab] = useState("tenants");
+  const [tab, setTab] = useState("attention");
   const [state, setState] = useState("loading");
   const [tenants, setTenants] = useState(null);
   const [accounts, setAccounts] = useState([]);
   const [health, setHealth] = useState(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
-  const [form, setForm] = useState({ id: "", name: "", note: "" });
+  const [form, setForm] = useState({ id: "", name: "", note: "", ownerEmail: "", ownerName: "" });
   const [openTenant, setOpenTenant] = useState(null);
   const [support, setSupport] = useState({ id: "", reason: "", minutes: 120 });
   const [history, setHistory] = useState([]);
+  const [attention, setAttention] = useState([]);
 
   const load = useCallback(async () => {
     setState("loading"); setError("");
     try {
       // Each independently: a failure to read one view must not blank the other two.
-      const [t, a, h, open, log] = await Promise.allSettled([
+      const [t, a, h, open, log, needs] = await Promise.allSettled([
         loadTenants(client), loadAllAccounts(client), loadHealth(client),
-        currentSupport(client), loadSupportHistory(client),
+        currentSupport(client), loadSupportHistory(client), loadAttention(client),
       ]);
       if (t.status === "fulfilled") setTenants(t.value);
       if (a.status === "fulfilled") setAccounts(a.value);
       if (h.status === "fulfilled") setHealth(h.value);
       if (open.status === "fulfilled") setOpenTenant(open.value);
       if (log.status === "fulfilled") setHistory(log.value.sessions);
+      if (needs.status === "fulfilled") setAttention(needs.value.businesses);
       if (t.status === "rejected") throw t.reason;
       setState("ready");
     } catch (e) {
@@ -134,19 +150,29 @@ export function ManagerConsole({ client, lang = "ku", isManager = false, flash =
 
   useEffect(() => { if (isManager) load(); }, [isManager, load]);
 
+  // One act, not two. The business used to be created on its own and the owner on a different
+  // screen; a manager who forgot the second step left a business that looked created and could
+  // not be signed into.
   const add = useCallback(async () => {
-    const objection = tenantIdObjection(form.id) || tenantNameObjection(form.name);
+    const lang3 = localeKey(lang);
+    const objection = tenantIdObjection(form.id) || tenantNameObjection(form.name)
+      || ownerEmailObjection(form.ownerEmail, lang3) || ownerNameObjection(form.ownerName, lang3);
     if (objection) { setError(objection); return; }
     setBusy("add"); setError("");
     try {
-      await createTenant(client, form);
-      setForm({ id: "", name: "", note: "" });
-      flash(copy.add + " ✓");
+      const made = await openBusiness(client, {
+        id: form.id, name: form.name, note: form.note,
+        ownerEmail: form.ownerEmail, ownerName: form.ownerName,
+      });
+      setForm({ id: "", name: "", note: "", ownerEmail: "", ownerName: "" });
+      // What is left to do is said here rather than assumed: the owner has no login until
+      // somebody invites them, and nothing in this system can make one.
+      flash(made?.next || `${copy.add} ✓`, true);
       await load();
     } catch (e) {
       setError(errorText(e).slice(0, 200));
     } finally { setBusy(""); }
-  }, [client, form, load, flash, copy.add]);
+  }, [client, form, load, flash, copy.add, lang]);
 
   const toggle = useCallback(async (tenant) => {
     const reason = window.prompt(copy.reason);
@@ -215,16 +241,48 @@ export function ManagerConsole({ client, lang = "ku", isManager = false, flash =
         <AlertTriangle aria-hidden="true" /> {error}</div>}
 
       <div className="debt-actions" role="tablist" aria-label={copy.title}>
-        {["tenants", "accounts", "health", "support"].map((k) => (
+        {["attention", "tenants", "accounts", "health", "support"].map((k) => (
           <button key={k} type="button" role="tab" aria-selected={tab === k}
                   className={tab === k ? "debt-primary" : ""}
                   onClick={() => setTab(k)}>
             {copy.tabs[k]}
             {k === "health" && problems.length ? ` (${problems.length})` : ""}
             {k === "support" && openTenant ? " ●" : ""}
+            {k === "attention" && attention.some((b) => attentionReasons(b, localeKey(lang)).length)
+              ? ` (${attention.filter((b) => attentionReasons(b, localeKey(lang)).length).length})` : ""}
           </button>
         ))}
       </div>
+
+      {tab === "attention" && (() => {
+        const needing = attention
+          .map((b) => ({ business: b, reasons: attentionReasons(b, localeKey(lang)) }))
+          .filter((x) => x.reasons.length);
+        return (
+          <>
+            <p className="debt-note"><Bell aria-hidden="true" /> {copy.needsLead}</p>
+            {needing.length === 0
+              ? <p className="debt-empty"><CheckCircle2 aria-hidden="true" /> {copy.needsNothing}</p>
+              : <ul className="recon-list">
+                  {needing.map(({ business, reasons }) => (
+                    <li key={business.id}>
+                      <div className="recon-row">
+                        <span className="recon-row-main">
+                          <span className="recon-row-id">{business.name}</span>
+                          <span className="recon-row-text">{reasons.join(" · ")}</span>
+                        </span>
+                        <span className="recon-row-meta">
+                          <span className={`recon-badge ${business.never_opened ? "is-bad" : ""}`}>
+                            {business.active ? copy.active : copy.suspended}
+                          </span>
+                        </span>
+                      </div>
+                    </li>
+                  ))}
+                </ul>}
+          </>
+        );
+      })()}
 
       {tab === "tenants" && (
         <>
@@ -274,12 +332,22 @@ export function ManagerConsole({ client, lang = "ku", isManager = false, flash =
               <input value={form.note} aria-label={copy.note}
                      onChange={(e) => setForm({ ...form, note: e.target.value })} />
             </label>
+            <label>{copy.ownerName}
+              <input value={form.ownerName} aria-label={copy.ownerName}
+                     onChange={(e) => { setForm({ ...form, ownerName: e.target.value }); setError(""); }} />
+            </label>
+            <label>{copy.ownerEmail}
+              <input type="email" value={form.ownerEmail} aria-label={copy.ownerEmail}
+                     style={{ direction: "ltr" }} aria-describedby="owner-email-hint"
+                     onChange={(e) => { setForm({ ...form, ownerEmail: e.target.value }); setError(""); }} />
+            </label>
             <button type="button" className="debt-primary" disabled={busy === "add"} onClick={add}>
               {busy === "add" ? <><Loader2 aria-hidden="true" /> {copy.working}</>
                               : <><Plus aria-hidden="true" /> {copy.add}</>}
             </button>
           </div>
           <p id="tenant-id-hint" className="debt-note">{copy.idHint}</p>
+          <p id="owner-email-hint" className="debt-note">{copy.ownerHint}</p>
         </>
       )}
 

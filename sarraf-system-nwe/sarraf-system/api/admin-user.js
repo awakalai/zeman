@@ -377,6 +377,22 @@ export default async function handler(req, res) {
           code: "tenant_required",
         });
       }
+      // Putting a new administrator inside somebody's business is an act on that business, and
+      // it is the one this route's other four actions all go through authorizeTarget for.
+      // `create` does not, because there is no target to authorize yet — so the support context
+      // it also demands was never asked for here, and a manager could add an account to a
+      // customer's business with nothing recorded. Same rule, asked directly.
+      if (tenantId && isManager(actor.profile)) {
+        const open = await openSupportContext(service, actor);
+        if (open !== tenantId) {
+          return res.status(403).json({
+            error: open
+              ? "پشتگیریت بۆ بازرگانییەکی تر کراوەتەوە — یەکەم جار ئەمە بکەرەوە"
+              : "پێش درووستکردنی ئەکاونت لە بازرگانییەکدا، پشتگیری بکەرەوە و هۆکارەکە بنووسە",
+            code: "support_context_required",
+          });
+        }
+      }
       if (role === "admin" && !mayGrant(actor.profile, adminLevel)) {
         return res.status(403).json({
           error: adminLevel === "manager"

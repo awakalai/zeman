@@ -94,6 +94,17 @@ port = ${PORT}
       create table if not exists auth.users (
         id uuid primary key, email text, created_at timestamptz not null default now());
       grant select on auth.users to authenticated, service_role;
+      -- The second factor, as Supabase provides it. The app sends every administrator and every
+      -- office through MfaGate, so a verified factor is not optional for them, and both INSPECT
+      -- and the manager's console read this table to say whether that is actually true of a
+      -- given account. Without it here, a gate cannot run the branch the live database takes —
+      -- which is how the MFA question came to be asked in production before it was asked here.
+      create table if not exists auth.mfa_factors (
+        id uuid primary key default gen_random_uuid(),
+        user_id uuid references auth.users(id),
+        status text not null default 'unverified',
+        created_at timestamptz not null default now());
+      grant select on auth.mfa_factors to authenticated, service_role;
       create schema if not exists storage;
       create table if not exists storage.buckets (
         id text primary key, name text not null, public boolean not null default false,

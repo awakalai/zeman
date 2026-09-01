@@ -234,6 +234,30 @@ select to_char(o.created_at, 'YYYY-MM') as "month", count(*) as "unreferenced fi
  group by 1 order by 1 desc;
 
 \echo ''
+\echo '════════ ٥.d فیشەکان: ئایا زیادکردنی ئەم دوو مەرجە سەلامەتە؟ ════════'
+\echo '   پێویستە: هەردووکیان سفر. گەر نا، مایگرەیشنەکە دەشکێت'
+\echo ''
+
+select 'دۆکیومێنتی کۆمەڵەیەکی نەمان' as "what",
+       (select count(*) from public.receipt_documents d
+         where d.batch_id is not null
+           and not exists (select 1 from public.receipt_batches b where b.id = d.batch_id)) as "how many",
+       'foreign key بۆ batch_id' as "the constraint that would be added"
+union all
+select 'دوو دۆکیومێنت، یەک فایل',
+       (select coalesce(sum(n - 1), 0) from (
+          select count(*) as n from public.receipt_documents
+           where storage_path is not null group by storage_path having count(*) > 1) x),
+       'unique index بۆ storage_path'
+union all
+select 'یەک وێنە، دوو جار ژماردراو',
+       (select coalesce(sum(n - 1), 0) from (
+          select count(*) as n from public.receipt_documents
+           where image_sha256 is not null and counted group by image_sha256 having count(*) > 1) x),
+       'rd_hash_uq — پێشتر هەیە'
+ order by 2 desc, 1;
+
+\echo ''
 \echo '════════ 6. فەرمانەکان: کێ بانگیان دەکات ════════'
 \echo '   پێویستە: anon = 0 لە هەموو فەرمانێکی SECURITY DEFINERدا'
 \echo ''

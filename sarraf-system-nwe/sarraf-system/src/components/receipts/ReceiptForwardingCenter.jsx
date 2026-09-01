@@ -30,8 +30,47 @@ const COPY = {
     roles: { customer: "کڕیار", partner: "هاوبەش" },
     view: "بینینی وێنە",
   },
+  en: {
+    title: "Sending a receipt to the person it belongs to",
+    subtitle: "Only a finalised receipt is sent; the server decides the real recipient from the transaction's assignment",
+    refresh: "Refresh", loading: "Loading…", empty: "No finalised receipt is waiting to be sent",
+    eligible: "Ready to send", blocked: "Cannot be sent", selected: "Selected",
+    selectAll: "All", clearAll: "None",
+    reason: "Why it is being sent (at least 8 characters)", send: "Send", working: "Sending…",
+    sent: "Sent", skipped: "Not sent",
+    flows: {
+      customer_buys_from_zeman: "The customer bought from ZEMAN → to the customer",
+    },
+    wantsCustomer: "This receipt goes to the customer",
+    recon: "Did it arrive", reconForwarded: "Sent", reconSent: "On its way",
+    reconDelivered: "Arrived", reconSeen: "Seen", reconFailed: "Did not arrive",
+    reconNote: "Sending, arriving and being seen are three different things, counted separately",
+    result: "Result", replayed: "This command had already run — nothing was sent twice",
+    noneSelected: "No receipt is selected",
+    roles: { customer: "Customer", partner: "Partner" },
+    view: "Open the image",
+  },
+  ar: {
+    title: "إرسال الإيصال إلى صاحبه",
+    subtitle: "لا يُرسل إلا إيصال مُنجَز؛ الخادم يحدد المستلم الحقيقي من تخصيص المعاملة",
+    refresh: "تحديث", loading: "جارٍ التحميل…", empty: "لا يوجد إيصال مُنجَز ينتظر الإرسال",
+    eligible: "جاهز للإرسال", blocked: "لا يمكن إرساله", selected: "المحدد",
+    selectAll: "الكل", clearAll: "لا شيء",
+    reason: "سبب الإرسال (٨ أحرف على الأقل)", send: "إرسال", working: "جارٍ الإرسال…",
+    sent: "أُرسل", skipped: "لم يُرسل",
+    flows: {
+      customer_buys_from_zeman: "اشترى العميل من زيمان → إلى العميل",
+    },
+    wantsCustomer: "هذا الإيصال يذهب إلى العميل",
+    recon: "هل وصل", reconForwarded: "أُرسل", reconSent: "في الطريق",
+    reconDelivered: "وصل", reconSeen: "شوهد", reconFailed: "لم يصل",
+    reconNote: "الإرسال والوصول والمشاهدة ثلاثة أشياء مختلفة، وتُعدّ كلٌّ على حدة",
+    result: "النتيجة", replayed: "هذا الأمر سبق تنفيذه — لم يُرسل مرتين",
+    noneSelected: "لم يُحدَّد أي إيصال",
+    roles: { customer: "عميل", partner: "شريك" },
+    view: "افتح الصورة",
+  },
 };
-COPY.en = COPY.ku; COPY.ar = COPY.ku;
 
 const money = (n) => (n == null ? "—" : Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
 

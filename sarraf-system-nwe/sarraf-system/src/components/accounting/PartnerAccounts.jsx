@@ -25,8 +25,17 @@ const COPY = {
     noRate: "No manual daily rate for this currency", pick: "Choose a partner",
     refresh: "Refresh", working: "Working…", empty: "No partner accounts", failed: "Could not load partner accounts",
   },
+  ar: {
+    title: "حسابات الشركاء", subtitle: "الأرصدة لا تصبح سالبة أبدًا؛ الصرف الزائد يصير دينًا صريحًا",
+    partner: "الشريك", currency: "العملة", amount: "المبلغ", reason: "السبب",
+    transaction: "رقم المعاملة (اختياري)", credit: "مبلغ مستلم", disburse: "صرف",
+    available: "المتاح", debt: "دين مفتوح", rate: "السعر المعتمد",
+    noRate: "لا يوجد سعر يومي يدوي لهذه العملة", pick: "اختر شريكًا",
+    refresh: "تحديث", working: "جارٍ التنفيذ…", empty: "لا توجد حسابات شركاء",
+    failed: "تعذّر تحميل حسابات الشركاء",
+  },
 };
-COPY.ar = COPY.en;
+
 const localeKey = (lang) => (lang === "en" ? "en" : lang === "ar" ? "ar" : "ku");
 const money = (n) => Number(n || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 

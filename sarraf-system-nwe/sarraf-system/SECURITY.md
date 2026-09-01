@@ -192,3 +192,60 @@ select public.sarraf_manager_open_support('t-sarkhel', 'هۆکارەکە', 120);
 **٢. جێبەجێکردنی مایگرەیشن.** `Actions → Apply database migrations`،
 `confirm: APPLY`. **هەمیشە یەکەم جار بە `dry_run: true`** — لیستی ئەو
 فایلانەت پیشان دەدات کە دەڕۆن، بێ ئەوەی هیچ بگۆڕێت.
+
+---
+
+## ئەوەی تەنها خاوەنەکە دەیکات
+
+سێ شت هەن کە لە کۆددا نانووسرێن. لە ڕێکخستنەکانی GitHub و Supabaseدان، و
+تەنها ئەو کەسە دەیکات کە دەسەڵاتی ئەو حسابانەی هەیە.
+
+### ١. پاراستنی لقی `main`
+
+هەموو دەروازەکان لەسەر هەر push و هەر pull requestێک دەڕۆن، و کارێکی
+شکاو **دەبینرێت**. بەڵام هیچ شتێک ڕێگری لە مێرجکردنی ناکات تا ئەم
+ڕێکخستنە دانەنرێت.
+
+**Settings → Branches → Add branch ruleset** بۆ `main`:
+
+| ڕێکخستن | بۆچی |
+|---|---|
+| Require a pull request before merging | هیچ شتێک ڕاستەوخۆ نەچێتە `main` |
+| Require status checks to pass → **`verified`** | ئەو کارەیە کە چاوەڕێی هەموو دەروازەکان دەکات |
+| Require branches to be up to date | دەروازە سەوزەکان دەبێت لەسەر ئەو کۆدە بن کە مێرج دەکرێت |
+| Require review from Code Owners | `.github/CODEOWNERS` ئەو ڕێڕەوانە دەڵێت کە پێداچوونەوەیان دەوێت |
+| Block force pushes | مێژوو نانووسرێتەوە |
+| Restrict deletions | لقەکە نەسڕدرێتەوە |
+
+**`verified`** ئەو یەک کارەیە کە دەبێت داوا بکرێت. چاوەڕێی هەموو ئەو
+دەروازانە دەکات — تێست، بیناکردن، ژمێریاری، فلۆ، فیش، جیاکردنەوە، ڕۆڵ،
+گەشت، پێوانە — و ڕەت دەکاتەوە گەر یەکێکیان سەوز نەبێت.
+
+### ٢. Secret scanning و push protection
+
+**Settings → Code security and analysis**:
+
+- **Secret scanning** — GitHub بەدوای کلیلی ناسراودا دەگەڕێت لە مێژوودا.
+- **Push protection** — ڕێگری لە pushێک دەکات کە کلیلێکی تێدایە، پێش
+  ئەوەی بگاتە سێرڤەرەکە.
+
+`verify:source` ئێستا چوار شێوەی نامۆ ڕەت دەکاتەوە (ستڕینگی پەیوەندی بە
+وشەی نهێنییەوە، JWT، کلیلی تایبەت، و نهێنییەک کە بە لیتەراڵێک دەدرێت) و
+لە CIدا دەڕوات — بەڵام ئەوە دوای pushەکەیە. Push protection پێشییەتی.
+
+### ٣. ⚠️ گۆڕینی ئەو دوو وشەی نهێنییەی داتابەیس
+
+دوو وشەی نهێنیی داتابەیسی زیندوو لە گفتوگۆیەکدا دەرکەوتوون. هەرگیز نەچوونەتە
+ناو فایلێکەوە، و `verify:source` ئێستا ڕێگری لەوە دەکات — بەڵام **وشەیەکی
+نهێنی کە جارێک نووسراوەتەوە، لەو ساتەوە لەدەستچووە**.
+
+پێش فرۆشتن:
+
+1. **Supabase → Project Settings → Database → Reset database password**
+2. وشە نوێیەکە بخە ناو **GitHub → Settings → Secrets and variables →
+   Actions → `SUPABASE_DB_PASSWORD`** (بە تەنها، بێ URL، هیچ شتێک نییە
+   بۆ escape کردن)
+3. `SUPABASE_DB_URL` بسڕەوە یان نوێی بکەرەوە
+
+پاشان `Actions → Inspect the database` بەڕێ بخە: ئەگەر پەیوەندی کرد،
+وشە نوێیەکە کار دەکات.

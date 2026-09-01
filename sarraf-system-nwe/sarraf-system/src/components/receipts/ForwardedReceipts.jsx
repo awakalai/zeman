@@ -19,8 +19,33 @@ const COPY = {
     totals: "کۆی گشتی بەپێی دراو",
     noSum: "دراوە جیاوازەکان تێکەڵ ناکرێن",
   },
+  en: {
+    title: "The receipts sent to you",
+    subtitle: "The evidence for your transactions — the amounts exactly as the receipt states them",
+    empty: "No receipt has been sent to you yet",
+    loading: "Loading…", refresh: "Refresh",
+    gross: "Total", order: "Order amount", fee: "Fee", net: "Net", count: "receipts",
+    usd: "In USD", rate: "Rate as fixed", rateDate: "Rate date",
+    ref: "Transaction number", merchant: "Merchant number", date: "Date", view: "Open the receipt",
+    ack: "I have seen it",
+    acked: "Seen ✓", pending: "Its amounts have not been read yet",
+    totals: "Total by currency",
+    noSum: "Different currencies are not added together",
+  },
+  ar: {
+    title: "الإيصالات المُرسَلة إليك",
+    subtitle: "دليل معاملاتك — المبالغ كما وردت في الإيصال تمامًا",
+    empty: "لم يُرسل إليك أي إيصال بعد",
+    loading: "جارٍ التحميل…", refresh: "تحديث",
+    gross: "الإجمالي", order: "مبلغ الطلب", fee: "الرسوم", net: "الصافي", count: "إيصالات",
+    usd: "بالدولار", rate: "السعر المثبَّت", rateDate: "تاريخ السعر",
+    ref: "رقم المعاملة", merchant: "رقم التاجر", date: "التاريخ", view: "افتح الإيصال",
+    ack: "رأيته",
+    acked: "شوهد ✓", pending: "لم تُقرأ مبالغه بعد",
+    totals: "الإجمالي حسب العملة",
+    noSum: "العملات المختلفة لا تُجمع معًا",
+  },
 };
-COPY.en = COPY.ku; COPY.ar = COPY.ku;
 
 const money = (n) => (n == null ? "—" : Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
 const rateText = (row) => row.rateValue == null

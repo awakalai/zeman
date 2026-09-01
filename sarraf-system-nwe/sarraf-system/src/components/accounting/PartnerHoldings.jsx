@@ -49,8 +49,24 @@ const COPY = {
     total: "Total", byPlatform: "By platform", byReceiver: "By recipient",
     pick: "Choose a partner",
   },
+  ar: {
+    title: "مودَع لديك",
+    subtitle: "دفعات الإيصالات التي تحتفظ بأموالها كاملةً",
+    staffSubtitle: "دفعات الإيصالات حسب الشريك الذي يحتفظ بالمال",
+    refresh: "تحديث", loading: "جارٍ التحميل…",
+    empty: "لم يُودَع لديك شيء",
+    staffEmpty: "لم يُودَع شيء لدى هذا الشريك",
+    failed: "تعذّر التحميل",
+    batch: "الدفعة", receipts: "الإيصالات", amount: "المبلغ", customer: "البائع",
+    open: "التفاصيل", close: "إغلاق",
+    receiver: "المستلم", date: "التاريخ", platform: "المنصة",
+    withFee: "مع الرسوم", withoutFee: "بدون الرسوم", fee: "الرسوم", feeStatus: "حالة الرسوم",
+    ref: "المرجع", state: "الحالة",
+    total: "الإجمالي", byPlatform: "حسب المنصة", byReceiver: "حسب المستلم",
+    pick: "اختر شريكًا",
+  },
 };
-COPY.ar = COPY.en;
+
 
 const localeKey = (lang) => (lang === "en" ? "en" : lang === "ar" ? "ar" : "ku");
 const money = (n) => Number(n || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });

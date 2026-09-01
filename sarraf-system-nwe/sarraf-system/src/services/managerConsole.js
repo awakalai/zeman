@@ -11,6 +11,7 @@
  */
 
 const clean = (v) => String(v ?? "").normalize("NFKC").trim();
+const say = (phrase, lang) => phrase[lang === "en" ? "en" : lang === "ar" ? "ar" : "ku"];
 
 export const TENANT_ID_MIN = 3;
 
@@ -35,14 +36,47 @@ export async function loadTenants(client) {
   return data || { tenants: [], total_accounts: 0 };
 }
 
-export async function createTenant(client, { id, name, note = null }) {
-  const objection = tenantIdObjection(id) || tenantNameObjection(name);
+/**
+ * A new customer, in one act.
+ *
+ * createTenant made the business and stopped there: nobody could sign into it, and the manager's
+ * next act was on a different screen. If they forgot, the business sat there looking created and
+ * was unusable. This makes the business, its settings, and the person who will open it.
+ *
+ * No password is created or held anywhere. What is written is a row saying who a login will be;
+ * the owner is invited through Supabase and becomes the owner the first time they arrive.
+ */
+export async function openBusiness(client, { id, name, ownerEmail, ownerName, note = null }) {
+  const objection = tenantIdObjection(id) || tenantNameObjection(name)
+    || ownerEmailObjection(ownerEmail) || ownerNameObjection(ownerName);
   if (objection) throw new Error(objection);
-  const { data, error } = await client.rpc("sarraf_manager_create_tenant", {
-    p_id: clean(id), p_name: clean(name), p_note: clean(note) || null,
+  const { data, error } = await client.rpc("sarraf_manager_open_business", {
+    p_id: clean(id), p_name: clean(name),
+    p_owner_email: clean(ownerEmail).toLowerCase(), p_owner_name: clean(ownerName),
+    p_note: clean(note) || null,
   });
   if (error) throw error;
   return data;
+}
+
+const NEEDS_AN_EMAIL = {
+  ku: "ئیمەیڵی خاوەنەکە پێویستە",
+  en: "The owner's email address is required",
+  ar: "البريد الإلكتروني للمالك مطلوب",
+};
+const NEEDS_AN_OWNER_NAME = {
+  ku: "ناوی خاوەنەکە پێویستە",
+  en: "The owner's name is required",
+  ar: "اسم المالك مطلوب",
+};
+
+export function ownerEmailObjection(email, lang = "ku") {
+  const value = clean(email).toLowerCase();
+  return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(value) ? null : say(NEEDS_AN_EMAIL, lang);
+}
+
+export function ownerNameObjection(name, lang = "ku") {
+  return clean(name).length < 2 ? say(NEEDS_AN_OWNER_NAME, lang) : null;
 }
 
 /**
@@ -136,8 +170,6 @@ export const SUPPORT_REASON_MIN = 8;
  * Arabic reader with a Kurdish sentence at the one moment they are being told they did
  * something wrong.
  */
-const say = (phrase, lang) => phrase[lang === "en" ? "en" : lang === "ar" ? "ar" : "ku"];
-
 const NEEDS_A_REASON = {
   ku: `هۆکارەکە دەبێت لانیکەم ${SUPPORT_REASON_MIN} پیت بێت`,
   en: `The reason must be at least ${SUPPORT_REASON_MIN} characters`,
@@ -190,3 +222,79 @@ export async function loadSupportHistory(client, days = 90) {
     sessions: Array.isArray(data?.sessions) ? data.sessions : [],
   };
 }
+
+/**
+ * Which business needs the vendor, and why.
+ *
+ * loadTenants answers "what exists". This answers "where do I need to go" — the question
+ * somebody running the platform actually opens the console with. The live database had a
+ * business nobody had ever been inside and the console said nothing; it took a database
+ * inspection to find.
+ *
+ * Counts and states, never amounts. A count of entries waiting to be posted says the books need
+ * attention; the figures in them are the business's own.
+ */
+export async function loadAttention(client, quietDays = 30) {
+  const { data, error } = await client.rpc("sarraf_manager_attention", { p_quiet_days: quietDays });
+  if (error) throw error;
+  return {
+    quietDays: Number(data?.quiet_days) || quietDays,
+    checkedAt: data?.checked_at || null,
+    businesses: Array.isArray(data?.businesses) ? data.businesses : [],
+  };
+}
+
+/**
+ * What this business needs, in the order it matters, written for a person to read.
+ *
+ * A single "unhealthy" flag would collapse "nobody has ever signed in" and "quiet for forty
+ * days" into one colour, and they are different problems with different answers.
+ */
+export function attentionReasons(business, lang = "ku") {
+  const out = [];
+  const pick = (phrase) => say(phrase, lang);
+  if (business?.never_opened) out.push(pick(NEVER_OPENED));
+  if (business?.active === false) out.push(pick(SUSPENDED));
+  if (business?.quiet) out.push(pick(QUIET));
+  if (business?.waiting_to_claim > 0) out.push(`${pick(WAITING_TO_CLAIM)} (${business.waiting_to_claim})`);
+  if (business?.without_mfa > 0) out.push(`${pick(WITHOUT_MFA)} (${business.without_mfa})`);
+  if (business?.receipts_waiting > 0) out.push(`${pick(RECEIPTS_WAITING)} (${business.receipts_waiting})`);
+  if (business?.entries_unposted > 0) out.push(`${pick(ENTRIES_UNPOSTED)} (${business.entries_unposted})`);
+  return out;
+}
+
+const NEVER_OPENED = {
+  ku: "هێشتا کەس نەچووەتە ژوورەوە",
+  en: "Nobody has ever signed in",
+  ar: "لم يدخل أحد بعد",
+};
+const SUSPENDED = {
+  ku: "ڕاگیراوە — دەخوێندرێتەوە، مامەڵە ناکات",
+  en: "Suspended — reads, does not trade",
+  ar: "موقوف — يقرأ ولا يتاجر",
+};
+const QUIET = {
+  ku: "ماوەیەکە هیچ کارێکی نەکردووە",
+  en: "Nothing has happened for a while",
+  ar: "لم يحدث شيء منذ فترة",
+};
+const WAITING_TO_CLAIM = {
+  ku: "بانگهێشت وەرنەگیراوە",
+  en: "Invitation not accepted",
+  ar: "الدعوة لم تُقبل",
+};
+const WITHOUT_MFA = {
+  ku: "ئەکاونتی پارێزراو بێ MFA",
+  en: "Protected account with no second factor",
+  ar: "حساب محمي بلا عامل ثانٍ",
+};
+const RECEIPTS_WAITING = {
+  ku: "فیشی وەستاو",
+  en: "Receipts that stopped moving",
+  ar: "إيصالات متوقفة",
+};
+const ENTRIES_UNPOSTED = {
+  ku: "تۆماری ژورناڵی نەپۆستکراو",
+  en: "Journal entries not posted",
+  ar: "قيود غير مُرحَّلة",
+};

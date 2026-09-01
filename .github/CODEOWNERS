@@ -1,0 +1,27 @@
+# Who has to look before this changes.
+#
+# GitHub asks the owners listed here for a review on any pull request that touches a matching
+# path. That is only a request until branch protection on `main` is set to require it — see
+# SECURITY.md, "What only the owner can do". This file is the half that lives in the repository.
+#
+# The paths below are the ones where a mistake is not caught by reading the diff quickly: the
+# tenant boundary, the money, the deployment, and the gates that are supposed to notice.
+
+# Everything, by default.
+*                                           @awakalai
+
+# ── the tenant boundary ──────────────────────────────────────────────────────────────────────
+# Four routes hold the service key, which switches row level security off for everything they
+# read and write. Every boundary the database would have enforced is enforced in these files.
+/sarraf-system-nwe/sarraf-system/api/                   @awakalai
+
+# ── the money and who may reach it ───────────────────────────────────────────────────────────
+# A migration is applied once and cannot be edited afterwards. Policies, triggers and the
+# accounting commands all live here.
+/sarraf-system-nwe/sarraf-system/supabase/migrations/   @awakalai
+
+# ── the gates ────────────────────────────────────────────────────────────────────────────────
+# A weakened gate looks exactly like a passing build. These change only on purpose.
+/sarraf-system-nwe/sarraf-system/scripts/               @awakalai
+/.github/workflows/                                     @awakalai
+/.github/CODEOWNERS                                     @awakalai
