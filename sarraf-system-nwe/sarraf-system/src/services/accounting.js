@@ -374,3 +374,69 @@ export async function firstNegativeMovement(client, currencyId, { holder = "owne
       : null,
   };
 }
+
+/**
+ * A service the business performs for a fee — not a currency trade (§3).
+ *
+ * The owner's example: one million leaves the FIB account, one million arrives in the safe, and
+ * three thousand is charged for doing it. FIB is an example; any account a business holds money
+ * in behaves this way. Mirrors public.sarraf_service_transaction.
+ *
+ * Principal and commission are kept apart all the way through — there is deliberately no
+ * combined total, because they are not the same kind of money.
+ */
+export async function recordService(client, {
+  id, accountId, direction = "into_safe", amount, commission = 0,
+  commissionCollected = true, customerId = null, description = "", commandKey,
+}) {
+  const { data, error } = await client.rpc("sarraf_service_transaction", {
+    p_id: id,
+    p_cash_account_id: accountId,
+    p_direction: direction,
+    p_amount: amount,
+    p_commission: commission,
+    p_commission_collected: commissionCollected,
+    p_customer_id: customerId,
+    p_description: description,
+    p_command_key: commandKey,
+  });
+  if (error) throw error;
+  const answer = data || {};
+  return {
+    id: answer.id,
+    accountId: answer.account,
+    accountName: answer.account_name,
+    direction: answer.direction,
+    currency: answer.currency,
+    principal: Number(answer.principal ?? 0),
+    commission: Number(answer.commission ?? 0),
+    commissionCollected: answer.commission_collected === true,
+    commissionReceivable: Number(answer.commission_receivable ?? 0),
+    entryId: answer.entry_id || null,
+    commissionEntryId: answer.commission_entry_id || null,
+    replayed: answer.replayed === true,
+  };
+}
+
+/** The places this business holds money that are not the main safe, and what is in each. */
+export async function loadCashAccounts(client) {
+  const { data, error } = await client.rpc("sarraf_cash_account_balances");
+  if (error) throw error;
+  return (data || []).map((r) => ({
+    id: r.id,
+    name: r.name,
+    kind: r.kind,
+    currencyId: r.cur_id,
+    active: r.active === true,
+    balance: Number(r.balance ?? 0),
+  }));
+}
+
+/** Open one. */
+export async function openCashAccount(client, { id, name, currencyId, kind = "bank", note = null }) {
+  const { data, error } = await client.rpc("sarraf_open_cash_account", {
+    p_id: id, p_name: name, p_cur_id: currencyId, p_kind: kind, p_note: note,
+  });
+  if (error) throw error;
+  return data || null;
+}
