@@ -29,7 +29,7 @@ const COPY = {
     open: "وردەکاری", close: "داخستن",
     receiver: "وەرگر", date: "بەروار", platform: "پلاتفۆرم",
     withFee: "بە فی", withoutFee: "بێ فی", fee: "فی", feeStatus: "دۆخی فی",
-    ref: "ژمارەی ئاماژە", state: "دۆخ",
+    orderNo: "ژمارەی داواکاری", merchantNo: "ژمارەی داواکاری بازرگان", state: "دۆخ",
     total: "کۆی گشتی", byPlatform: "بەپێی پلاتفۆرم", byReceiver: "بەپێی وەرگر",
     pick: "هاوبەشێک هەڵبژێرە",
   },
@@ -45,7 +45,7 @@ const COPY = {
     open: "Details", close: "Close",
     receiver: "Receiver", date: "Date", platform: "Platform",
     withFee: "With fee", withoutFee: "Without fee", fee: "Fee", feeStatus: "Fee status",
-    ref: "Reference", state: "State",
+    orderNo: "Order No.", merchantNo: "Merchant order No.", state: "State",
     total: "Total", byPlatform: "By platform", byReceiver: "By recipient",
     pick: "Choose a partner",
   },
@@ -61,7 +61,7 @@ const COPY = {
     open: "التفاصيل", close: "إغلاق",
     receiver: "المستلم", date: "التاريخ", platform: "المنصة",
     withFee: "مع الرسوم", withoutFee: "بدون الرسوم", fee: "الرسوم", feeStatus: "حالة الرسوم",
-    ref: "المرجع", state: "الحالة",
+    orderNo: "رقم الطلب", merchantNo: "رقم طلب التاجر", state: "الحالة",
     total: "الإجمالي", byPlatform: "حسب المنصة", byReceiver: "حسب المستلم",
     pick: "اختر شريكًا",
   },
@@ -196,20 +196,22 @@ export function PartnerHoldings({ client, lang = "ku", isStaff = false, partners
                                   <thead><tr>
                                     <th>{copy.receiver}</th><th>{copy.date}</th><th>{copy.platform}</th>
                                     <th>{copy.withFee}</th><th>{copy.fee}</th><th>{copy.withoutFee}</th>
-                                    <th>{copy.feeStatus}</th><th>{copy.ref}</th><th>{copy.state}</th>
+                                    <th>{copy.feeStatus}</th><th>{copy.orderNo}</th>
+                                    <th>{copy.merchantNo}</th><th>{copy.state}</th>
                                   </tr></thead>
                                   <tbody>
                                     {rows.map((r, i) => (
                                       <tr key={detail.rows[i]?.id || i}>
-                                        <td>{r["وەرگر"]}</td>
-                                        <td>{r["بەروار"]}</td>
-                                        <td>{r["پلاتفۆرم"]}</td>
-                                        <td>{money(r["بڕ (بە فی)"])}</td>
-                                        <td>{money(r["فی"])}</td>
-                                        <td>{money(r["بڕ (بێ فی)"])}</td>
-                                        <td>{r["دۆخی فی"]}</td>
-                                        <td>{r["ژمارەی ئاماژە"]}</td>
-                                        <td>{r["دۆخ"]}</td>
+                                        <td>{r.receiver}</td>
+                                        <td>{r.date}</td>
+                                        <td>{r.platform}</td>
+                                        <td>{money(r.withFee)}</td>
+                                        <td>{money(r.fee)}</td>
+                                        <td>{money(r.withoutFee)}</td>
+                                        <td>{r.feeStatus}</td>
+                                        <td>{r.orderNo}</td>
+                                        <td>{r.merchantOrderNo}</td>
+                                        <td>{r.state}</td>
                                       </tr>
                                     ))}
                                   </tbody>

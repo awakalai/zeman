@@ -1,9 +1,8 @@
 {
-  "total": 933,
+  "total": 914,
   "counts": {
     "src/App.jsx": 682,
     "src/brand/brand.js": 1,
-    "src/components/accounting/PartnerHoldings.jsx": 9,
     "src/components/operations/ExportAuditCenter.jsx": 2,
     "src/components/portal/MyReceipts.jsx": 4,
     "src/components/portal/PortalReceiptSummary.jsx": 18,
@@ -18,7 +17,7 @@
     "src/services/debtRegister.js": 29,
     "src/services/flashTone.js": 1,
     "src/services/managerConsole.js": 9,
-    "src/services/partnerBatches.js": 16,
+    "src/services/partnerBatches.js": 6,
     "src/services/receiptDisplay.js": 3,
     "src/services/receiptForwarding.js": 23,
     "src/services/receiptIngestion.js": 5,
