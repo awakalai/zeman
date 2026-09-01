@@ -384,26 +384,34 @@ select coalesce(u.admin_level, u.role) as "rank", u.tenant_id as "business",
 \echo ''
 \echo ''
 \echo '════════ ٨.c ژمارەی داواکاری — تووندکردنی یاساکە سەلامەتە؟ ════════'
-\echo '   یاسای ئێستا: ref_no یان merchant_order_no. §10 داوای ژمارەی داواکاری دەکات.'
-\echo '   گەر «تەنها ref_no» > 0 بێت، تووندکردن فیشی دروستی ئەمڕۆ ڕەت دەکاتەوە.'
+\echo '   ئاگاداری: Order No. لە ref_no دایە، نەک merchant_order_no'
+\echo '   گەر «وەرگیراو بێ ژمارەی داواکاری» > 0 بێت، تووندکردن کاری ئێستا ڕەت دەکاتەوە'
 \echo ''
 
--- Before requiring the Order No. specifically, ask what the tightening would cost. The accept
--- path today takes coalesce(ref_no, merchant_order_no), so a receipt carrying only a serial
--- reference is valid. If any accepted receipt lives in that column alone, demanding the merchant
--- order number would refuse work the business has already done — and that is the owner's call,
--- not mine.
+-- The first version of this section had the two identifiers the wrong way round, and would have
+-- justified a rule that required the wrong field. api/read-receipt.js is explicit about which
+-- is which, and it is worth quoting because the names alone mislead:
+--
+--   23. refNo MUST come from "Order No." when visible.
+--   24. merchantOrderNo MUST come from "Merchant order No." when visible. Never swap these two.
+--
+-- So ref_no IS the Order No. merchant_order_no is a separate, secondary merchant identifier.
+--
+-- Today the accept path refuses only when BOTH are absent — coalesce(ref_no, merchant_order_no)
+-- — so a receipt carrying a merchant order number and no Order No. can be accepted. That is
+-- precisely the gap. The number that decides whether closing it is safe is the last column.
 with newest as (
   select distinct on (e.document_id) e.*
     from public.receipt_extractions e order by e.document_id, e.version desc
 )
 select
   count(*) as "extractions",
-  count(*) filter (where n.merchant_order_no is not null) as "has order no",
-  count(*) filter (where n.merchant_order_no is null and n.ref_no is not null) as "only ref_no",
-  count(*) filter (where n.merchant_order_no is null and n.ref_no is null) as "neither",
-  count(*) filter (where d.state = 'accepted' and n.merchant_order_no is null
-                     and n.ref_no is not null) as "ACCEPTED on ref_no alone"
+  count(*) filter (where n.ref_no is not null) as "has Order No.",
+  count(*) filter (where n.ref_no is null and n.merchant_order_no is not null)
+    as "merchant no. only",
+  count(*) filter (where n.ref_no is null and n.merchant_order_no is null) as "neither",
+  count(*) filter (where d.state = 'accepted' and n.ref_no is null)
+    as "ACCEPTED with no Order No."
   from newest n join public.receipt_documents d on d.id = n.document_id;
 
 \echo ''
