@@ -320,9 +320,19 @@ export async function replaceReceipt(client, rejectedDocumentId, newDocumentId) 
   };
 }
 
-/** An uploader's own receipts, their names, and what replaced what. */
-export async function loadMyReceipts(client, limit = 50) {
-  const { data, error } = await client.rpc("sarraf_my_receipt_intakes_v2", { p_limit: limit });
+/**
+ * An uploader's own receipts, their names, and what replaced what.
+ *
+ * `subjectId` names whose portal is being read. Left out, the server answers about the caller,
+ * which is what a customer or partner signing in normally gets. An administrator previewing a
+ * portal must pass the id of the person whose screen they are on — otherwise the server answers
+ * about the administrator, and their own receipts appear inside somebody else's portal. The
+ * server decides whether the caller may name that subject; this argument is a request, not a
+ * grant.
+ */
+export async function loadMyReceipts(client, limit = 50, subjectId = null) {
+  const { data, error } = await client.rpc("sarraf_my_receipt_intakes_v2",
+    { p_limit: limit, p_subject_id: subjectId });
   if (error) throw error;
   return (data || []).map((r) => ({
     id: r.id,

@@ -1507,6 +1507,163 @@ try {
     psql(`update public.tenants set active = true where id = 't-watan'`);
   });
 
+  // ── whose portal is this? ───────────────────────────────────────────────────
+  //
+  // The owner reported that a View As session showed receipts belonging to people it had nothing
+  // to do with. None of the checks above would have caught it, because nothing here was wrong at
+  // the table: every policy is correctly scoped and every _definer policy is restricted to
+  // sarraf_definer.
+  //
+  // View As was a browser costume. `viewAs` lived in useState, the session identity never
+  // changed, and the portal went on asking the three loaders "what is MINE" — so an
+  // administrator previewing a customer's screen was shown their own receipts, listed as that
+  // customer's. 202609010008 made the three loaders take a subject and made the server decide
+  // who may name one.
+  const PORTAL_ADMIN = "aaaaaaaa-0000-0000-0000-000000000001";   // iso-a, owner of t-sarkhel
+  const PORTAL_C1_UID = "eeeeeeee-0000-0000-0000-000000000001";
+  const PORTAL_C2_UID = "eeeeeeee-0000-0000-0000-000000000002";
+
+  psql(`
+    begin;
+    set local session_replication_role = replica;
+    insert into public.app_users(id,name,role,auth_id,tenant_id) values
+      ('vas-c1','کڕیاری یەک','customer','${PORTAL_C1_UID}','t-sarkhel'),
+      ('vas-c2','کڕیاری دوو','customer','${PORTAL_C2_UID}','t-sarkhel')
+    on conflict (id) do update set auth_id = excluded.auth_id, tenant_id = excluded.tenant_id;
+    insert into public.receipt_documents(
+      id,flow,state,uploader_id,customer_id,batch_id,storage_path,mime_type,tenant_id)
+    values
+      ('vas-doc1','customer_sells_to_zeman','created','vas-c1','vas-c1','vasb1',
+       'ingest/vasb1/vas-doc1.jpg','image/jpeg','t-sarkhel'),
+      ('vas-doc2','customer_sells_to_zeman','created','vas-c2','vas-c2','vasb2',
+       'ingest/vasb2/vas-doc2.jpg','image/jpeg','t-sarkhel'),
+      ('vas-doca','customer_sells_to_zeman','created','iso-a','iso-a','vasba',
+       'ingest/vasba/vas-doca.jpg','image/jpeg','t-sarkhel')
+    on conflict (id) do nothing;
+    commit;`);
+
+  const intakes = (uid, subject) => asUser(uid,
+    `select coalesce(string_agg(id, ',' order by id), '<none>')
+       from public.sarraf_my_receipt_intakes_v2(50, ${subject === null ? "null" : `'${subject}'`})`).trim();
+
+  check("an administrator viewing a customer's portal is shown that customer's receipts", () => {
+    const seen = intakes(PORTAL_ADMIN, "vas-c1");
+    if (seen !== "vas-doc1") throw new Error(`saw ${seen}, expected only vas-doc1`);
+  });
+
+  // The defect itself, stated as a check: asking without naming anybody answers about the
+  // caller. That is correct behaviour for the function — and it is exactly why the portal must
+  // never call it that way. If this ever returns the customer's document, the subject argument
+  // has stopped being honoured.
+  // Earlier checks in this file give iso-a documents of their own, so the assertion is not a
+  // fixed list — it is that neither customer's receipt is in the answer.
+  check("asking without naming a subject still answers about the caller alone", () => {
+    const seen = intakes(PORTAL_ADMIN, null);
+    if (!seen.includes("vas-doca")) throw new Error(`saw ${seen}, missing the caller's own`);
+    if (seen.includes("vas-doc1") || seen.includes("vas-doc2")) {
+      throw new Error(`saw ${seen}, which includes a customer's receipt`);
+    }
+  });
+
+  check("a customer naming another customer is refused", () => {
+    refused(PORTAL_C1_UID, "select * from public.sarraf_my_receipt_intakes_v2(50, 'vas-c2')",
+      "one customer reading another customer's receipts");
+  });
+
+  check("a customer reading their own portal still works", () => {
+    const seen = intakes(PORTAL_C1_UID, "vas-c1");
+    if (seen !== "vas-doc1") throw new Error(`saw ${seen}, expected only their own`);
+  });
+
+  check("the other business's owner cannot name a customer of this one", () => {
+    refused(B_UID, "select * from public.sarraf_my_receipt_intakes_v2(50, 'vas-c1')",
+      "an owner of another business reading this one's customer");
+  });
+
+  check("an administrator cannot view another administrator's portal", () => {
+    refused(PORTAL_ADMIN, "select * from public.sarraf_my_receipt_intakes_v2(50, 'iso-b')",
+      "an administrator reading a colleague's portal");
+  });
+
+  check("the forwarded list obeys the same rule", () => {
+    refused(PORTAL_C1_UID, "select * from public.sarraf_my_forwarded_receipts_v2(100, 'vas-c2')",
+      "one customer reading another's forwarded receipts");
+  });
+
+  // The summary used to raise 42501 for anybody who was not a customer or partner, which is why
+  // View As showed a failure rather than a screen. The rule belongs to the subject.
+  check("the portal summary answers an administrator about a named customer", () => {
+    const out = asUser(PORTAL_ADMIN,
+      "select (public.sarraf_portal_receipt_summary_v2(365, 'vas-c1') ? 'totals')::text").trim();
+    if (out !== "true") throw new Error(`the summary did not answer: ${out}`);
+  });
+
+  check("the portal summary refuses a customer naming somebody else", () => {
+    refused(PORTAL_C1_UID, "select public.sarraf_portal_receipt_summary_v2(365, 'vas-c2')",
+      "one customer reading another's receipt summary");
+  });
+
+  // ── the balance nobody could explain ────────────────────────────────────────
+  //
+  // The owner reported a CNY cashbox that goes negative for no visible reason. It is not one bad
+  // transaction: the cashbox figure is a residual — every ledger row that names no partner —
+  // and nothing constrains a residual to stay positive. 202609010009 does not change the number,
+  // it makes the number explainable, which is what §8 asks for first.
+  //
+  // A reporting function that has never seen a negative balance proves nothing, so this
+  // manufactures one and checks that it is found and named.
+  check("the explain view names the movement that took a balance below zero", () => {
+    psql(`
+      begin;
+      set local session_replication_role = replica;
+      delete from public.ledger where id like 'neg-%';
+      insert into public.ledger(id,type,owner,cur_id,amount,date,tenant_id) values
+        ('neg-1','deposit','self','CNY', 100, now() - interval '3 days','t-sarkhel'),
+        ('neg-2','withdraw','self','CNY', -40, now() - interval '2 days','t-sarkhel'),
+        ('neg-3','withdraw','self','CNY',-200, now() - interval '1 days','t-sarkhel');
+      commit;`);
+    const out = asUser(A_UID,
+      `select public.sarraf_balance_first_negative('CNY','owner')::text`).trim();
+    if (!out.includes('"ever_negative" : true') && !out.includes('"ever_negative": true')) {
+      throw new Error(`it did not report a negative balance: ${out.slice(0, 300)}`);
+    }
+    // neg-3 is the one that crosses: 100, then 60, then -140.
+    if (!out.includes("neg-3")) throw new Error(`it blamed the wrong movement: ${out.slice(0, 300)}`);
+    if (!out.includes("-140")) throw new Error(`the balance after is wrong: ${out.slice(0, 300)}`);
+  });
+
+  check("the running balance is reported after every movement, in order", () => {
+    const seen = asUser(A_UID,
+      `select coalesce(string_agg(ledger_id || '=' || running_balance::text, ',' order by seq),'<none>')
+         from public.sarraf_explain_balance('CNY','owner')
+        where ledger_id like 'neg-%'`).trim();
+    if (seen !== "neg-1=100.0000000000,neg-2=60.0000000000,neg-3=-140.0000000000") {
+      throw new Error(`running balance reads: ${seen}`);
+    }
+  });
+
+  // Its own currency rather than a delete: the ledger is append-only and refuses one, which is
+  // the protection working. The first version of this check tried to tidy up and was told so.
+  check("a balance that never went negative says so plainly", () => {
+    psql(`
+      begin;
+      set local session_replication_role = replica;
+      insert into public.ledger(id,type,owner,cur_id,amount,date,tenant_id) values
+        ('pos-1','deposit','self','XTS', 500, now() - interval '2 days','t-sarkhel'),
+        ('pos-2','withdraw','self','XTS',-120, now() - interval '1 days','t-sarkhel')
+      on conflict (id) do nothing;
+      commit;`);
+    const out = asUser(A_UID,
+      `select public.sarraf_balance_first_negative('XTS','owner')::text`).trim();
+    if (!out.includes("false")) throw new Error(`it invented a negative: ${out.slice(0, 300)}`);
+    if (!out.includes("380")) throw new Error(`the final balance is wrong: ${out.slice(0, 300)}`);
+  });
+
+  check("a customer cannot read the owner's balance explanation", () => {
+    refused(CUS_UID, "select * from public.sarraf_explain_balance('CNY','owner')",
+      "a customer reading the owner's cashbox movements");
+  });
+
   // ── and the manager, who is meant to see everything ─────────────────────────
   check("the manager still sees both businesses", () => {
     const mgr = psql(`select coalesce(auth_id::text,'') from public.app_users

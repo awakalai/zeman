@@ -98,8 +98,9 @@ export async function forwardReceipts(client, { documentIds, reason, commandKey 
 }
 
 /** A recipient's own forwarded receipts — figures and status, never the internal trail. */
-export async function loadForwardedToMe(client, limit = 100) {
-  const { data, error } = await client.rpc("sarraf_my_forwarded_receipts_v2", { p_limit: limit });
+export async function loadForwardedToMe(client, limit = 100, subjectId = null) {
+  const { data, error } = await client.rpc("sarraf_my_forwarded_receipts_v2",
+    { p_limit: limit, p_subject_id: subjectId });
   if (error) throw error;
   return (data || []).map((r) => ({
     documentId: r.document_id,

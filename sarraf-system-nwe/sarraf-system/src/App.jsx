@@ -8674,16 +8674,21 @@ function ReceiptArchive({ customerId, data, flash, simple = false }) {
   const [mine, setMine] = useState(null);
   const [mineError, setMineError] = useState("");
 
+  // The subject is named on every call, including a customer reading their own screen. Passing
+  // their own id is the same question the server would have answered anyway, and it means the
+  // portal never asks "what is mine" — a question whose answer depends on who is signed in
+  // rather than on whose screen this is. That difference is the whole defect: an administrator
+  // previewing a customer's portal was shown their own receipts.
   const reloadMine = useCallback(async () => {
     if (!simple) return;
     try {
-      setMine(await loadMyReceipts(supabase));
+      setMine(await loadMyReceipts(supabase, 50, customerId));
       setMineError("");
     } catch (error) {
       console.error("my receipts", error);
       setMineError(userFacingServiceError(error, _lang, "فیشەکانی خۆت بار نەبوون"));
     }
-  }, [simple]);
+  }, [simple, customerId]);
 
   useEffect(() => { reloadMine(); }, [reloadMine]);
 
@@ -8700,7 +8705,7 @@ function ReceiptArchive({ customerId, data, flash, simple = false }) {
     let active = true;
     if (simple) {
       setPortalSummaryError("");
-      loadPortalReceiptSummary(supabase).then((summary) => {
+      loadPortalReceiptSummary(supabase, 365, customerId).then((summary) => {
         if (active) setPortalSummary(summary);
       }).catch((error) => {
         if (!active) return;
@@ -11515,7 +11520,7 @@ function CustomerPortal({ user, c, base, data, calc, cur, usr, flash, reloadBatc
           <PortalAction icon={Upload} label={tr("ناردنی فیش")}
             hint={tr("سکرینشۆتی ناردنی پارە")} onClick={() => setTab("upload")} primary />
           <ReceiptArchive customerId={user.id} data={data} flash={flash} simple />
-          <DeferredPanel><ForwardedReceipts client={supabase} flash={flash}
+          <DeferredPanel><ForwardedReceipts client={supabase} flash={flash} subjectId={user.id}
             signedUrlFor={async (path) => {
               const { data: signed } = await supabase.storage.from("receipts").createSignedUrl(path, 3600);
               return signed?.signedUrl || null;
@@ -11609,7 +11614,7 @@ function PartnerPortal({ user, data, calc, cur, usr, flash, reloadBatches, onlin
       {tab === "documents" && <>
         {uploadTransactions.length > 0 && <PortalAction icon={Upload} label={tr("ناردنی فیش")}
           hint={tr("بۆ مامەڵەی دیاریکراو") } onClick={() => setTab("upload")} primary />}
-        <DeferredPanel><ForwardedReceipts client={supabase} flash={flash}
+        <DeferredPanel><ForwardedReceipts client={supabase} flash={flash} subjectId={user.id}
           signedUrlFor={async (path) => {
             const { data: signed } = await supabase.storage.from("receipts").createSignedUrl(path, 3600);
             return signed?.signedUrl || null;
