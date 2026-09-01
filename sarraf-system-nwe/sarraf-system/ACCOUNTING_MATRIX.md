@@ -153,9 +153,15 @@ say that Office X collected and currently holds the money.
 
 ---
 
-## ⚠️ OWNER-DECISION-002 — which office model, and it changes real balances
+## ✅ OWNER-DECISION-002 — which office model — ANSWERED
 
-**Status: OPEN. One question, two defensible answers, and they differ in what the books say.**
+**Status: ANSWERED. The owner chose model A: «بەڵێ، پارە لە قاسەی من دەچێتە لای نووسینگە»**
+
+Built in `202609010013`. `sarraf_office_advance` is event one and the only place the safe is
+debited for an office. `sarraf_office_payment_post` — taken verbatim from `202608280025` — now
+asks whether the office is already holding enough, and if it is, credits `acc-1300` and reduces
+the holding. If it is not, every line runs exactly as before, which is what every assignment
+made before this migration does.
 
 The owner described this sequence:
 

@@ -517,6 +517,62 @@ try {
     if (!out.replace(/\s/g,"").includes('"status":"confirmed"')) throw new Error(out);
   });
 
+  // ── the owner sends the money to the office first ───────────────────────────
+  //
+  //   «بەڵێ، پارە لە قاسەی من دەچێتە لای نووسینگە»
+  //
+  // Two events, in the owner's order: the safe funds the office, then the office pays a customer
+  // out of what it is holding and both balances go to zero. 202609010013.
+  const officeHolds = (office, cur) => Number(psql(
+    `select coalesce(sum(amount),0)::text from public.ledger
+      where office_id='${office}' and cur_id='${cur}'`).trim());
+  const safeHolds = (cur) => Number(psql(
+    `select coalesce(sum(amount),0)::text from public.ledger
+      where cur_id='${cur}' and partner_id is null and office_id is null`).trim());
+
+  check("the owner cannot send an office money the safe does not hold", () => {
+    let refused = false;
+    try {
+      psql(`select public.sarraf_office_advance('off-1','USD',999999999,
+              'more than the safe holds','cmd-oadv-too-much')`);
+    } catch { refused = true; }
+    if (!refused) throw new Error("the safe paid out more than it holds");
+  });
+
+  check("an advance moves money out of the safe and into the office", () => {
+    const safeBefore = safeHolds("usd");
+    const heldBefore = officeHolds("off-1", "usd");
+    psql(`select public.sarraf_office_advance('off-1','USD',5000,
+            'funding the office for tomorrow','cmd-oadv-1')`);
+    const moved = safeBefore - safeHolds("usd");
+    const gained = officeHolds("off-1", "usd") - heldBefore;
+    if (moved !== 5000) throw new Error(`the safe fell by ${moved}, expected 5000`);
+    if (gained !== 5000) throw new Error(`the office gained ${gained}, expected 5000`);
+    // The business holds the same money in total; it is simply somewhere else.
+    const pair = psql(`select string_agg(account_id||':'||side,',' order by line_no)
+      from journal_lines
+      where entry_id = (select id from journal_entries
+                         where source_type='office_advance'
+                         order by posted_at desc limit 1)`).trim();
+    if (pair !== "acc-1300:debit,acc-1000:credit") throw new Error(`the advance posted ${pair}`);
+  });
+
+  check("pressing the same advance twice sends the money once", () => {
+    const before = officeHolds("off-1", "usd");
+    const again = psql(`select public.sarraf_office_advance('off-1','USD',5000,
+      'funding the office for tomorrow','cmd-oadv-1')::text`);
+    if (!again.includes('"replayed" : true') && !again.includes('"replayed": true')) {
+      throw new Error(`the repeat was not a replay: ${again.slice(0, 200)}`);
+    }
+    if (officeHolds("off-1", "usd") !== before) throw new Error("a repeat sent the money twice");
+  });
+
+  check("what each office is holding can be read in one place", () => {
+    const held = psql(`select coalesce(string_agg(office_name||':'||holding::text,','),'<none>')
+      from public.sarraf_office_holdings('off-1') where cur_id='usd'`).trim();
+    if (!held.includes("5000")) throw new Error(`the holdings read ${held}`);
+  });
+
   check("the trial balance still reconciles after partner and office activity", () => {
     const out = psql("select (public.sarraf_trial_balance_check()->>'balanced')::text").trim();
     if (out !== "true") throw new Error(psql("select public.sarraf_trial_balance_check()::text"));
