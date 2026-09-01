@@ -11,6 +11,7 @@ import { currencyDecimals as currencyDecimalsOf, formatMoney, formatNumber, roun
 import { errorText, errorTextOr } from "./services/userFacingError";
 import { flashIsGood } from "./services/flashTone.js";
 import { settlementChoices, settlementWords } from "./services/settlement.js";
+import { loadMoneyAtOffices, moneyAtOfficeText } from "./services/accounting.js";
 import { reportFault } from "./services/faultReport.js";
 import { MyReceipts } from "./components/portal/MyReceipts";
 import { intakeReceipt, intakeStatusText, loadMyReceipts, noteReceiptReadFailure, receiptReadFailureText, replaceReceipt, requestStoredReceiptOcr } from "./services/receiptIntake";
@@ -11434,6 +11435,17 @@ function CustomerPortal({ user, c, base, data, calc, cur, usr, flash, reloadBatc
     [base],
   );
   const [uploadTxId, setUploadTxId] = useState("");
+  // «دەبێت لای ئەو بنووسرێت پارەکەت لە فڵان نوسینگەیە.» The balance above says how much is owed
+  // and has never said where it is. A failure here must leave the balance standing: knowing the
+  // office is an improvement on the figure, not a precondition for showing it.
+  const [atOffices, setAtOffices] = useState([]);
+  useEffect(() => {
+    let alive = true;
+    loadMoneyAtOffices(supabase, user.id)
+      .then((rows) => { if (alive) setAtOffices(rows); })
+      .catch(() => { if (alive) setAtOffices([]); });
+    return () => { alive = false; };
+  }, [user.id, refreshedAt]);
   const owe = Object.entries(c.owe).filter(([, v]) => v);
   const due = Object.entries(c.due).filter(([, v]) => v);
   const summary = separatedCurrencySummary(c.owe, c.due);
@@ -11488,6 +11500,14 @@ function CustomerPortal({ user, c, base, data, calc, cur, usr, flash, reloadBatc
                       {fmt(v, cur(cid).dec ?? 0)} <span className="text-[11px] font-normal" style={{ color: "var(--txt-3)" }}>{cur(cid).code}</span>
                     </div>
                   ))}
+                {atOffices.map((row) => (
+                  <div key={row.assignmentId} className="text-[11.5px] mt-1.5 flex items-center gap-1.5"
+                       style={{ color: "var(--warn)" }}>
+                    <Building2 className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                    <span>{moneyAtOfficeText(row, activeLanguage())}
+                      {" · "}<b style={num}>{fmt(row.outstanding)}</b> {row.currency}</span>
+                  </div>
+                ))}
               </Card>
               <Card className="portal-kpi-card">
                 <div className="text-[11px] mb-2" style={{ color: "var(--txt-3)" }}>{tr("قەرزی من")}</div>

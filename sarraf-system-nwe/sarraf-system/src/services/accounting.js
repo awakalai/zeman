@@ -440,3 +440,56 @@ export async function openCashAccount(client, { id, name, currencyId, kind = "ba
   if (error) throw error;
   return data || null;
 }
+
+/**
+ * Where a customer's money is, when it is not with the house.
+ *
+ * «کاتێک مامەڵەیەکی کڕین دەکەم و پارەکەی لای نوسینگەیە نابێت من قەرزاری مشتەری بم، دەبێت لای
+ *  ئەو بنووسرێت پارەکەت لە فڵان نوسینگەیە.»
+ *
+ * The server decides who may ask, through sarraf_portal_subject: a person asks for themselves,
+ * an admin may ask on behalf of a customer, nobody may ask about anybody else. subjectId is
+ * passed through rather than trusted here, because a view-as the client alone honours is not a
+ * permission check.
+ */
+export async function loadMoneyAtOffices(client, subjectId = null) {
+  const { data, error } = await client.rpc("sarraf_my_money_at_offices", {
+    p_subject_id: subjectId || null,
+  });
+  if (error) throw error;
+  return (data || []).map((r) => ({
+    assignmentId: r.assignment_id,
+    transactionId: r.transaction_id || null,
+    transactionCode: r.transaction_code ?? null,
+    officeId: r.office_id,
+    officeName: r.office_name || r.office_id,
+    currency: r.currency,
+    amount: Number(r.amount ?? 0),
+    amountPaid: Number(r.amount_paid ?? 0),
+    outstanding: Number(r.outstanding ?? 0),
+    status: r.status,
+    assignedAt: r.assigned_at || null,
+    dueAt: r.due_at || null,
+    // True only when the owner has actually advanced the money and the office is holding it.
+    advanceHeld: r.advance_held === true,
+  }));
+}
+
+/**
+ * The sentence a customer reads, in their own language.
+ *
+ * Two sentences, not one, because they say different things and the difference is the customer's
+ * to know: an office that has been told to pay them, and an office that is already holding their
+ * money. Only sarraf_office_advance produces the second, so it is never guessed at.
+ */
+const AT_OFFICE = {
+  ku: { held: (o) => `پارەکەت لای ${o} ــە`, owed: (o) => `${o} پارەکەت دەداتێ` },
+  en: { held: (o) => `Your money is at ${o}`, owed: (o) => `${o} will pay you` },
+  ar: { held: (o) => `أموالك لدى ${o}`, owed: (o) => `${o} سيدفع لك` },
+};
+
+export function moneyAtOfficeText(row, lang = "ku") {
+  const words = AT_OFFICE[lang] || AT_OFFICE.ku;
+  const office = row?.officeName || "—";
+  return row?.advanceHeld === true ? words.held(office) : words.owed(office);
+}
