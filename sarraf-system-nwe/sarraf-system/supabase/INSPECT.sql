@@ -259,14 +259,35 @@ select 'یەک وێنە، دوو جار ژماردراو',
 
 \echo ''
 \echo '════════ 6. فەرمانەکان: کێ بانگیان دەکات ════════'
-\echo '   پێویستە: anon = 0 لە هەموو فەرمانێکی SECURITY DEFINERدا'
+\echo '   پێویستە: anon = 0، و unexplained = 0'
 \echo ''
 
 select
   count(*) filter (where p.prosecdef) as "definer total",
   count(*) filter (where p.prosecdef and has_function_privilege('anon', p.oid, 'execute')) as "anon may call",
   count(*) filter (where p.prosecdef and has_function_privilege('authenticated', p.oid, 'execute')) as "authenticated may call",
-  count(*) filter (where p.prosecdef and pg_get_userbyid(p.proowner) <> 'sarraf_definer') as "not owned by definer",
+  -- A bare count here read as twenty-three unexplained functions, and it is not that. Sixteen
+  -- are trigger functions, which PostgreSQL checks EXECUTE on at CREATE TRIGGER time and never
+  -- again — nobody can call one, so who owns it decides nothing. Seven are named in
+  -- verify:isolation: four consulted from inside policies (a policy helper bound by policies
+  -- would recurse into the table it is being asked about) and three the server calls with its
+  -- own key and no user attached. The number to watch is the last one, and it must be zero.
+  count(*) filter (where p.prosecdef and pg_get_userbyid(p.proowner) <> 'sarraf_definer'
+                     and p.prorettype = 'pg_catalog.trigger'::regtype) as "trigger, uncallable",
+  count(*) filter (where p.prosecdef and pg_get_userbyid(p.proowner) <> 'sarraf_definer'
+                     and p.prorettype <> 'pg_catalog.trigger'::regtype
+                     and p.proname in ('sarraf_tenant','sarraf_tenant_visible',
+                                       'sarraf_sees_all_tenants','sarraf_reset_installation',
+                                       'sarraf_receipt_record_server_extraction',
+                                       'sarraf_office_payment_attach_evidence_server',
+                                       'sarraf_manager_support_tenant_for')) as "named exception",
+  count(*) filter (where p.prosecdef and pg_get_userbyid(p.proowner) <> 'sarraf_definer'
+                     and p.prorettype <> 'pg_catalog.trigger'::regtype
+                     and p.proname not in ('sarraf_tenant','sarraf_tenant_visible',
+                                       'sarraf_sees_all_tenants','sarraf_reset_installation',
+                                       'sarraf_receipt_record_server_extraction',
+                                       'sarraf_office_payment_attach_evidence_server',
+                                       'sarraf_manager_support_tenant_for')) as "unexplained",
   count(*) filter (where p.prosecdef and p.proconfig is null) as "no search_path"
   from pg_proc p
  where p.pronamespace = 'public'::regnamespace and p.proname like 'sarraf%';
