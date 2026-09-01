@@ -88,11 +88,17 @@ test("and naming the wrong one is refused too", async () => {
   assert.equal(decision.body.code, "tenant_context_required");
 });
 
-test("a manager naming the right business may act", async () => {
+// Naming the business used to be the whole rule. It is now the first half of it: 202609010002
+// added the second, that the manager must also have opened that business and said why. The
+// tests for the second half are at the end of this file; this one holds the first half in place
+// on its own, because a change that dropped it would still pass those.
+test("a manager naming the right business gets past the naming rule", async () => {
   const service = stubService(targetIn("t-b"));
   const decision = await authorizeTarget(service, actorIn(null, "manager"), "target-1", { requestedTenantId: "t-b" });
-  assert.equal(decision.ok, true);
-  assert.equal(decision.tenantId, "t-b");
+  assert.equal(decision.ok, false);
+  assert.notEqual(decision.body.code, "tenant_context_required",
+    "the business was named correctly, so this is no longer what refuses it");
+  assert.equal(decision.body.code, "support_context_required");
 });
 
 test("a missing identifier is refused before any lookup", async () => {
@@ -125,4 +131,96 @@ test("a row with no business is narrowed with IS NULL, not equality", async () =
   withinTenant(service.from("app_users").select("id").eq("id", "target-1"), null);
   assert.ok(service.calls.some(([kind, column]) => kind === "is" && column === "tenant_id"),
     "a null tenant was compared with equality, which matches nothing");
+});
+
+/**
+ * The vendor acts on a customer's business, and the customer can see it.
+ *
+ * The manager belongs to no business — app_users.tenant_id is null — and sarraf_sees_all_tenants()
+ * is true, so every policy in the system lets them through. api/admin-user.js let them create an
+ * account inside a business, deactivate one, change a partner's commission and reset anybody's
+ * password, and nothing recorded that it happened, when, or why. A business owner who buys this
+ * system had no way to know whether the vendor had been in their accounts.
+ *
+ * Now a manager acting on a business must have opened that business, with a reason, inside a
+ * context that expires. Naming the business is not enough on its own; naming it and having it
+ * open is.
+ */
+
+// The stub above answers `.from().select()...`; the support lookup goes through `.rpc()`.
+const withSupport = (row, openTenant, { rpcError = null } = {}) => {
+  const base = stubService(row);
+  return {
+    ...base,
+    rpc: async (fn, args) => {
+      base.calls.push(["rpc", fn, args?.p_manager_id]);
+      if (rpcError) return { data: null, error: rpcError };
+      return { data: openTenant, error: null };
+    },
+  };
+};
+
+const manager = () => ({
+  profile: { id: "mgr-1", name: "Manager", role: "admin", admin_level: "manager", tenant_id: null },
+});
+
+test("a manager who has not opened the business is refused", async () => {
+  const service = withSupport(targetIn("t-a"), null);
+  const decision = await authorizeTarget(service, manager(), "target-1", { requestedTenantId: "t-a" });
+  assert.equal(decision.ok, false);
+  assert.equal(decision.status, 403);
+  assert.equal(decision.body.code, "support_context_required");
+});
+
+test("a manager who has opened that business may act", async () => {
+  const service = withSupport(targetIn("t-a"), "t-a");
+  const decision = await authorizeTarget(service, manager(), "target-1", { requestedTenantId: "t-a" });
+  assert.equal(decision.ok, true);
+  assert.equal(decision.tenantId, "t-a");
+});
+
+test("a manager who has opened a different business is refused, and told which", async () => {
+  const service = withSupport(targetIn("t-a"), "t-b");
+  const decision = await authorizeTarget(service, manager(), "target-1", { requestedTenantId: "t-a" });
+  assert.equal(decision.ok, false);
+  assert.equal(decision.body.code, "support_context_required");
+  assert.match(decision.body.error, /بازرگانییەکی تر/);
+});
+
+test("the context is asked about the manager by name, since the server holds no session", async () => {
+  const service = withSupport(targetIn("t-a"), "t-a");
+  await authorizeTarget(service, manager(), "target-1", { requestedTenantId: "t-a" });
+  const asked = service.calls.find(([kind]) => kind === "rpc");
+  assert.deepEqual(asked, ["rpc", "sarraf_manager_support_tenant_for", "mgr-1"]);
+});
+
+test("a lookup that fails counts as no context, not as a way through", async () => {
+  const service = withSupport(targetIn("t-a"), "t-a", { rpcError: new Error("unavailable") });
+  const decision = await authorizeTarget(service, manager(), "target-1", { requestedTenantId: "t-a" });
+  assert.equal(decision.ok, false);
+  assert.equal(decision.body.code, "support_context_required");
+});
+
+test("naming the business is still required before the context is even asked about", async () => {
+  const service = withSupport(targetIn("t-a"), "t-a");
+  const decision = await authorizeTarget(service, manager(), "target-1");
+  assert.equal(decision.ok, false);
+  assert.equal(decision.body.code, "tenant_context_required");
+});
+
+test("platform work needs no business to open — an account belonging to none", async () => {
+  // Creating another manager, or acting on an account with no business, is not an act on
+  // somebody's business and has nothing to open.
+  const service = withSupport(targetIn(null), null);
+  const decision = await authorizeTarget(service, manager(), "target-1");
+  assert.equal(decision.ok, true);
+  assert.equal(decision.tenantId, null);
+});
+
+test("an owner is unaffected: they act in their own business with no context to open", async () => {
+  const service = withSupport(targetIn("t-a"), null);
+  const decision = await authorizeTarget(service, actorIn("t-a"), "target-1");
+  assert.equal(decision.ok, true);
+  assert.equal(service.calls.some(([kind]) => kind === "rpc"), false,
+    "an owner's act should not consult a support context at all");
 });

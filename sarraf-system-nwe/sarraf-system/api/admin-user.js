@@ -231,6 +231,28 @@ export async function authorizeTarget(service, actor, userId, options = {}) {
         },
       };
     }
+    // And must have opened that business, saying why. The manager is the vendor: they belong to
+    // no business and every policy lets them through, so without this a business owner has no
+    // way to know whether the person who sold them the system has been in their accounts. The
+    // context is a row the owner can read, it expires, and it cannot be deleted.
+    //
+    // Only for an act on a business. Creating another manager, or acting on an account that
+    // belongs to no business, is platform work and has no business to open.
+    if (targetTenant) {
+      const open = await openSupportContext(service, actor);
+      if (open !== targetTenant) {
+        return {
+          ok: false,
+          status: 403,
+          body: {
+            error: open
+              ? "پشتگیریت بۆ بازرگانییەکی تر کراوەتەوە — یەکەم جار ئەمە بکەرەوە"
+              : "پێش کارکردن لەسەر بازرگانییەک، پشتگیری بکەرەوە و هۆکارەکە بنووسە",
+            code: "support_context_required",
+          },
+        };
+      }
+    }
   } else {
     // Everybody else acts inside their own business and nowhere else. An actor with no business
     // has no business to act in, which is a refusal rather than a wildcard.
@@ -238,6 +260,26 @@ export async function authorizeTarget(service, actor, userId, options = {}) {
   }
 
   return { ok: true, target, tenantId: targetTenant };
+}
+
+/**
+ * The one business the manager currently has open, or null.
+ *
+ * Asked through the database rather than worked out here, because the expiry and the
+ * one-at-a-time rule live with the rows they are about. A lookup that fails is treated as no
+ * context: a transient error must not become a way through.
+ */
+export async function openSupportContext(service, actor) {
+  if (!isManager(actor.profile)) return null;
+  try {
+    const { data, error } = await service.rpc("sarraf_manager_support_tenant_for", {
+      p_manager_id: actor.profile.id,
+    });
+    if (error) return null;
+    return String(data || "").trim() || null;
+  } catch {
+    return null;
+  }
 }
 
 /** Narrow an update to the tenant the target was authorized in. Null means the row has none. */

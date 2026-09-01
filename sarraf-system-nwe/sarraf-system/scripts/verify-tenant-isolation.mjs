@@ -1039,7 +1039,11 @@ try {
          -- is how the receipt reader was silently dead for nine days. The check below is what
          -- makes this exception safe: neither may be callable from a browser.
                                'sarraf_receipt_record_server_extraction',
-                               'sarraf_office_payment_attach_evidence_server')
+                               'sarraf_office_payment_attach_evidence_server',
+         -- And the third, for the same reason: api/admin-user.js asks it, holding the service
+         -- key and no session, which business the manager currently has open. A definer bound
+         -- by the tenant policies would answer null for every manager on every request.
+                               'sarraf_manager_support_tenant_for')
          and (o.rolbypassrls or o.rolsuper)`).trim();
     if (loose) throw new Error(`these run as a role that ignores every policy: ${loose}`);
   });
@@ -1050,7 +1054,8 @@ try {
         from pg_proc p
         join pg_namespace n on n.oid = p.pronamespace and n.nspname = 'public'
        where p.proname in ('sarraf_receipt_record_server_extraction',
-                           'sarraf_office_payment_attach_evidence_server')
+                           'sarraf_office_payment_attach_evidence_server',
+                           'sarraf_manager_support_tenant_for')
          and (has_function_privilege('authenticated', p.oid, 'execute')
               or has_function_privilege('anon', p.oid, 'execute'))`).trim();
     if (open) throw new Error(`a browser can call these, and they bypass tenancy: ${open}`);
@@ -1252,6 +1257,95 @@ try {
     try { asDefiner(A_UID, `select public.sarraf_receipt_close_abandoned_uploads(1)::text`); }
     catch { refused = true; }
     if (!refused) throw new Error("a one-minute grace period was accepted");
+  });
+
+  // ── the vendor opens a business, and the owner can see it ───────────────────
+  //
+  // The manager belongs to no business and every policy lets them through. Without a record, a
+  // business that buys this system has no way to know whether the person who sold it has been in
+  // their accounts — which is the question a customer asks before trusting their ledger to
+  // somebody else's software.
+  const MGR = "cccccccc-0000-0000-0000-000000000001";
+
+  check("only the manager opens a support context", () => {
+    let refused = false;
+    try { asDefiner(A_UID, `select public.sarraf_manager_open_support('t-watan','ھۆکارێکی دووری')::text`); }
+    catch { refused = true; }
+    if (!refused) throw new Error("a business owner opened a support context");
+  });
+
+  check("a support context with no reason is not one", () => {
+    let refused = false;
+    try { asDefiner(MGR, `select public.sarraf_manager_open_support('t-watan','کورت')::text`); }
+    catch { refused = true; }
+    if (!refused) throw new Error("a four-character reason was accepted");
+  });
+
+  check("the manager opens one business and says why", () => {
+    const out = JSON.parse(asDefiner(MGR,
+      `select public.sarraf_manager_open_support('t-watan','پشکنینی داواکاری خاوەنەکە')::text`));
+    if (out.tenant_id !== "t-watan") throw new Error(JSON.stringify(out));
+    const open = asDefiner(MGR, `select coalesce(public.sarraf_manager_support_tenant(),'<none>')`).trim();
+    if (open !== "t-watan") throw new Error(`the open business is ${open}`);
+  });
+
+  check("opening a second business closes the first — two at once is not a context", () => {
+    asDefiner(MGR, `select public.sarraf_manager_open_support('t-sarkhel','کێشەیەکی چوونەژوورەوە')::text`);
+    const openRows = psql(`select count(*) from public.manager_support_sessions
+                            where manager_id='iso-mgr' and closed_at is null`).trim();
+    if (openRows !== "1") throw new Error(`${openRows} contexts are open at once`);
+    const open = asDefiner(MGR, `select coalesce(public.sarraf_manager_support_tenant(),'<none>')`).trim();
+    if (open !== "t-sarkhel") throw new Error(`the open business is ${open}`);
+  });
+
+  check("the owner of a business sees the context opened against theirs", () => {
+    const seen = asUser(A_UID, `select coalesce(string_agg(tenant_id, ','), '<none>')
+                                  from public.manager_support_sessions`).trim();
+    if (!seen.includes("t-sarkhel")) throw new Error(`the owner saw ${seen}`);
+  });
+
+  check("and does not see one opened against somebody else's", () => {
+    const seen = asUser(A_UID, `select coalesce(string_agg(distinct tenant_id, ','), '<none>')
+                                  from public.manager_support_sessions`).trim();
+    if (seen.includes("t-watan")) throw new Error(`the owner of t-sarkhel saw ${seen}`);
+  });
+
+  check("a record of who looked at your books cannot be tidied away", () => {
+    let refused = false;
+    try { psql(`delete from public.manager_support_sessions`); } catch { refused = true; }
+    if (!refused) throw new Error("the support record can be deleted");
+  });
+
+  check("an expired context is not an open one", () => {
+    // Both ends move: the row still has to satisfy its own constraints — an expiry before the
+    // opening is not an expired context, it is a nonsense one.
+    psql(`update public.manager_support_sessions
+             set opened_at = statement_timestamp() - interval '9 hours',
+                 expires_at = statement_timestamp() - interval '1 hour'
+           where closed_at is null`);
+    const open = asDefiner(MGR, `select coalesce(public.sarraf_manager_support_tenant(),'<none>')`).trim();
+    if (open !== "<none>") throw new Error(`an expired context still reads as ${open}`);
+  });
+
+  check("closing says how many it closed, and leaves none open", () => {
+    asDefiner(MGR, `select public.sarraf_manager_open_support('t-watan','دوایین پشکنین')::text`);
+    const out = JSON.parse(asDefiner(MGR, `select public.sarraf_manager_close_support('تەواو')::text`));
+    if (Number(out.closed) < 1) throw new Error(JSON.stringify(out));
+    const open = asDefiner(MGR, `select coalesce(public.sarraf_manager_support_tenant(),'<none>')`).trim();
+    if (open !== "<none>") throw new Error(`a context is still open: ${open}`);
+  });
+
+  check("the server can ask which business is open without a session", () => {
+    asDefiner(MGR, `select public.sarraf_manager_open_support('t-watan','پرسیاری سێرڤەر')::text`);
+    // No session at all — this is how api/admin-user.js reaches it, holding the service key.
+    const open = psql(`select coalesce(public.sarraf_manager_support_tenant_for('iso-mgr'),'<none>')`).trim();
+    if (open !== "t-watan") throw new Error(`the server was told ${open}`);
+  });
+
+  check("no browser can ask about another manager by name", () => {
+    const mayCall = psql(`select has_function_privilege('authenticated',
+      'public.sarraf_manager_support_tenant_for(text)', 'execute')`).trim();
+    if (mayCall !== "f") throw new Error("a browser may name any manager and read their context");
   });
 
   // ── and the manager, who is meant to see everything ─────────────────────────

@@ -1,10 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  AlertTriangle, Building2, CheckCircle2, Loader2, Plus, RefreshCw, ShieldCheck, Users,
+  AlertTriangle, Building2, CheckCircle2, KeyRound, Loader2, Plus, RefreshCw, ShieldCheck,
+  Unlock, Users,
 } from "lucide-react";
 import {
-  createTenant, healthProblems, loadAllAccounts, loadHealth, loadTenants, setTenantActive,
-  tenantIdObjection, tenantNameObjection,
+  closeSupport, createTenant, currentSupport, healthProblems, loadAllAccounts, loadHealth,
+  loadSupportHistory, loadTenants, openSupport, setTenantActive,
+  supportReasonObjection, tenantIdObjection, tenantNameObjection,
 } from "../../services/managerConsole.js";
 import { rankName, rankOf } from "../../services/adminRanks.js";
 import "./debt-center.css";
@@ -36,6 +38,12 @@ const COPY = {
     healthy: "هیچ کێشەیەک نییە", problems: "کێشەکان",
     idHint: "پیتی ئینگلیزیی بچووک، ژمارە و داش — بۆ نموونە zeman-erbil",
     never: "هەرگیز",
+    support: "پشتگیری",
+    supportLead: "پێش کارکردن لەسەر سەرخێڵێک، بیکەرەوە و هۆکارەکە بنووسە. خاوەنی سەرخێڵەکە هەموو ئەمانە دەبینێت",
+    open: "کردنەوە", close: "داخستن", openNow: "ئێستا کراوەیە", nothingOpen: "هیچ سەرخێڵێک کراوە نییە",
+    why: "هۆکار", forHowLong: "بۆ چەند خولەک", expires: "بەسەردەچێت",
+    opened: "کرایەوە", closed: "داخرا", stillOpen: "کراوەیە", byWhom: "لەلایەن",
+    history: "مێژووی پشتگیری", noHistory: "هیچ پشتگیرییەک نەکراوەتەوە",
   },
   en: {
     title: "Manager console",
@@ -53,9 +61,39 @@ const COPY = {
     healthy: "Nothing wrong", problems: "Problems",
     idHint: "Lower-case letters, digits and dashes — for example zeman-erbil",
     never: "Never",
+    support: "Support",
+    supportLead: "Open a business before acting on it, and say why. The owner of that business sees every one of these",
+    open: "Open", close: "Close", openNow: "Open now", nothingOpen: "No business is open",
+    why: "Reason", forHowLong: "For how many minutes", expires: "Expires",
+    opened: "Opened", closed: "Closed", stillOpen: "Open", byWhom: "By",
+    history: "Support history", noHistory: "No support context has been opened",
+  },
+  ar: {
+    title: "لوحة المدير",
+    subtitle: "الأعمال والحسابات وصحة النظام",
+    tabs: { tenants: "الأعمال", accounts: "الحسابات", health: "الصحة", support: "الدعم" },
+    refresh: "تحديث", loading: "جارٍ التحميل…", failed: "تعذّر التحميل", working: "جارٍ التنفيذ…",
+    notManager: "هذا القسم للمدير فقط",
+    name: "الاسم", id: "المعرّف", accounts: "الحسابات", admins: "مشرفون",
+    transactions: "المعاملات", receipts: "الإيصالات", lastActivity: "آخر نشاط", state: "الحالة",
+    active: "نشط", suspended: "موقوف",
+    suspend: "إيقاف", resume: "استئناف", reason: "السبب",
+    create: "عمل جديد", note: "ملاحظة", add: "إضافة",
+    role: "الدور", tenant: "العمل", login: "تسجيل الدخول", phone: "الهاتف",
+    noTenant: "بلا عمل", deleted: "معطّل",
+    healthy: "لا يوجد خطأ", problems: "المشكلات",
+    idHint: "أحرف إنجليزية صغيرة وأرقام وشرطات — مثل zeman-erbil",
+    never: "أبدًا",
+    support: "الدعم",
+    supportLead: "افتح العمل قبل التصرف فيه، واذكر السبب. صاحب العمل يرى كل واحدة من هذه",
+    open: "فتح", close: "إغلاق", openNow: "مفتوح الآن", nothingOpen: "لا يوجد عمل مفتوح",
+    why: "السبب", forHowLong: "لكم دقيقة", expires: "ينتهي",
+    opened: "فُتح", closed: "أُغلق", stillOpen: "مفتوح", byWhom: "بواسطة",
+    history: "سجل الدعم", noHistory: "لم يُفتح أي دعم",
   },
 };
-COPY.ar = COPY.en;
+COPY.ku.tabs.support = "پشتگیری";
+COPY.en.tabs.support = "Support";
 const localeKey = (lang) => (lang === "en" ? "en" : lang === "ar" ? "ar" : "ku");
 const day = (v) => (v ? String(v).slice(0, 10) : null);
 
@@ -69,17 +107,23 @@ export function ManagerConsole({ client, lang = "ku", isManager = false, flash =
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
   const [form, setForm] = useState({ id: "", name: "", note: "" });
+  const [openTenant, setOpenTenant] = useState(null);
+  const [support, setSupport] = useState({ id: "", reason: "", minutes: 120 });
+  const [history, setHistory] = useState([]);
 
   const load = useCallback(async () => {
     setState("loading"); setError("");
     try {
       // Each independently: a failure to read one view must not blank the other two.
-      const [t, a, h] = await Promise.allSettled([
+      const [t, a, h, open, log] = await Promise.allSettled([
         loadTenants(client), loadAllAccounts(client), loadHealth(client),
+        currentSupport(client), loadSupportHistory(client),
       ]);
       if (t.status === "fulfilled") setTenants(t.value);
       if (a.status === "fulfilled") setAccounts(a.value);
       if (h.status === "fulfilled") setHealth(h.value);
+      if (open.status === "fulfilled") setOpenTenant(open.value);
+      if (log.status === "fulfilled") setHistory(log.value.sessions);
       if (t.status === "rejected") throw t.reason;
       setState("ready");
     } catch (e) {
@@ -116,6 +160,37 @@ export function ManagerConsole({ client, lang = "ku", isManager = false, flash =
     } finally { setBusy(""); }
   }, [client, load, copy.reason]);
 
+  // Opening a business is the act that lets the manager touch it at all; api/admin-user.js
+  // refuses every write on a business without one. Closing it is a single press, and it is worth
+  // being easy: a context left open is the thing this whole mechanism exists to avoid.
+  const beginSupport = useCallback(async () => {
+    const objection = supportReasonObjection(support.reason, localeKey(lang));
+    if (objection) { setError(objection); return; }
+    setBusy("support"); setError("");
+    try {
+      await openSupport(client, {
+        tenantId: support.id, reason: support.reason,
+        minutes: Number(support.minutes) || 120, lang: localeKey(lang),
+      });
+      setSupport({ id: "", reason: "", minutes: 120 });
+      flash(copy.openNow + " ✓", true);
+      await load();
+    } catch (e) {
+      setError(errorText(e).slice(0, 200));
+    } finally { setBusy(""); }
+  }, [client, support, load, flash, copy.openNow, lang]);
+
+  const endSupport = useCallback(async () => {
+    setBusy("support"); setError("");
+    try {
+      await closeSupport(client);
+      flash(copy.close + " ✓", true);
+      await load();
+    } catch (e) {
+      setError(errorText(e).slice(0, 200));
+    } finally { setBusy(""); }
+  }, [client, load, flash, copy.close]);
+
   const problems = useMemo(() => healthProblems(health, localeKey(lang)), [health, lang]);
 
   if (!isManager) {
@@ -140,12 +215,13 @@ export function ManagerConsole({ client, lang = "ku", isManager = false, flash =
         <AlertTriangle aria-hidden="true" /> {error}</div>}
 
       <div className="debt-actions" role="tablist" aria-label={copy.title}>
-        {["tenants", "accounts", "health"].map((k) => (
+        {["tenants", "accounts", "health", "support"].map((k) => (
           <button key={k} type="button" role="tab" aria-selected={tab === k}
                   className={tab === k ? "debt-primary" : ""}
                   onClick={() => setTab(k)}>
             {copy.tabs[k]}
             {k === "health" && problems.length ? ` (${problems.length})` : ""}
+            {k === "support" && openTenant ? " ●" : ""}
           </button>
         ))}
       </div>
@@ -239,6 +315,81 @@ export function ManagerConsole({ client, lang = "ku", isManager = false, flash =
                 <tbody>{problems.map((p, i) => <tr key={i}><td>{p}</td></tr>)}</tbody>
               </table>
             </div>
+      )}
+
+      {tab === "support" && (
+        <>
+          <p className="debt-note"><KeyRound aria-hidden="true" /> {copy.supportLead}</p>
+
+          {openTenant ? (
+            <div className="debt-ledger is-ok">
+              <Unlock aria-hidden="true" />{" "}
+              {copy.openNow}: <strong>{
+                (tenants?.tenants || []).find((t) => t.id === openTenant)?.name || openTenant
+              }</strong>
+              <button type="button" className="debt-refresh recon-finish"
+                      disabled={busy === "support"} onClick={endSupport}>
+                {busy === "support" ? <Loader2 aria-hidden="true" /> : <>{copy.close}</>}
+              </button>
+            </div>
+          ) : (
+            <div className="debt-ledger">{copy.nothingOpen}</div>
+          )}
+
+          <div className="cashbox-form">
+            <label>{copy.tenant}
+              <select value={support.id} aria-label={copy.tenant}
+                      onChange={(e) => { setSupport({ ...support, id: e.target.value }); setError(""); }}>
+                <option value="">—</option>
+                {(tenants?.tenants || []).map((t) => (
+                  <option key={t.id} value={t.id}>{t.name}</option>
+                ))}
+              </select>
+            </label>
+            <label>{copy.why}
+              <input value={support.reason} aria-label={copy.why}
+                     onChange={(e) => { setSupport({ ...support, reason: e.target.value }); setError(""); }} />
+            </label>
+            <label>{copy.forHowLong}
+              <input type="number" min="15" max="480" step="15" value={support.minutes}
+                     aria-label={copy.forHowLong} style={{ direction: "ltr" }}
+                     onChange={(e) => setSupport({ ...support, minutes: e.target.value })} />
+            </label>
+            <button type="button" className="debt-primary"
+                    disabled={busy === "support" || !support.id
+                              || !!supportReasonObjection(support.reason, localeKey(lang))}
+                    onClick={beginSupport}>
+              {busy === "support" ? <Loader2 aria-hidden="true" /> : <Plus aria-hidden="true" />}
+              {" "}{copy.open}
+            </button>
+          </div>
+
+          <h3 className="debt-subhead"><ShieldCheck aria-hidden="true" /> {copy.history}</h3>
+          {history.length === 0
+            ? <p className="debt-empty">{copy.noHistory}</p>
+            : <div className="debt-table-wrap">
+                <table className="debt-table">
+                  <thead><tr>
+                    <th>{copy.tenant}</th><th>{copy.byWhom}</th><th>{copy.why}</th>
+                    <th>{copy.opened}</th><th>{copy.state}</th>
+                  </tr></thead>
+                  <tbody>
+                    {history.slice(0, 60).map((r) => (
+                      <tr key={r.id}>
+                        <td>{r.tenant_name || r.tenant_id}</td>
+                        <td>{r.manager_name || "—"}</td>
+                        <td>{r.reason}</td>
+                        <td style={{ direction: "ltr", unicodeBidi: "embed" }}>
+                          {String(r.opened_at || "").slice(0, 16).replace("T", " ")}
+                        </td>
+                        <td>{r.still_open ? copy.stillOpen
+                          : `${copy.closed} ${String(r.closed_at || r.expires_at || "").slice(0, 16).replace("T", " ")}`}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>}
+        </>
       )}
 
       <p className="debt-note">

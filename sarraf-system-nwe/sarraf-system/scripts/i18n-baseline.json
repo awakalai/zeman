@@ -1,11 +1,11 @@
 {
-  "total": 1055,
+  "total": 1041,
   "counts": {
     "src/App.jsx": 682,
     "src/brand/brand.js": 1,
     "src/components/accounting/CashboxPanel.jsx": 12,
     "src/components/accounting/ManagerCenter.jsx": 11,
-    "src/components/accounting/ManagerConsole.jsx": 15,
+    "src/components/accounting/ManagerConsole.jsx": 1,
     "src/components/accounting/PartnerAccounts.jsx": 7,
     "src/components/accounting/PartnerHoldings.jsx": 23,
     "src/components/operations/ExportAuditCenter.jsx": 2,

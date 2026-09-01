@@ -116,3 +116,77 @@ export async function loadAllAccounts(client) {
   if (error) throw error;
   return Array.isArray(data) ? data : [];
 }
+
+/**
+ * The support context: the manager opens one business, says why, and it expires.
+ *
+ * The manager belongs to no business and every policy in the system lets them through, so
+ * without this a business owner has no way to know whether the person who sold them the system
+ * has been in their accounts. api/admin-user.js refuses to act on a business without one, and
+ * the row it writes is readable by the owner of that business and cannot be deleted.
+ */
+
+export const SUPPORT_REASON_MIN = 8;
+
+/**
+ * A phrase written here rather than in the dictionary, in all three languages.
+ *
+ * These are refusals the caller sees before anything reaches the server, so they are not
+ * server messages and have no key. Writing them in one language would leave an English or
+ * Arabic reader with a Kurdish sentence at the one moment they are being told they did
+ * something wrong.
+ */
+const say = (phrase, lang) => phrase[lang === "en" ? "en" : lang === "ar" ? "ar" : "ku"];
+
+const NEEDS_A_REASON = {
+  ku: `هۆکارەکە دەبێت لانیکەم ${SUPPORT_REASON_MIN} پیت بێت`,
+  en: `The reason must be at least ${SUPPORT_REASON_MIN} characters`,
+  ar: `يجب ألا يقل السبب عن ${SUPPORT_REASON_MIN} أحرف`,
+};
+const NEEDS_A_BUSINESS = { ku: "سەرخێڵێک پێویستە", en: "Choose a business", ar: "اختر عملًا" };
+
+export function supportReasonObjection(reason, lang = "ku") {
+  return clean(reason).length < SUPPORT_REASON_MIN ? say(NEEDS_A_REASON, lang) : null;
+}
+
+export async function openSupport(client, { tenantId, reason, minutes = 120, lang = "ku" }) {
+  if (!clean(tenantId)) throw new Error(say(NEEDS_A_BUSINESS, lang));
+  const objection = supportReasonObjection(reason, lang);
+  if (objection) throw new Error(objection);
+  const { data, error } = await client.rpc("sarraf_manager_open_support", {
+    p_tenant_id: clean(tenantId), p_reason: clean(reason), p_minutes: minutes,
+  });
+  if (error) throw error;
+  return data;
+}
+
+export async function closeSupport(client, reason = null) {
+  const { data, error } = await client.rpc("sarraf_manager_close_support", {
+    p_reason: clean(reason) || null,
+  });
+  if (error) throw error;
+  return data;
+}
+
+/** Which business is open right now, or null. */
+export async function currentSupport(client) {
+  const { data, error } = await client.rpc("sarraf_manager_support_tenant");
+  if (error) throw error;
+  return clean(data) || null;
+}
+
+/**
+ * Every context opened, newest first.
+ *
+ * A manager sees their own across all businesses; a business owner sees the ones opened against
+ * theirs. That second reading is the whole point — it is what a customer can point at when they
+ * ask whether the vendor has been in their books.
+ */
+export async function loadSupportHistory(client, days = 90) {
+  const { data, error } = await client.rpc("sarraf_support_history", { p_days: days });
+  if (error) throw error;
+  return {
+    days: Number(data?.days) || days,
+    sessions: Array.isArray(data?.sessions) ? data.sessions : [],
+  };
+}
