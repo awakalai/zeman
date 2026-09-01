@@ -52,7 +52,13 @@ const rateText = (row) => row.rateValue == null
   ? "—"
   : `1 USD = ${Number(row.rateValue).toLocaleString("en-US", { maximumFractionDigits: 8 })} ${row.currency || ""}`;
 
-export function ForwardedReceipts({ client, lang = "ku", signedUrlFor = null, flash = () => {} }) {
+/**
+ * `subjectId` names whose forwarded receipts these are. Without it the server answers about
+ * whoever is signed in, which is wrong on any screen that is showing somebody else's portal —
+ * an administrator previewing a customer saw their own forwarded receipts listed as that
+ * customer's. The server still decides whether the caller may ask about that person.
+ */
+export function ForwardedReceipts({ client, lang = "ku", signedUrlFor = null, flash = () => {}, subjectId = null }) {
   const copy = COPY[lang] || COPY.ku;
   const [rows, setRows] = useState([]);
   const [state, setState] = useState("loading");
@@ -65,7 +71,7 @@ export function ForwardedReceipts({ client, lang = "ku", signedUrlFor = null, fl
   const load = useCallback(async () => {
     setState("loading");
     try {
-      const data = await loadForwardedToMe(client);
+      const data = await loadForwardedToMe(client, 100, subjectId);
       setRows(data);
       setState("ready");
     } catch (e) {
@@ -73,7 +79,7 @@ export function ForwardedReceipts({ client, lang = "ku", signedUrlFor = null, fl
       flashRef.current(errorText(e));
       setState("error");
     }
-  }, [client]);
+  }, [client, subjectId]);
 
   useEffect(() => { load(); }, [load]);
 

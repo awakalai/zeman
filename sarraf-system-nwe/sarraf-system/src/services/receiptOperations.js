@@ -72,8 +72,9 @@ export async function convertReceiptBatchToTransaction(client, {
  * Load the customer/partner portal's receipt totals and lifecycle summary.
  * Mirrors public.sarraf_portal_receipt_summary(p_days).
  */
-export async function loadPortalReceiptSummary(client, days = 365) {
-  const { data, error } = await client.rpc("sarraf_portal_receipt_summary_v2", { p_days: days });
+export async function loadPortalReceiptSummary(client, days = 365, subjectId = null) {
+  const { data, error } = await client.rpc("sarraf_portal_receipt_summary_v2",
+    { p_days: days, p_subject_id: subjectId });
   if (error) throw error;
   return data || { totals: [], batches: [], batch_count: 0, accepted_count: 0, rejected_count: 0 };
 }
