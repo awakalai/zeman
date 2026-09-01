@@ -1154,6 +1154,59 @@ try {
     if (landed !== "1") throw new Error("an unlabelled audit line was refused, which would take the operation down with it");
   });
 
+  // ── an upload that never arrived ────────────────────────────────────────────
+  //
+  // Five of these were sitting in the live database from 26 and 27 August, still `uploading` on
+  // the 31st, each one holding its batch open for an image that was never coming.
+  check("the uploader can say the image never arrived", () => {
+    // The machine starts every document at `created`; `uploading` is the step after it.
+    psql(`insert into public.receipt_documents(id,flow,state,batch_id,uploader_id,storage_path,tenant_id,received_at)
+          values ('doc-lost','customer_sells_to_zeman','created','bat-a','iso-a','ingest/bat-a/doc-lost.jpg','t-sarkhel', now() - interval '3 hours')`);
+    psql(`update public.receipt_documents set state='uploading' where id='doc-lost'`);
+    const out = JSON.parse(asDefiner(A_UID,
+      `select public.sarraf_receipt_upload_failed('doc-lost','network')::text`));
+    if (out.moved !== true) throw new Error(`the document did not move: ${JSON.stringify(out)}`);
+    const state = psql(`select state from public.receipt_documents where id='doc-lost'`).trim();
+    if (state !== "upload_failed_retryable") throw new Error(`the document is ${state}`);
+  });
+
+  check("saying it twice is saying it once", () => {
+    const out = JSON.parse(asDefiner(A_UID,
+      `select public.sarraf_receipt_upload_failed('doc-lost','network')::text`));
+    if (out.moved !== false) throw new Error("a second report was treated as a new one");
+  });
+
+  check("one business cannot close another's abandoned upload", () => {
+    // The machine starts every document at `created`; `uploading` is the step after it.
+    psql(`insert into public.receipt_documents(id,flow,state,batch_id,uploader_id,storage_path,tenant_id,received_at)
+          values ('doc-lost-b','customer_sells_to_zeman','created','bat-b','iso-b','ingest/bat-b/doc-lost-b.jpg','t-watan', now() - interval '3 hours')`);
+    psql(`update public.receipt_documents set state='uploading' where id='doc-lost-b'`);
+    const out = JSON.parse(asDefiner(A_UID,
+      `select public.sarraf_receipt_close_abandoned_uploads(60)::text`));
+    if (String(out.documents || "").includes("doc-lost-b")) {
+      throw new Error("an administrator closed another business's upload");
+    }
+    const state = psql(`select state from public.receipt_documents where id='doc-lost-b'`).trim();
+    if (state !== "uploading") throw new Error(`the other business's document became ${state}`);
+  });
+
+  check("an upload still in flight is left alone", () => {
+    // The machine starts every document at `created`; `uploading` is the step after it.
+    psql(`insert into public.receipt_documents(id,flow,state,batch_id,uploader_id,storage_path,tenant_id,received_at)
+          values ('doc-now','customer_sells_to_zeman','created','bat-a','iso-a','ingest/bat-a/doc-now.jpg','t-sarkhel', now())`);
+    psql(`update public.receipt_documents set state='uploading' where id='doc-now'`);
+    asDefiner(A_UID, `select public.sarraf_receipt_close_abandoned_uploads(60)::text`);
+    const state = psql(`select state from public.receipt_documents where id='doc-now'`).trim();
+    if (state !== "uploading") throw new Error(`an upload started a moment ago was called abandoned (${state})`);
+  });
+
+  check("an upload cannot be called abandoned after a few seconds", () => {
+    let refused = false;
+    try { asDefiner(A_UID, `select public.sarraf_receipt_close_abandoned_uploads(1)::text`); }
+    catch { refused = true; }
+    if (!refused) throw new Error("a one-minute grace period was accepted");
+  });
+
   // ── and the manager, who is meant to see everything ─────────────────────────
   check("the manager still sees both businesses", () => {
     const mgr = psql(`select coalesce(auth_id::text,'') from public.app_users

@@ -89,6 +89,22 @@ export function receiptReadFailureText(error) {
  *
  * Best effort, always. A diagnosis that cannot be written down must not also lose the receipt.
  */
+/**
+ * The image never arrived.
+ *
+ * Best effort, like noteReceiptReadFailure: an upload that failed must not also fail because the
+ * report about it failed. What it buys is that the document leaves `uploading` — the state its
+ * batch waits on — and enters `upload_failed_retryable`, from which it can be sent again.
+ */
+export async function noteReceiptUploadFailure(client, documentId, cause) {
+  try {
+    await client.rpc("sarraf_receipt_upload_failed", {
+      p_document_id: documentId,
+      p_code: cause?.code || cause?.statusCode || "upload_failed",
+    });
+  } catch { /* the sweep closes whatever this could not */ }
+}
+
 export async function noteReceiptReadFailure(client, documentId, cause) {
   try {
     await client.rpc("sarraf_receipt_note_read_failure", {
@@ -216,6 +232,12 @@ export async function intakeReceipt({
   });
   // A replay of the exact command may find its immutable object already present.
   if (upload.error && !/already exists|duplicate|resource exists/i.test(String(upload.error.message || ""))) {
+    // Say so where it can be read back. onStage is a callback inside this browser: it tells the
+    // screen and nothing else. Until this line the database was never told, so the document sat
+    // at `uploading` for ever, its batch kept waiting for an image that was never coming, and
+    // the person who sent it was never told it had not arrived. The live database was carrying
+    // five of these from August when it was first inspected.
+    await noteReceiptUploadFailure(client, id, upload.error);
     onStage(INTAKE_STAGE.uploadFailed, { documentId: id, storagePath: path });
     throw new ReceiptIntakeError("upload", upload.error, false);
   }
