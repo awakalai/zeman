@@ -153,6 +153,46 @@ say that Office X collected and currently holds the money.
 
 ---
 
+## ⚠️ OWNER-DECISION-002 — which office model, and it changes real balances
+
+**Status: OPEN. One question, two defensible answers, and they differ in what the books say.**
+
+The owner described this sequence:
+
+> کاتێک هەر مامەڵەیەک دەکەم، ئەگەر پارەکەی نوسینگە بیدات، ئەوە لای من لە قاسە دەڕوات و دەچێتە ناو
+> حسابی نوسینگە. هەر کاتێک نوسینگە پارەدانی کرد ئەوکات حسابی نێوان من و نوسینگە سفر دەبێت و
+> حسابی کەسەکەش سفر دەبێت.
+
+That is **model A**: the owner funds the office up front, and when the office pays, both balances
+go to zero.
+
+What the system does today is **model B**, and it is deliberate — a migration after
+`202608210003` corrected this exact posting, and the contract guarding it carries the note
+*"this check pinned acc-1000 for weeks: the books said the safe had paid, the safe had not"*.
+
+| | Model A — the owner funds the office | Model B — what runs today |
+|---|---|---|
+| When the office is assigned | `Dr acc-1300 / Cr acc-1000` — money leaves the safe | nothing is posted |
+| Between the two events | the office **holds the owner's money** | nothing has moved |
+| When the office pays | `Dr acc-2300 / Cr acc-1300` — both go to zero | `Dr acc-2300 / Cr acc-2200` — the customer is settled and **ZEMAN now owes the office** |
+| The owner's safe | falls at assignment | never moves on this path |
+
+**Both satisfy §5.2** — office activity never inflates the owner's cashbox. They differ in what
+is true in between, and in whether the office ends up owed.
+
+**What it costs to switch:** model A moves cash out of the safe earlier, and an office that has
+been funded but has not yet paid shows a holding rather than the owner showing a debt to it.
+Existing confirmed assignments are unaffected either way; only new ones would follow the new
+rule.
+
+**Not guessed at.** §1 forbids inventing accounting behaviour, and a first attempt at model A was
+written and then withdrawn: it had been re-typed from the older migration and would have undone
+the correction above. The accounting gate refused it.
+
+`202609010012` adds what both models need — `ledger.office_id`, so office-held money is
+distinguishable in the operational ledger at all, and `sarraf_office_holdings` to read it — and
+changes no posting.
+
 ## Scenario F — Missing Order No. (§10, §15.F)
 
 Not an accounting scenario: the required outcome is that **no journal entry and no transaction
