@@ -24,7 +24,8 @@
     "verify:names": "node scripts/verify-no-free-variables.mjs",
     "verify:i18n": "node scripts/verify-i18n.mjs",
     "verify:journey": "node scripts/verify-receipt-journey.mjs",
-    "verify:scale": "node scripts/verify-scale.mjs"
+    "verify:scale": "node scripts/verify-scale.mjs",
+    "verify:bundle": "node scripts/verify-shipped-bundle.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",
