@@ -406,6 +406,41 @@ select
                      and n.ref_no is not null) as "ACCEPTED on ref_no alone"
   from newest n join public.receipt_documents d on d.id = n.document_id;
 
+\echo ''
+\echo '════════ ٨.d قاسەی نەرێنی — کام مامەڵە وای کرد ════════'
+\echo '   بۆ هەر دراوێک: ئایا هەرگیز نەرێنی بووە، و یەکەم جوڵە کامە بوو'
+\echo ''
+
+-- Uses sarraf_balance_first_negative, shipped in 202609010009. The suspicion this is testing:
+-- a normal purchase of an "external" currency is refused unless it names a custody partner, so
+-- that money sits in the partner's balance. A DIRECT trade is exempt from that rule and moves
+-- money through the owner's cashbox instead. If direct sales of a currency exceed what the owner
+-- actually holds, the residual goes negative while the partners' balances stay positive.
+select c.code,
+       c.external as "external?",
+       (public.sarraf_balance_first_negative(c.id, 'owner') ->> 'ever_negative') as "ever negative",
+       (public.sarraf_balance_first_negative(c.id, 'owner') ->> 'final_balance') as "owner now",
+       (public.sarraf_balance_first_negative(c.id, 'owner') #>> '{first_negative,ledger_id}') as "first bad row",
+       (public.sarraf_balance_first_negative(c.id, 'owner') #>> '{first_negative,entry_type}') as "type",
+       (public.sarraf_balance_first_negative(c.id, 'owner') #>> '{first_negative,transaction}') as "transaction"
+  from public.currencies c
+ order by c.code;
+
+\echo ''
+\echo '════════ ٨.e ئەو مامەڵانەی لە قاسەی خاوەنەوە ڕۆیشتوون ════════'
+\echo '   business_flow = owner_cashbox واتە مامەڵەی ڕاستەوخۆ — ئەوەی لە یاسای تەرەف بەدەرە'
+\echo ''
+
+select t.cur_id as "currency",
+       t.business_flow as flow,
+       t.type,
+       count(*) as "how many",
+       round(sum(case when t.type = 'sell' then -abs(t.amount) else abs(t.amount) end), 4) as "net into owner"
+  from public.txs t
+ where not t.deleted
+ group by t.cur_id, t.business_flow, t.type
+ order by t.cur_id, t.business_flow, t.type;
+
 \echo '════════ 9. ژمارەکانی کار ════════'
 \echo ''
 
