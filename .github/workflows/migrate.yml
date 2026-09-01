@@ -303,11 +303,27 @@ jobs:
           select m.version from public.schema_migrations m
           on conflict (version) do nothing;
           SQL
+          # Equal counts is the wrong test, and saying so here once cost a moment of alarm: after
+          # the first reconciliation the two read 97 and 112. The Supabase ledger holds fifteen
+          # versions with no file in this repository — leftovers from the CLI era, in a different
+          # version format. Those are harmless: `supabase db push` ignores a remote entry with no
+          # local file. What is not harmless is the reverse — an applied version missing from the
+          # Supabase ledger, because push would then try to run it again against a database that
+          # already has it. That is the number to watch, and it must be zero.
+          missing=$(psql -h "$DBHOST" -p "$DBPORT" -U "$DBUSER" -d postgres -tAc \
+            "select count(*) from public.schema_migrations m
+              where not exists (select 1 from supabase_migrations.schema_migrations s
+                                 where s.version = m.version)")
           both=$(psql -h "$DBHOST" -p "$DBPORT" -U "$DBUSER" -d postgres -tAc \
             "select (select count(*) from public.schema_migrations) || ' / ' || (select count(*) from supabase_migrations.schema_migrations)")
-          echo "Ledgers (zeman / supabase): $both"
+          echo "Ledgers (zeman / supabase): $both — applied but missing from Supabase: $missing"
           echo "### Migration ledgers" >> $GITHUB_STEP_SUMMARY
-          echo "zeman / supabase: $both — these must be equal." >> $GITHUB_STEP_SUMMARY
+          echo "zeman / supabase: $both" >> $GITHUB_STEP_SUMMARY
+          echo "Applied migrations missing from the Supabase ledger: **$missing** — this must be 0." >> $GITHUB_STEP_SUMMARY
+          if [ "$missing" != "0" ]; then
+            echo "::error::$missing applied migration(s) are not in the Supabase ledger. A supabase db push would try to run them again."
+            exit 1
+          fi
 
       - name: Say what the database looks like now
         if: ${{ !inputs.dry_run }}
