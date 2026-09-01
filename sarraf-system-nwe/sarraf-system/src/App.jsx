@@ -1678,13 +1678,43 @@ export default function App() {
         invTotal[c] = (invTotal[c] || 0) + (Number(v) || 0);
       }));
 
+      // The owner's safe, asked for directly rather than derived.
+      //
+      // This used to be `phys − Σ partner`: the total holding of a currency minus what partners
+      // held. A residual, and anything the ledger could not describe fell into it — money at an
+      // office, money in a bank account — because until 202609010011 and 202609010012 there was
+      // no column that could say otherwise. That is why a cashbox could read a number nobody
+      // could account for.
+      //
+      // owner_safe_by_currency is the rows that name no partner, no office and no account. The
+      // subtraction is kept as the fallback for a snapshot taken before 202609010014, where it
+      // is still the best answer available.
+      const safe = rm.owner_safe_by_currency;
       const atMe = {};
       for (const c of data.currencies) {
-        const atP = Object.values(partner).reduce((s,m) => s + (m[c.id] || 0),0);
-        atMe[c.id] = (phys[c.id] || 0) - atP;
+        if (safe && Object.prototype.hasOwnProperty.call(safe, c.id)) {
+          atMe[c.id] = Number(safe[c.id]) || 0;
+        } else if (safe) {
+          atMe[c.id] = 0;
+        } else {
+          const atP = Object.values(partner).reduce((s,m) => s + (m[c.id] || 0),0);
+          atMe[c.id] = (phys[c.id] || 0) - atP;
+        }
       }
 
-      return { phys, partner, atMe, invCap, invTotal, selfCap, invPaid, expenses, fees, cust, pending: cust, acctCash, acctDebt };
+      const office = {}, cashAccounts = {};
+      for (const x of (rm.office_balances || [])) {
+        if (!x?.office_id || !x?.cur_id) continue;
+        office[x.office_id] = office[x.office_id] || {};
+        office[x.office_id][x.cur_id] = Number(x.amount) || 0;
+      }
+      for (const x of (rm.cash_account_balances || [])) {
+        if (!x?.cash_account_id || !x?.cur_id) continue;
+        cashAccounts[x.cash_account_id] = cashAccounts[x.cash_account_id] || {};
+        cashAccounts[x.cash_account_id][x.cur_id] = Number(x.amount) || 0;
+      }
+
+      return { phys, partner, office, cashAccounts, atMe, invCap, invTotal, selfCap, invPaid, expenses, fees, cust, pending: cust, acctCash, acctDebt };
     }
 
     const phys = {}, partner = {}, invCap = {}, selfCap = {}, invPaid = {}, expenses = {}, fees = {};

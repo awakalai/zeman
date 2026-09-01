@@ -573,6 +573,72 @@ try {
     if (!held.includes("5000")) throw new Error(`the holdings read ${held}`);
   });
 
+  // ── the cashbox is a balance, not a residual ────────────────────────────────
+  //
+  //   «لە قاسەی خۆم یوان ناقس دەبێت نازانم ئەوە چییە؟»
+  //
+  // It was `phys − Σ partner`, so anything the ledger could not describe fell into it. Now it is
+  // the rows that name no partner, no office and no account. 202609010014.
+  const snapshot = () => JSON.parse(psql("select public.sarraf_read_model_snapshot(30)::text"));
+
+  check("the snapshot answers what is in the owner's safe directly", () => {
+    const rm = snapshot();
+    if (!rm.owner_safe_by_currency) throw new Error("the snapshot does not say what is in the safe");
+    if (!Array.isArray(rm.office_balances)) throw new Error("office holdings are missing");
+    if (!Array.isArray(rm.cash_account_balances)) throw new Error("account balances are missing");
+  });
+
+  check("money at an office is not counted as money in the safe", () => {
+    // The heart of it. Before this, an office holding the owner's money still showed as the
+    // owner's cash, because no column could say otherwise.
+    const before = Number(snapshot().owner_safe_by_currency.usd || 0);
+    psql(`select public.sarraf_office_advance('off-1','USD',1200,
+            'sent to the office for the morning','cmd-oadv-safe-1')`);
+    const after = Number(snapshot().owner_safe_by_currency.usd || 0);
+    if (before - after !== 1200) {
+      throw new Error(`the safe fell by ${before - after}, expected 1200`);
+    }
+    const held = snapshot().office_balances
+      .filter((o) => o.office_id === "off-1" && o.cur_id === "usd")
+      .reduce((sum, o) => sum + Number(o.amount), 0);
+    if (held < 1200) throw new Error(`the office shows ${held}, expected at least 1200`);
+  });
+
+  check("the total holding of a currency is unchanged by moving it", () => {
+    // Sending money to an office does not create or destroy any: the business holds the same
+    // amount, in a different place. physical_by_currency is still the whole of it.
+    const rm = snapshot();
+    const total = Number(rm.physical_by_currency.usd || 0);
+    const safe = Number(rm.owner_safe_by_currency.usd || 0);
+    const atOffices = rm.office_balances.filter((o) => o.cur_id === "usd")
+      .reduce((sum, o) => sum + Number(o.amount), 0);
+    const atPartners = rm.partner_balances.filter((p) => p.cur_id === "usd")
+      .reduce((sum, p) => sum + Number(p.amount), 0);
+    const atAccounts = rm.cash_account_balances.filter((a) => a.cur_id === "usd")
+      .reduce((sum, a) => sum + Number(a.amount), 0);
+    const parts = safe + atOffices + atPartners + atAccounts;
+    if (Math.abs(total - parts) > 0.0000001) {
+      throw new Error(`the whole is ${total} but the places add to ${parts}`);
+    }
+  });
+
+  check("for a currency held nowhere but the safe, the new answer equals the old one", () => {
+    // The reassurance that matters on the day this ships: with no office or account rows for a
+    // currency, the balance and the old residual are the same number, so nothing on screen moves.
+    const rm = snapshot();
+    const safe = Number(rm.owner_safe_by_currency.iqd || 0);
+    const residual = Number(rm.physical_by_currency.iqd || 0)
+      - rm.partner_balances.filter((p) => p.cur_id === "iqd")
+          .reduce((sum, p) => sum + Number(p.amount), 0)
+      - rm.office_balances.filter((o) => o.cur_id === "iqd")
+          .reduce((sum, o) => sum + Number(o.amount), 0)
+      - rm.cash_account_balances.filter((a) => a.cur_id === "iqd")
+          .reduce((sum, a) => sum + Number(a.amount), 0);
+    if (Math.abs(safe - residual) > 0.0000001) {
+      throw new Error(`the safe says ${safe}, the places say ${residual}`);
+    }
+  });
+
   check("the trial balance still reconciles after partner and office activity", () => {
     const out = psql("select (public.sarraf_trial_balance_check()->>'balanced')::text").trim();
     if (out !== "true") throw new Error(psql("select public.sarraf_trial_balance_check()::text"));
