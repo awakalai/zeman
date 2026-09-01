@@ -263,12 +263,49 @@ select c.relname as "table",
 \echo '════════ 8. ئەکاونتەکان و MFA ════════'
 \echo ''
 
+-- auth.mfa_factors is Supabase's own table. A database that does not have it — a disposable
+-- fixture, a plain PostgreSQL — is not a database with no MFA; it is one where the question
+-- cannot be asked. Those are different answers and this says which one it is giving.
+select (to_regclass('auth.mfa_factors') is not null) as mfa_known \gset
+
+\if :mfa_known
+-- The app sends every admin and every office through MfaGate, which enrols a factor if there is
+-- none and challenges it if there is — so for those two ranks a verified factor is not optional.
+-- This is where that claim is either true on the live database or is not.
 select coalesce(u.admin_level, u.role) as "rank", u.tenant_id as "business",
        count(*) as "how many",
        count(*) filter (where exists (
-         select 1 from auth.users a where a.id = u.auth_id)) as "has a login"
+         select 1 from auth.users a where a.id = u.auth_id)) as "has a login",
+       count(*) filter (where exists (
+         select 1 from auth.mfa_factors f
+          where f.user_id = u.auth_id and f.status = 'verified')) as "has MFA",
+       case when coalesce(u.admin_level, u.role) in ('manager','owner','operator','admin','office')
+            then 'MFA پێویستە' else 'ئارەزوومەندانە' end as "is MFA required"
   from public.app_users u where not u.deleted
  group by 1, 2 order by 1, 2;
+
+\echo ''
+\echo '════════ ٨.b ئەکاونتێکی پارێزراو بێ MFA ════════'
+\echo '   پێویستە: بەتاڵ — ئەدمین و نووسینگە ناتوانن بێ فاکتەرێک بچنە ژوورەوە'
+\echo ''
+
+select u.id as "account", u.name, coalesce(u.admin_level, u.role) as "rank",
+       u.tenant_id as "business"
+  from public.app_users u
+ where not u.deleted
+   and coalesce(u.admin_level, u.role) in ('manager','owner','operator','admin','office')
+   and u.auth_id is not null
+   and not exists (select 1 from auth.mfa_factors f
+                    where f.user_id = u.auth_id and f.status = 'verified')
+ order by 3, 1;
+\else
+\echo '   auth.mfa_factors لەم داتابەیسەدا نییە — ئەم پرسیارە نەکرا (ئەمە وەڵامی «هیچ» نییە)'
+select coalesce(u.admin_level, u.role) as "rank", u.tenant_id as "business",
+       count(*) as "how many",
+       count(*) filter (where u.auth_id is not null) as "has a login"
+  from public.app_users u where not u.deleted
+ group by 1, 2 order by 1, 2;
+\endif
 
 \echo ''
 \echo '════════ 9. ژمارەکانی کار ════════'

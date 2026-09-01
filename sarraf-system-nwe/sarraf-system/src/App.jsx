@@ -2386,10 +2386,15 @@ export default function App() {
   };
 
   const createUser = (f) => run(async () => {
-    // Eight, not twelve. Twelve was chosen here and nowhere else — Supabase itself accepts six —
-    // so the only thing it achieved was refusing passwords the owner had already decided on.
-    if (!f.name || !f.phone || !f.password || f.password.length < 8) {
-      flash("ناو، ژمارە، و وشەی نهێنی (لانیکەم ٨ پیت) پێویستن");
+    // Twelve, and the same twelve the server applies — api/_password.js is the one place the
+    // rule is written. It used to be eight here and eight on the server while the label said
+    // twelve, so the number a person read and the number that was checked were different.
+    //
+    // This check is only so the refusal arrives without a round trip. The server's is the one
+    // that matters, and it says more than a length: a password that is the account's own phone
+    // number, or one of the strings that get tried first, is refused there with its own reason.
+    if (!f.name || !f.phone || !f.password || f.password.length < 12) {
+      flash(tr("ناو، ژمارە، و وشەی نهێنی (لانیکەم ١٢ پیت) پێویستن"));
       return false;
     }
     await adminUserRequest({
@@ -9700,7 +9705,7 @@ function UsersAdmin({ data, cur, createUser, deleteUser, setUserRate, flash, isO
             </div>
           )}
           <div><Lbl>{tr("ژمارەی مۆبایل * (لۆگین)")}</Lbl><Inp type="tel" dir="ltr" value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} placeholder="07701234567" /></div>
-          <div><Lbl>{tr("وشەی نهێنی * (لانیکەم ٨ پیت)")}</Lbl><Inp type="password" dir="ltr" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} placeholder="••••••" /></div>
+          <div><Lbl>{tr("وشەی نهێنی * (لانیکەم ١٢ پیت)")}</Lbl><Inp type="password" dir="ltr" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} placeholder="••••••" /></div>
           <div><Lbl>{tr("ناونیشان")}</Lbl><Inp value={f.address} onChange={(e) => setF({ ...f, address: e.target.value })} /></div>
           <div><Lbl>{tr("تێبینی")}</Lbl><Inp value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} /></div>
         </div>

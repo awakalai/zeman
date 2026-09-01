@@ -1,4 +1,5 @@
 import { limitSubject, refuseIfOverLimit } from "./_rate-limit.js";
+import { judgePassword } from "./_password.js";
 
 // User administration is rare and deliberate; a burst of it is not.
 const ADMIN_LIMIT = Number(process.env.ADMIN_RATE_LIMIT || 20);
@@ -348,8 +349,15 @@ export default async function handler(req, res) {
       const address = safeText(body.address, 300);
       const note = safeText(body.note, 1000);
 
-      if (!name || phone.length < 7 || password.length < 8 || !ROLE_SET.has(role)) {
+      if (!name || phone.length < 7 || !ROLE_SET.has(role)) {
         return res.status(400).json({ error: "زانیاریی ئەکاونتەکە تەواو یان دروست نییە" });
+      }
+      // Judged on its own, and said on its own. Folding this into the line above returned
+      // "the account details are wrong" for a password that was merely short, which is a
+      // refusal the person setting it has to guess their way past.
+      const verdict = judgePassword(password, { phone, name });
+      if (!verdict.ok) {
+        return res.status(400).json({ error: verdict.error, code: verdict.code });
       }
       if (!Number.isFinite(rate) || rate < 0 || rate > 100) {
         return res.status(400).json({ error: "ڕێژە دەبێت لە نێوان ٠ تا ١٠٠ بێت" });
@@ -503,12 +511,15 @@ export default async function handler(req, res) {
     if (action === "reset_password") {
       const userId = String(body.userId || "").trim();
       const password = String(body.password || "");
-      // The message said twelve and the check said eight. Whichever number is right, a screen
-      // that is told one rule while the server applies another reads as the system being broken.
-      // Both say eight; raising the policy is its own change, with the interface and all three
-      // languages moved together.
-      if (!userId || password.length < 8) {
-        return res.status(400).json({ error: "userId و وشەی نهێنیی لانیکەم ٨ پیت پێویستن", code: "password_too_short" });
+      if (!userId) {
+        return res.status(400).json({ error: "userId پێویستە", code: "user_id_required" });
+      }
+      // The same judgement `create` applies. It used to be a bare `length < 8` here while the
+      // message said twelve — a screen told one rule while the server applied another, which
+      // reads to the person setting the password as the system being broken.
+      const verdict = judgePassword(password);
+      if (!verdict.ok) {
+        return res.status(400).json({ error: verdict.error, code: verdict.code });
       }
 
       const decision = await authorizeTarget(service, actor, userId, {
