@@ -40,8 +40,24 @@ const COPY = {
       adjustment: "Adjustment", reversal: "Reversal",
     },
   },
+  ar: {
+    title: "صندوق العميل", subtitle: "أموال العملاء المحفوظة لدى زيمان — التزام، وليست إيرادًا أبدًا",
+    customer: "العميل", currency: "العملة", amount: "المبلغ", rate: "سعر اليوم (١ دولار = ؟)",
+    reason: "السبب", deposit: "إيداع", withdraw: "سحب", settle: "سداد دين من الصندوق",
+    available: "المتاح", statement: "كشف الحساب", empty: "لا توجد حركات",
+    pick: "اختر عميلًا", refresh: "تحديث", working: "جارٍ التنفيذ…",
+    preview: "معاينة السداد", noDebt: "لا يوجد دين مفتوح بهذه العملة",
+    willSettle: "سيُطبَّق هذا المبلغ على:", loading: "جارٍ التحميل…",
+    rateNeeded: "سعر اليوم مطلوب للتقييم بالدولار",
+    kinds: {
+      deposit: "إيداع", withdrawal: "سحب", transaction_reserve: "محجوز",
+      transaction_release: "مُفرَج عنه", transaction_settlement: "مُسوَّى",
+      apply_to_customer_debt: "إلى الدين", credit_from_zeman_debt: "من دين زيمان",
+      adjustment: "تسوية", reversal: "عكس",
+    },
+  },
 };
-COPY.ar = COPY.en;
+
 const localeKey = (lang) => (lang === "en" ? "en" : lang === "ar" ? "ar" : "ku");
 const money = (n) => Number(n || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 

@@ -150,6 +150,28 @@ const TABLE_OPENS = /^\s*(?:ku|en|ar)\s*:\s*\{/;
 const ARM = (lang) => new RegExp(`^\\s*${lang}\\s*:\\s*\\{`, "m");
 const depthOf = (line) => (line.match(/\{/g) || []).length - (line.match(/\}/g) || []).length;
 
+// A screen may not pretend to be translated.
+//
+// Seven of them did. `COPY.en = COPY.ku` and `COPY.ar = COPY.en` each look like a translation
+// table with three arms and are one arm with two names — so the ratchet below skipped the whole
+// file as "already translated", and an English reader opening the receipt review workspace got
+// Kurdish. The alias is the exact shape that hides itself from the check meant to catch it.
+//
+// Every screen now has three real arms. This is what stops the eighth.
+const aliased = [];
+for (const file of files.sort()) {
+  const text = readFileSync(file, "utf8");
+  for (const match of text.matchAll(/^\s*(\w+)\.(ku|en|ar)\s*=\s*\1\.(ku|en|ar)\s*;/gm)) {
+    aliased.push(`${file}: ${match[1]}.${match[2]} = ${match[1]}.${match[3]}`);
+  }
+}
+if (aliased.length) {
+  console.log("A translation table cannot be an alias of another arm:");
+  for (const line of aliased) console.log(`  ${line}`);
+  console.log("\nEach language needs its own words. An alias reads as three arms and is one.");
+  process.exit(1);
+}
+
 const counts = {};
 for (const file of files.sort()) {
   const text = readFileSync(file, "utf8");

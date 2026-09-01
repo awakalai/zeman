@@ -45,8 +45,21 @@ const COPY = {
     hint: `At least ${PASSWORD_MIN} characters. Never shown again after sending.`,
     lastManager: "The last manager",
   },
+  ar: {
+    title: "مركز المدير",
+    subtitle: "الرتب وكلمات المرور — للمدير فقط",
+    ranks: "الرتب", people: "الأشخاص",
+    rank: "الرتبة", name: "الاسم", account: "الحساب", change: "تغيير",
+    password: "كلمة مرور جديدة", reset: "تعيين كلمة المرور",
+    working: "جارٍ التنفيذ…", refresh: "تحديث",
+    failed: "تعذّر تنفيذ ذلك", done: "تم ✓",
+    pick: "اختر شخصًا",
+    notManager: "هذا القسم للمدير فقط",
+    hint: `${PASSWORD_MIN} حرفًا على الأقل. لا تُعرض مرة أخرى بعد الإرسال.`,
+    lastManager: "آخر مدير",
+  },
 };
-COPY.ar = COPY.en;
+
 const localeKey = (lang) => (lang === "en" ? "en" : lang === "ar" ? "ar" : "ku");
 
 export function ManagerCenter({ users = [], profile, lang = "ku", request, flash = () => {}, onDone }) {
