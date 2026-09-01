@@ -517,6 +517,128 @@ try {
     if (!out.replace(/\s/g,"").includes('"status":"confirmed"')) throw new Error(out);
   });
 
+  // ── the owner sends the money to the office first ───────────────────────────
+  //
+  //   «بەڵێ، پارە لە قاسەی من دەچێتە لای نووسینگە»
+  //
+  // Two events, in the owner's order: the safe funds the office, then the office pays a customer
+  // out of what it is holding and both balances go to zero. 202609010013.
+  const officeHolds = (office, cur) => Number(psql(
+    `select coalesce(sum(amount),0)::text from public.ledger
+      where office_id='${office}' and cur_id='${cur}'`).trim());
+  const safeHolds = (cur) => Number(psql(
+    `select coalesce(sum(amount),0)::text from public.ledger
+      where cur_id='${cur}' and partner_id is null and office_id is null`).trim());
+
+  check("the owner cannot send an office money the safe does not hold", () => {
+    let refused = false;
+    try {
+      psql(`select public.sarraf_office_advance('off-1','USD',999999999,
+              'more than the safe holds','cmd-oadv-too-much')`);
+    } catch { refused = true; }
+    if (!refused) throw new Error("the safe paid out more than it holds");
+  });
+
+  check("an advance moves money out of the safe and into the office", () => {
+    const safeBefore = safeHolds("usd");
+    const heldBefore = officeHolds("off-1", "usd");
+    psql(`select public.sarraf_office_advance('off-1','USD',5000,
+            'funding the office for tomorrow','cmd-oadv-1')`);
+    const moved = safeBefore - safeHolds("usd");
+    const gained = officeHolds("off-1", "usd") - heldBefore;
+    if (moved !== 5000) throw new Error(`the safe fell by ${moved}, expected 5000`);
+    if (gained !== 5000) throw new Error(`the office gained ${gained}, expected 5000`);
+    // The business holds the same money in total; it is simply somewhere else.
+    const pair = psql(`select string_agg(account_id||':'||side,',' order by line_no)
+      from journal_lines
+      where entry_id = (select id from journal_entries
+                         where source_type='office_advance'
+                         order by posted_at desc limit 1)`).trim();
+    if (pair !== "acc-1300:debit,acc-1000:credit") throw new Error(`the advance posted ${pair}`);
+  });
+
+  check("pressing the same advance twice sends the money once", () => {
+    const before = officeHolds("off-1", "usd");
+    const again = psql(`select public.sarraf_office_advance('off-1','USD',5000,
+      'funding the office for tomorrow','cmd-oadv-1')::text`);
+    if (!again.includes('"replayed" : true') && !again.includes('"replayed": true')) {
+      throw new Error(`the repeat was not a replay: ${again.slice(0, 200)}`);
+    }
+    if (officeHolds("off-1", "usd") !== before) throw new Error("a repeat sent the money twice");
+  });
+
+  check("what each office is holding can be read in one place", () => {
+    const held = psql(`select coalesce(string_agg(office_name||':'||holding::text,','),'<none>')
+      from public.sarraf_office_holdings('off-1') where cur_id='usd'`).trim();
+    if (!held.includes("5000")) throw new Error(`the holdings read ${held}`);
+  });
+
+  // ── the cashbox is a balance, not a residual ────────────────────────────────
+  //
+  //   «لە قاسەی خۆم یوان ناقس دەبێت نازانم ئەوە چییە؟»
+  //
+  // It was `phys − Σ partner`, so anything the ledger could not describe fell into it. Now it is
+  // the rows that name no partner, no office and no account. 202609010014.
+  const snapshot = () => JSON.parse(psql("select public.sarraf_read_model_snapshot(30)::text"));
+
+  check("the snapshot answers what is in the owner's safe directly", () => {
+    const rm = snapshot();
+    if (!rm.owner_safe_by_currency) throw new Error("the snapshot does not say what is in the safe");
+    if (!Array.isArray(rm.office_balances)) throw new Error("office holdings are missing");
+    if (!Array.isArray(rm.cash_account_balances)) throw new Error("account balances are missing");
+  });
+
+  check("money at an office is not counted as money in the safe", () => {
+    // The heart of it. Before this, an office holding the owner's money still showed as the
+    // owner's cash, because no column could say otherwise.
+    const before = Number(snapshot().owner_safe_by_currency.usd || 0);
+    psql(`select public.sarraf_office_advance('off-1','USD',1200,
+            'sent to the office for the morning','cmd-oadv-safe-1')`);
+    const after = Number(snapshot().owner_safe_by_currency.usd || 0);
+    if (before - after !== 1200) {
+      throw new Error(`the safe fell by ${before - after}, expected 1200`);
+    }
+    const held = snapshot().office_balances
+      .filter((o) => o.office_id === "off-1" && o.cur_id === "usd")
+      .reduce((sum, o) => sum + Number(o.amount), 0);
+    if (held < 1200) throw new Error(`the office shows ${held}, expected at least 1200`);
+  });
+
+  check("the total holding of a currency is unchanged by moving it", () => {
+    // Sending money to an office does not create or destroy any: the business holds the same
+    // amount, in a different place. physical_by_currency is still the whole of it.
+    const rm = snapshot();
+    const total = Number(rm.physical_by_currency.usd || 0);
+    const safe = Number(rm.owner_safe_by_currency.usd || 0);
+    const atOffices = rm.office_balances.filter((o) => o.cur_id === "usd")
+      .reduce((sum, o) => sum + Number(o.amount), 0);
+    const atPartners = rm.partner_balances.filter((p) => p.cur_id === "usd")
+      .reduce((sum, p) => sum + Number(p.amount), 0);
+    const atAccounts = rm.cash_account_balances.filter((a) => a.cur_id === "usd")
+      .reduce((sum, a) => sum + Number(a.amount), 0);
+    const parts = safe + atOffices + atPartners + atAccounts;
+    if (Math.abs(total - parts) > 0.0000001) {
+      throw new Error(`the whole is ${total} but the places add to ${parts}`);
+    }
+  });
+
+  check("for a currency held nowhere but the safe, the new answer equals the old one", () => {
+    // The reassurance that matters on the day this ships: with no office or account rows for a
+    // currency, the balance and the old residual are the same number, so nothing on screen moves.
+    const rm = snapshot();
+    const safe = Number(rm.owner_safe_by_currency.iqd || 0);
+    const residual = Number(rm.physical_by_currency.iqd || 0)
+      - rm.partner_balances.filter((p) => p.cur_id === "iqd")
+          .reduce((sum, p) => sum + Number(p.amount), 0)
+      - rm.office_balances.filter((o) => o.cur_id === "iqd")
+          .reduce((sum, o) => sum + Number(o.amount), 0)
+      - rm.cash_account_balances.filter((a) => a.cur_id === "iqd")
+          .reduce((sum, a) => sum + Number(a.amount), 0);
+    if (Math.abs(safe - residual) > 0.0000001) {
+      throw new Error(`the safe says ${safe}, the places say ${residual}`);
+    }
+  });
+
   check("the trial balance still reconciles after partner and office activity", () => {
     const out = psql("select (public.sarraf_trial_balance_check()->>'balanced')::text").trim();
     if (out !== "true") throw new Error(psql("select public.sarraf_trial_balance_check()::text"));
