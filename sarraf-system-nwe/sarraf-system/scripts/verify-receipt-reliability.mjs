@@ -100,21 +100,39 @@ try {
     }
   });
 
-  check("a document cannot point at a batch that does not exist", () => {
-    if (!refused(`insert into public.receipt_documents(id,flow,state,batch_id,uploader_id,
-                    storage_path,tenant_id)
-                  values ('rd-ghost','customer_sells_to_zeman','created','no-such-batch',
-                          'rl-cus','ingest/x/rd-ghost.jpg','t-sarkhel')`,
-                 `public.receipt_documents where id='rd-ghost'`)) {
-      throw new Error("a document was stored against a batch that does not exist");
-    }
+  // Two different things are called a batch, and the first version of this file did not know it.
+  //
+  //   receipt_batches.id       — a batch the administrator reviews, with totals and a decision
+  //   receipt_documents.batch_id — the grouping the uploader's browser made when several images
+  //                                were sent together, and what the storage path is built from
+  //
+  // This asserted that the second must name a row of the first. The live database answered that
+  // 64 of its 108 documents were in breach; they were not, the invariant was. A foreign key
+  // added on that reasoning would have refused every upload from the moment it was applied.
+  //
+  // What is actually true, and worth holding: the grouping is what the evidence is filed under,
+  // so a document's stored object must live under its own grouping. A document whose path says
+  // one grouping and whose column says another is evidence filed where nobody will look for it.
+  check("a document's evidence is filed under the grouping it names", () => {
+    const misfiled = one(`
+      select coalesce(string_agg(d.id, ', '), '')
+        from public.receipt_documents d
+       where d.batch_id is not null
+         and d.storage_path is not null
+         and d.storage_path not like ('%/' || d.batch_id || '/%')`);
+    if (misfiled) throw new Error(`filed under a different grouping: ${misfiled}`);
   });
 
-  check("no document in the database points at a batch that is gone", () => {
-    const orphans = num(`select count(*) from public.receipt_documents d
-                          where d.batch_id is not null
-                            and not exists (select 1 from public.receipt_batches b where b.id = d.batch_id)`);
-    if (orphans) throw new Error(`${orphans} document(s) name a batch that no longer exists`);
+  // And where the grouping does happen to name a reviewable batch, the two must be the same
+  // business. This is the crossing that would matter; the namespaces overlapping is not.
+  check("a grouping that names a reviewable batch names one in the same business", () => {
+    const across = one(`
+      select coalesce(string_agg(d.id, ', '), '')
+        from public.receipt_documents d
+        join public.receipt_batches b on b.id = d.batch_id
+       where d.tenant_id is not null and b.tenant_id is not null
+         and d.tenant_id <> b.tenant_id`);
+    if (across) throw new Error(`a document is grouped under another business's batch: ${across}`);
   });
 
   check("no receipt in the database points at a batch that is gone", () => {
@@ -215,6 +233,8 @@ try {
   });
 
   check("two documents cannot claim the same stored object", () => {
+    // No constraint existed at all until 202609010004. The live database had no duplicates when
+    // asked, which is what made adding the index safe rather than a gamble.
     if (!refused(`insert into public.receipt_documents(id,flow,state,batch_id,uploader_id,
                     storage_path,tenant_id)
                   values ('rd-dup-3','customer_sells_to_zeman','created','rb-dup','rl-cus',
