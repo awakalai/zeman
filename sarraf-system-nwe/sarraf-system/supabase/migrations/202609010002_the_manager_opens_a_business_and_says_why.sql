@@ -69,10 +69,20 @@ grant select on public.manager_support_sessions to authenticated;
 
 -- The owner of the business sees every context opened against them. The manager sees their own.
 -- Nobody writes through the table; the commands below are the only way a row appears.
+--
+-- Written as two scalar subqueries and a column comparison rather than as
+-- sarraf_tenant_visible(tenant_id). That reads better and is the same answer, but it takes the
+-- row as an argument, so the planner has to call it once per row instead of once per statement —
+-- which is what verify:scale refuses, and rightly: on a table that grows a row every time
+-- anybody opens a business, once-per-row is the shape that is fine at ten rows and is not at ten
+-- thousand. The subqueries are initplans, evaluated once.
 drop policy if exists manager_support_visible on public.manager_support_sessions;
 create policy manager_support_visible on public.manager_support_sessions
   for select to authenticated
-  using (public.sarraf_tenant_visible(tenant_id));
+  using (
+    (select public.sarraf_sees_all_tenants())
+    or (tenant_id is not null and tenant_id = (select public.sarraf_tenant()))
+  );
 
 -- The commands below run as sarraf_definer, which is a member of authenticated and has no
 -- BYPASSRLS — that is the point of it. So the table's own policies have to permit what those
@@ -87,13 +97,13 @@ grant insert, update on public.manager_support_sessions to authenticated;
 drop policy if exists manager_support_own_insert on public.manager_support_sessions;
 create policy manager_support_own_insert on public.manager_support_sessions
   for insert to authenticated
-  with check (manager_id = public.my_app_id() and public.sarraf_sees_all_tenants());
+  with check (manager_id = (select public.my_app_id()) and (select public.sarraf_sees_all_tenants()));
 
 drop policy if exists manager_support_own_close on public.manager_support_sessions;
 create policy manager_support_own_close on public.manager_support_sessions
   for update to authenticated
-  using (manager_id = public.my_app_id())
-  with check (manager_id = public.my_app_id());
+  using (manager_id = (select public.my_app_id()))
+  with check (manager_id = (select public.my_app_id()));
 
 -- ── opening one ──────────────────────────────────────────────────────────────────────────────
 create or replace function public.sarraf_manager_open_support(
