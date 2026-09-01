@@ -1005,10 +1005,24 @@ try {
   // FORCE is the other half of moving the definer functions to a nobypassrls role. Without it
   // the table's owner is exempt from its own policies, so every function owned by that role
   // reads and writes as though no policy existed.
+  // Three questions, not two.
+  //
+  // The first version of this check asked whether RLS was on and whether FORCE was set, and
+  // stopped there. INSPECT asks a third — is there a RESTRICTIVE policy — and the difference
+  // showed up on the live database rather than here: FORCE went on, and two tables were then
+  // reported as having no restrictive policy at all, one of them a table added in the same
+  // change as this check. A gate that asks two thirds of the question passes work the report
+  // then refuses.
+  //
+  // The third question is the one that lasts. RLS and FORCE say the policies are consulted;
+  // a RESTRICTIVE policy is what stops a permissive policy added next year from widening what
+  // they allow, because restrictive policies are ANDed and permissive ones are ORed.
   check("every table that names a business obeys its own policies", () => {
     const loose = psql(`
       select coalesce(string_agg(c.relname || ' (' ||
-               case when not c.relrowsecurity then 'RLS off' else 'no FORCE' end || ')',
+               case when not c.relrowsecurity then 'RLS off'
+                    when not c.relforcerowsecurity then 'no FORCE'
+                    else 'no restrictive policy' end || ')',
                ', ' order by c.relname), '')
         from pg_class c
         join pg_namespace n on n.oid = c.relnamespace and n.nspname = 'public'
@@ -1016,7 +1030,11 @@ try {
          and exists (select 1 from information_schema.columns col
                       where col.table_schema = 'public' and col.table_name = c.relname
                         and col.column_name = 'tenant_id')
-         and (not c.relrowsecurity or not c.relforcerowsecurity)`).trim();
+         and (not c.relrowsecurity
+              or not c.relforcerowsecurity
+              or not exists (select 1 from pg_policies pp
+                              where pp.schemaname = 'public' and pp.tablename = c.relname
+                                and pp.permissive = 'RESTRICTIVE'))`).trim();
     if (loose) throw new Error(`these can be written past their own policies: ${loose}`);
   });
 
