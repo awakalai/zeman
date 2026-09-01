@@ -61,6 +61,22 @@ itself bound by policies recurses into the table it is being asked about) and th
 calls with its own key and no user attached. The count that matters is **unexplained = 0**, and
 `INSPECT.sql` now reports the three columns separately rather than one bare total.
 
+## 2b. Open owner-round work
+
+A further round of owner requirements is in progress (commission system, owner/office settlement,
+mandatory Order No., bulk receipt export). Two defects the owner reported have been reproduced and
+addressed:
+
+- **Receipt visibility in View As** — fixed and verified. `202609010008`; 9 checks in
+  `verify:isolation`, 6 unit tests.
+- **Negative CNY cashbox** — root cause established and made explainable (`202609010009`). The
+  repair itself is **blocked on owner acceptance** of `ACCOUNTING_MATRIX.md`, because it requires
+  deciding whether `public.ledger` gains a holder dimension.
+
+**`OWNER-DISCOVERY-001` is open** — a transaction workflow awaiting verbal clarification. Nothing
+has been assumed or built for it. While it is open, the system as a whole is not ready for real
+money, regardless of what the gates say. See `ACCOUNTING_MATRIX.md`.
+
 ## 3. Only the owner can do these
 
 None of these can be done from the repository. Each is a real blocker for selling the system.
