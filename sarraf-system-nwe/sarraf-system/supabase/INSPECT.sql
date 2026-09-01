@@ -14,13 +14,42 @@
 
 \echo ''
 \echo '════════ 1. دوو دەفتەری مایگرەیشن ════════'
-\echo '   پێویستە: هەردووکیان هەمان ژمارە — دوو سەرچاوەی جیاوازی ڕاستی مەترسیدارە'
+\echo '   پێویستە: «نییە لە سوپابەیس» = 0'
 \echo ''
 
+-- Yekseni du jimare ne pîvana rast e.
+--
+-- ئەم بەشە پێشتر داوای دەکرد هەردوو دەفتەرەکە هەمان ژمارەیان هەبێت، و ئەوە هەڵە بوو.
+-- ٢٠٢٦-٠٩-٠١ دوای هاوتەریبکردن ژمارەکان بوونە ٩٧ و ١١٢: دەفتەرەکەی Supabase ١٥ وەشانی
+-- تێدایە کە هیچ فایلێکیان لەم ڕیپۆزیتۆرییەدا نییە — بەجێماوی سەردەمی CLI، بە شێوەی
+-- ژمارەی جیاوازەوە.
+--
+-- ئەو ١٥ـە مەترسی نین. مەترسییەکە ئەوە بوو کە وەشانێکی **جێبەجێکراو** لە دەفتەری
+-- Supabaseدا نەبێت، چوونکە `supabase db push` ئەو کاتە هەوڵی دووبارە جێبەجێکردنی دەدات
+-- بەسەر داتابەیسێکدا کە پێشتر هەیەتی. پێچەوانەکەی — تۆمارێک بێ فایل — تەنها نادیدە
+-- دەگیردرێت.
+--
+-- بۆیە پرسیارەکە ئەمەیە، نەک یەکسانیی دوو ژمارە.
 select
   (select count(*) from public.schema_migrations) as "zeman ledger",
   (select count(*) from supabase_migrations.schema_migrations) as "supabase ledger",
+  (select count(*) from public.schema_migrations m
+     where not exists (select 1 from supabase_migrations.schema_migrations s
+                        where s.version = m.version)) as "نییە لە سوپابەیس",
+  (select count(*) from supabase_migrations.schema_migrations s
+     where not exists (select 1 from public.schema_migrations m
+                        where m.version = s.version)) as "بێ فایل، بێ زیان",
   (select max(version) from public.schema_migrations) as "latest applied";
+
+\echo ''
+\echo '   ئەو وەشانانەی لە دەفتەری Supabaseدان و هیچ فایلێکیان نییە:'
+\echo ''
+
+select s.version as "version with no file"
+  from supabase_migrations.schema_migrations s
+ where not exists (select 1 from public.schema_migrations m where m.version = s.version)
+ order by 1
+ limit 40;
 
 \echo ''
 \echo '════════ 2. تەندروستی سیستەم ════════'
