@@ -200,6 +200,44 @@ for (const file of tracked) {
   }
 }
 
+// ── a report must not need a session to run ─────────────────────────────────
+//
+// INSPECT.sql is executed by the inspect workflow over a plain postgres connection with no
+// signed-in user. A section that calls a command guarded by sarraf_require_admin therefore stops
+// with "not authorized" — and because psql runs the file top to bottom, everything after that
+// section is lost too. That happened: a section added to explain the owner's cashbox took the
+// whole report down with it, and the local fixture did not catch it because the fixture
+// overrides auth.uid() to name a real administrator.
+//
+// So: whichever sarraf_* functions INSPECT calls, none of them may ask who the caller is.
+{
+  const inspect = text("supabase/INSPECT.sql");
+  const allMigrations = migrations.map((file) => text(`supabase/migrations/${file}`)).join("\n");
+  // Every function this report calls, by name.
+  const called = new Set(
+    [...inspect.matchAll(/\bpublic\.(sarraf_[a-z0-9_]+)\s*\(/g)].map((m) => m[1]));
+  const guarded = [];
+  for (const name of called) {
+    // The function's own body: from its CREATE to the next CREATE, so a later function's guard
+    // is not read as this one's.
+    //
+    // "create or replace function", not just "function": the first version of this searched for
+    // the latter and found `alter function public.<name>(...) owner to sarraf_definer` at the
+    // end of the migration instead. It then read a 150-character body, found no guard, and
+    // passed — a check that measured nothing. Proved by reintroducing the mistake it exists for.
+    const at = allMigrations.lastIndexOf(`create or replace function public.${name}(`);
+    if (at === -1) continue;
+    const next = allMigrations.indexOf("create or replace function", at + 1);
+    const body = allMigrations.slice(at, next === -1 ? allMigrations.length : next);
+    if (/sarraf_require_admin|sarraf_actor\s*\(/.test(body)) guarded.push(name);
+  }
+  if (guarded.length) {
+    fail(`INSPECT.sql calls ${guarded.join(", ")}, which ask who the caller is. `
+       + `The inspect workflow connects with no signed-in user, so the report would stop at `
+       + `"not authorized" and lose every section after it. Write the query in plain SQL instead.`);
+  }
+}
+
 const workflow = text("../../.github/workflows/verify.yml");
 for (const required of ["npm ci", "npm test", "npm run build", "npm run verify:accounting", "npm run verify:roles", "npm audit --audit-level=high"]) {
   if (!workflow.includes(required)) fail(`CI is missing required gate: ${required}`);
