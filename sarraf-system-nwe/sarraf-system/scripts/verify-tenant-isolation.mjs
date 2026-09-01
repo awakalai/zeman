@@ -1366,6 +1366,97 @@ try {
     if (mayCall !== "f") throw new Error("a browser may name any manager and read their context");
   });
 
+  // ── a business that stops paying stops trading ──────────────────────────────
+  //
+  // sarraf_manager_set_tenant_active wrote tenants.active and nothing read it. A business
+  // suspended for not paying went on trading exactly as before — which, for a system that is
+  // sold, made the one commercial control the vendor has into a label.
+  //
+  // Read-only, not locked out: their ledger is the record of their own money, and this system
+  // does not take that away over an unpaid invoice.
+  check("a suspended business cannot open a new transaction", () => {
+    psql(`update public.tenants set active = false where id = 't-watan'`);
+    let refused = "";
+    try {
+      psql(`insert into public.txs(id,code,type,cp_id,cur_id,amount,rate,against_id,total,status,date,tenant_id)
+            values ('tx-suspended',990101,'buy','iso-cust-b','cny',100,1,'usd',100,'pending',current_date,'t-watan')`);
+    } catch (error) { refused = String(error.message || error); }
+    if (!refused) throw new Error("a suspended business opened a transaction");
+    if (!/ڕاگیراوە/.test(refused)) throw new Error(`refused, but for another reason: ${refused.slice(0, 200)}`);
+  });
+
+  check("nor take in a receipt", () => {
+    let refused = false;
+    try {
+      psql(`insert into public.receipt_batches(id,customer_id,customer_name,direction,status,currency,uploaded_by,tenant_id)
+            values ('bat-suspended','iso-b','B','sell','pending','CNY','iso-b','t-watan')`);
+    } catch { refused = true; }
+    if (!refused) throw new Error("a suspended business took in a receipt batch");
+  });
+
+  check("but still reads every one of its own rows", () => {
+    // The whole point of read-only rather than locked out. Their books are theirs.
+    const seen = asUser(B_UID, `select count(*) from public.receipt_batches`).trim();
+    if (Number(seen) < 1) throw new Error("a suspended business could no longer read its own books");
+  });
+
+  check("and a business that is not suspended is untouched", () => {
+    psql(`insert into public.receipt_batches(id,customer_id,customer_name,direction,status,currency,uploaded_by,tenant_id)
+          values ('bat-still-trading','iso-a','A','sell','pending','CNY','iso-a','t-sarkhel')`);
+    const landed = psql(`select count(*) from public.receipt_batches where id='bat-still-trading'`).trim();
+    if (landed !== "1") throw new Error("an active business was stopped as well");
+  });
+
+  check("resuming it lets it trade again", () => {
+    psql(`update public.tenants set active = true where id = 't-watan'`);
+    psql(`insert into public.receipt_batches(id,customer_id,customer_name,direction,status,currency,uploaded_by,tenant_id)
+          values ('bat-resumed','iso-b','B','sell','pending','CNY','iso-b','t-watan')`);
+    const landed = psql(`select count(*) from public.receipt_batches where id='bat-resumed'`).trim();
+    if (landed !== "1") throw new Error("a resumed business still could not trade");
+  });
+
+  // ── a new business has somebody who can open it ─────────────────────────────
+  check("opening a business leaves an owner waiting to sign in", () => {
+    const out = JSON.parse(asDefiner(MGR,
+      `select public.sarraf_manager_open_business('t-new','بازرگانیی نوێ','owner@example.com','خاوەنی نوێ')::text`));
+    if (out.id !== "t-new") throw new Error(JSON.stringify(out));
+    const waiting = psql(`select admin_level || ' ' || tenant_id from public.pending_accounts
+                           where email='owner@example.com'`).trim();
+    if (waiting !== "owner t-new") throw new Error(`the pending owner reads ${waiting}`);
+  });
+
+  check("and a business opened after the first inherits the settings in use", () => {
+    // The copy is from whatever business already exists. The first business ever created has
+    // nothing to copy and gets none — which is right, and is why this seeds one first rather
+    // than asserting a copy the fixture could never have made.
+    psql(`insert into public.control_settings(singleton, tenant_id) values (true, 't-sarkhel')
+          on conflict do nothing`);
+    const seeded = psql(`select count(*) from public.control_settings`).trim();
+    if (seeded === "0") { psql("select 1"); throw new Error("no settings row to copy from"); }
+    asDefiner(MGR, `select public.sarraf_manager_open_business('t-third','سێیەم','third@example.com','خاوەنی سێیەم')::text`);
+    const settings = psql(`select count(*) from public.control_settings where tenant_id='t-third'`).trim();
+    if (settings !== "1") throw new Error(`the new business has ${settings} settings row(s)`);
+  });
+
+  check("the same email cannot be promised two businesses", () => {
+    let refused = false;
+    try {
+      asDefiner(MGR, `select public.sarraf_manager_open_business('t-new-2','دووەم','owner@example.com','خاوەن')::text`);
+    } catch { refused = true; }
+    if (!refused) throw new Error("one email was promised two businesses");
+    // And nothing half-made: the second business must not exist either.
+    const made = psql(`select count(*) from public.tenants where id='t-new-2'`).trim();
+    if (made !== "0") throw new Error("a business was created and then left without an owner");
+  });
+
+  check("only the manager opens a business", () => {
+    let refused = false;
+    try {
+      asDefiner(A_UID, `select public.sarraf_manager_open_business('t-nope','نا','x@example.com','ناو')::text`);
+    } catch { refused = true; }
+    if (!refused) throw new Error("a business owner opened a new business");
+  });
+
   // ── and the manager, who is meant to see everything ─────────────────────────
   check("the manager still sees both businesses", () => {
     const mgr = psql(`select coalesce(auth_id::text,'') from public.app_users

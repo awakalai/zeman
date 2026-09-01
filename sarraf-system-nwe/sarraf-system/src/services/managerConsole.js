@@ -11,6 +11,7 @@
  */
 
 const clean = (v) => String(v ?? "").normalize("NFKC").trim();
+const say = (phrase, lang) => phrase[lang === "en" ? "en" : lang === "ar" ? "ar" : "ku"];
 
 export const TENANT_ID_MIN = 3;
 
@@ -35,14 +36,47 @@ export async function loadTenants(client) {
   return data || { tenants: [], total_accounts: 0 };
 }
 
-export async function createTenant(client, { id, name, note = null }) {
-  const objection = tenantIdObjection(id) || tenantNameObjection(name);
+/**
+ * A new customer, in one act.
+ *
+ * createTenant made the business and stopped there: nobody could sign into it, and the manager's
+ * next act was on a different screen. If they forgot, the business sat there looking created and
+ * was unusable. This makes the business, its settings, and the person who will open it.
+ *
+ * No password is created or held anywhere. What is written is a row saying who a login will be;
+ * the owner is invited through Supabase and becomes the owner the first time they arrive.
+ */
+export async function openBusiness(client, { id, name, ownerEmail, ownerName, note = null }) {
+  const objection = tenantIdObjection(id) || tenantNameObjection(name)
+    || ownerEmailObjection(ownerEmail) || ownerNameObjection(ownerName);
   if (objection) throw new Error(objection);
-  const { data, error } = await client.rpc("sarraf_manager_create_tenant", {
-    p_id: clean(id), p_name: clean(name), p_note: clean(note) || null,
+  const { data, error } = await client.rpc("sarraf_manager_open_business", {
+    p_id: clean(id), p_name: clean(name),
+    p_owner_email: clean(ownerEmail).toLowerCase(), p_owner_name: clean(ownerName),
+    p_note: clean(note) || null,
   });
   if (error) throw error;
   return data;
+}
+
+const NEEDS_AN_EMAIL = {
+  ku: "ئیمەیڵی خاوەنەکە پێویستە",
+  en: "The owner's email address is required",
+  ar: "البريد الإلكتروني للمالك مطلوب",
+};
+const NEEDS_AN_OWNER_NAME = {
+  ku: "ناوی خاوەنەکە پێویستە",
+  en: "The owner's name is required",
+  ar: "اسم المالك مطلوب",
+};
+
+export function ownerEmailObjection(email, lang = "ku") {
+  const value = clean(email).toLowerCase();
+  return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(value) ? null : say(NEEDS_AN_EMAIL, lang);
+}
+
+export function ownerNameObjection(name, lang = "ku") {
+  return clean(name).length < 2 ? say(NEEDS_AN_OWNER_NAME, lang) : null;
 }
 
 /**
@@ -136,8 +170,6 @@ export const SUPPORT_REASON_MIN = 8;
  * Arabic reader with a Kurdish sentence at the one moment they are being told they did
  * something wrong.
  */
-const say = (phrase, lang) => phrase[lang === "en" ? "en" : lang === "ar" ? "ar" : "ku"];
-
 const NEEDS_A_REASON = {
   ku: `هۆکارەکە دەبێت لانیکەم ${SUPPORT_REASON_MIN} پیت بێت`,
   en: `The reason must be at least ${SUPPORT_REASON_MIN} characters`,

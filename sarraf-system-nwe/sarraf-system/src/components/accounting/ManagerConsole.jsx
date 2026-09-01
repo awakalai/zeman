@@ -4,9 +4,10 @@ import {
   Unlock, Users,
 } from "lucide-react";
 import {
-  closeSupport, createTenant, currentSupport, healthProblems, loadAllAccounts, loadHealth,
-  loadSupportHistory, loadTenants, openSupport, setTenantActive,
-  supportReasonObjection, tenantIdObjection, tenantNameObjection,
+  closeSupport, currentSupport, healthProblems, loadAllAccounts, loadHealth,
+  loadSupportHistory, loadTenants, openBusiness, openSupport, ownerEmailObjection,
+  ownerNameObjection, setTenantActive, supportReasonObjection, tenantIdObjection,
+  tenantNameObjection,
 } from "../../services/managerConsole.js";
 import { rankName, rankOf } from "../../services/adminRanks.js";
 import "./debt-center.css";
@@ -44,6 +45,7 @@ const COPY = {
     why: "هۆکار", forHowLong: "بۆ چەند خولەک", expires: "بەسەردەچێت",
     opened: "کرایەوە", closed: "داخرا", stillOpen: "کراوەیە", byWhom: "لەلایەن",
     history: "مێژووی پشتگیری", noHistory: "هیچ پشتگیرییەک نەکراوەتەوە",
+    ownerName: "ناوی خاوەن", ownerEmail: "ئیمەیڵی خاوەن", ownerHint: "خاوەنەکە دوای بانگهێشتکردن لە Supabase یەکەم جار کە دەچێتە ژوورەوە دروست دەبێت",
   },
   en: {
     title: "Manager console",
@@ -67,6 +69,7 @@ const COPY = {
     why: "Reason", forHowLong: "For how many minutes", expires: "Expires",
     opened: "Opened", closed: "Closed", stillOpen: "Open", byWhom: "By",
     history: "Support history", noHistory: "No support context has been opened",
+    ownerName: "Owner's name", ownerEmail: "Owner's email", ownerHint: "The owner's account is made the first time they sign in, after you invite them in Supabase",
   },
   ar: {
     title: "لوحة المدير",
@@ -90,6 +93,7 @@ const COPY = {
     why: "السبب", forHowLong: "لكم دقيقة", expires: "ينتهي",
     opened: "فُتح", closed: "أُغلق", stillOpen: "مفتوح", byWhom: "بواسطة",
     history: "سجل الدعم", noHistory: "لم يُفتح أي دعم",
+    ownerName: "اسم المالك", ownerEmail: "بريد المالك", ownerHint: "يُنشأ حساب المالك عند أول تسجيل دخول، بعد دعوته من Supabase",
   },
 };
 COPY.ku.tabs.support = "پشتگیری";
@@ -106,7 +110,7 @@ export function ManagerConsole({ client, lang = "ku", isManager = false, flash =
   const [health, setHealth] = useState(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
-  const [form, setForm] = useState({ id: "", name: "", note: "" });
+  const [form, setForm] = useState({ id: "", name: "", note: "", ownerEmail: "", ownerName: "" });
   const [openTenant, setOpenTenant] = useState(null);
   const [support, setSupport] = useState({ id: "", reason: "", minutes: 120 });
   const [history, setHistory] = useState([]);
@@ -134,19 +138,29 @@ export function ManagerConsole({ client, lang = "ku", isManager = false, flash =
 
   useEffect(() => { if (isManager) load(); }, [isManager, load]);
 
+  // One act, not two. The business used to be created on its own and the owner on a different
+  // screen; a manager who forgot the second step left a business that looked created and could
+  // not be signed into.
   const add = useCallback(async () => {
-    const objection = tenantIdObjection(form.id) || tenantNameObjection(form.name);
+    const lang3 = localeKey(lang);
+    const objection = tenantIdObjection(form.id) || tenantNameObjection(form.name)
+      || ownerEmailObjection(form.ownerEmail, lang3) || ownerNameObjection(form.ownerName, lang3);
     if (objection) { setError(objection); return; }
     setBusy("add"); setError("");
     try {
-      await createTenant(client, form);
-      setForm({ id: "", name: "", note: "" });
-      flash(copy.add + " ✓");
+      const made = await openBusiness(client, {
+        id: form.id, name: form.name, note: form.note,
+        ownerEmail: form.ownerEmail, ownerName: form.ownerName,
+      });
+      setForm({ id: "", name: "", note: "", ownerEmail: "", ownerName: "" });
+      // What is left to do is said here rather than assumed: the owner has no login until
+      // somebody invites them, and nothing in this system can make one.
+      flash(made?.next || `${copy.add} ✓`, true);
       await load();
     } catch (e) {
       setError(errorText(e).slice(0, 200));
     } finally { setBusy(""); }
-  }, [client, form, load, flash, copy.add]);
+  }, [client, form, load, flash, copy.add, lang]);
 
   const toggle = useCallback(async (tenant) => {
     const reason = window.prompt(copy.reason);
@@ -274,12 +288,22 @@ export function ManagerConsole({ client, lang = "ku", isManager = false, flash =
               <input value={form.note} aria-label={copy.note}
                      onChange={(e) => setForm({ ...form, note: e.target.value })} />
             </label>
+            <label>{copy.ownerName}
+              <input value={form.ownerName} aria-label={copy.ownerName}
+                     onChange={(e) => { setForm({ ...form, ownerName: e.target.value }); setError(""); }} />
+            </label>
+            <label>{copy.ownerEmail}
+              <input type="email" value={form.ownerEmail} aria-label={copy.ownerEmail}
+                     style={{ direction: "ltr" }} aria-describedby="owner-email-hint"
+                     onChange={(e) => { setForm({ ...form, ownerEmail: e.target.value }); setError(""); }} />
+            </label>
             <button type="button" className="debt-primary" disabled={busy === "add"} onClick={add}>
               {busy === "add" ? <><Loader2 aria-hidden="true" /> {copy.working}</>
                               : <><Plus aria-hidden="true" /> {copy.add}</>}
             </button>
           </div>
           <p id="tenant-id-hint" className="debt-note">{copy.idHint}</p>
+          <p id="owner-email-hint" className="debt-note">{copy.ownerHint}</p>
         </>
       )}
 

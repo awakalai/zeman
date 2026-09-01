@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
-  createTenant, healthProblems, loadHealth, loadTenants, setTenantActive,
+  healthProblems, loadHealth, loadTenants, openBusiness, setTenantActive,
   tenantIdObjection, tenantNameObjection,
 } from "../src/services/managerConsole.js";
 
@@ -23,9 +23,14 @@ test("a business needs a name", () => {
 });
 
 test("an invalid business is refused before the server is asked", async () => {
+  // createTenant used to be the call here. It made a business and nobody who could sign into
+  // it, so the console now opens a business and its first owner in one act; this holds the same
+  // thing it always held — that an id which cannot be valid never reaches the server.
   let called = false;
   const client = { rpc: async () => { called = true; return { data: {}, error: null }; } };
-  await assert.rejects(() => createTenant(client, { id: "AB", name: "x" }));
+  await assert.rejects(() => openBusiness(client, {
+    id: "AB", name: "x", ownerEmail: "a@b.co", ownerName: "خاوەن",
+  }));
   assert.equal(called, false, "the server was asked about a business that could not be valid");
 });
 
