@@ -411,19 +411,45 @@ select
 \echo '   بۆ هەر دراوێک: ئایا هەرگیز نەرێنی بووە، و یەکەم جوڵە کامە بوو'
 \echo ''
 
--- Uses sarraf_balance_first_negative, shipped in 202609010009. The suspicion this is testing:
--- a normal purchase of an "external" currency is refused unless it names a custody partner, so
--- that money sits in the partner's balance. A DIRECT trade is exempt from that rule and moves
--- money through the owner's cashbox instead. If direct sales of a currency exceed what the owner
--- actually holds, the residual goes negative while the partners' balances stay positive.
+-- Plain SQL on purpose. The first version of this section called
+-- sarraf_balance_first_negative, which asks sarraf_require_admin who the caller is — and this
+-- script connects as postgres with no signed-in user, so it answered "not authorized" and the
+-- whole report stopped there. The local fixture did not catch it because it overrides auth.uid()
+-- to name a real administrator. A report must not need a session to run.
+--
+-- The suspicion being tested, found by reading the command contract: a normal purchase of an
+-- "external" currency is refused unless it names a custody partner, so that money lands in the
+-- partner's balance. Money that names no partner is, by definition, the owner's residual.
+with movements as (
+  select l.cur_id,
+         l.id as ledger_id,
+         coalesce(l.date, l.created_at) as moved_at,
+         l.type::text as entry_type,
+         l.tx_id,
+         sum(l.amount) over (partition by l.cur_id
+                             order by coalesce(l.date, l.created_at), l.id
+                             rows between unbounded preceding and current row) as running
+    from public.ledger l
+   where l.partner_id is null
+), crossings as (
+  select distinct on (cur_id) cur_id, ledger_id, moved_at, entry_type, tx_id, running
+    from movements where running < 0
+   order by cur_id, moved_at, ledger_id
+), finals as (
+  select distinct on (cur_id) cur_id, running as final_balance
+    from movements order by cur_id, moved_at desc, ledger_id desc
+)
 select c.code,
        c.external as "external?",
-       (public.sarraf_balance_first_negative(c.id, 'owner') ->> 'ever_negative') as "ever negative",
-       (public.sarraf_balance_first_negative(c.id, 'owner') ->> 'final_balance') as "owner now",
-       (public.sarraf_balance_first_negative(c.id, 'owner') #>> '{first_negative,ledger_id}') as "first bad row",
-       (public.sarraf_balance_first_negative(c.id, 'owner') #>> '{first_negative,entry_type}') as "type",
-       (public.sarraf_balance_first_negative(c.id, 'owner') #>> '{first_negative,transaction}') as "transaction"
+       coalesce(round(f.final_balance, 4), 0) as "owner now",
+       (x.ledger_id is not null) as "ever negative",
+       x.ledger_id as "first bad row",
+       x.entry_type as "type",
+       x.tx_id as "transaction",
+       round(x.running, 4) as "balance after"
   from public.currencies c
+  left join finals f on f.cur_id = c.id
+  left join crossings x on x.cur_id = c.id
  order by c.code;
 
 \echo ''
