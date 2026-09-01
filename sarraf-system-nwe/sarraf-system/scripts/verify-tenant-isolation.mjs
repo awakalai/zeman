@@ -1002,6 +1002,24 @@ try {
     if (open) throw new Error(`a browser may call these trigger functions: ${open}`);
   });
 
+  // FORCE is the other half of moving the definer functions to a nobypassrls role. Without it
+  // the table's owner is exempt from its own policies, so every function owned by that role
+  // reads and writes as though no policy existed.
+  check("every table that names a business obeys its own policies", () => {
+    const loose = psql(`
+      select coalesce(string_agg(c.relname || ' (' ||
+               case when not c.relrowsecurity then 'RLS off' else 'no FORCE' end || ')',
+               ', ' order by c.relname), '')
+        from pg_class c
+        join pg_namespace n on n.oid = c.relnamespace and n.nspname = 'public'
+       where c.relkind = 'r'
+         and exists (select 1 from information_schema.columns col
+                      where col.table_schema = 'public' and col.table_name = c.relname
+                        and col.column_name = 'tenant_id')
+         and (not c.relrowsecurity or not c.relforcerowsecurity)`).trim();
+    if (loose) throw new Error(`these can be written past their own policies: ${loose}`);
+  });
+
   check("no SECURITY DEFINER function can bypass row-level security", () => {
     const loose = psql(`
       select coalesce(string_agg(p.oid::regprocedure::text || ' (owned by ' || o.rolname || ')',
