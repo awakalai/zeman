@@ -230,6 +230,18 @@ select p.proname as "function", pg_get_userbyid(p.proowner) as "owner"
  order by 1;
 
 \echo ''
+\echo '════════ ٦.c ڕۆڵەکان: کێ لە RLS تێدەپەڕێت ════════'
+\echo '   ئەمە بڕیار دەدات ئایا FORCE زیادکردن بۆ ئەو دوو خشتەیە سەلامەتە'
+\echo ''
+
+select r.rolname as "role", r.rolsuper as "superuser", r.rolbypassrls as "bypasses RLS",
+       r.rolcanlogin as "can sign in"
+  from pg_roles r
+ where r.rolname in ('postgres', 'authenticated', 'anon', 'service_role',
+                     'sarraf_definer', 'supabase_admin', current_user)
+ order by 1;
+
+\echo ''
 \echo '════════ 7. RLS: کام خشتە پارێزراو نییە ════════'
 \echo '   پێویستە: بەتاڵ'
 \echo ''

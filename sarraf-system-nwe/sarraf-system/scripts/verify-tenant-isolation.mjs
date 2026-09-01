@@ -973,6 +973,35 @@ try {
   //
   // This asks the question the ownership move answered once: is there any of them, today, whose
   // owner can ignore a policy?
+  // PostgreSQL grants EXECUTE on every new function to PUBLIC, and PUBLIC includes anon — the
+  // role a browser holds before anybody signs in. 202608310005 closed the nineteen that had it;
+  // this is what stops the twentieth from arriving. A migration that writes
+  // `grant execute ... to authenticated` and nothing else adds a grant without removing the one
+  // that was already there, which is exactly how all nineteen happened.
+  check("nothing a signed-out browser holds can call a command", () => {
+    const open = psql(`
+      select coalesce(string_agg(p.oid::regprocedure::text, ', ' order by p.proname), '')
+        from pg_proc p
+       where p.pronamespace = 'public'::regnamespace
+         and p.prosecdef
+         and has_function_privilege('anon', p.oid, 'execute')`).trim();
+    if (open) throw new Error(`a signed-out browser may call: ${open}`);
+  });
+
+  // A trigger function is run by the trigger mechanism, which checks EXECUTE when the trigger is
+  // created and not when it fires. A grant on one is surface with nothing behind it.
+  check("no trigger function is callable by anybody", () => {
+    const open = psql(`
+      select coalesce(string_agg(p.oid::regprocedure::text, ', ' order by p.proname), '')
+        from pg_proc p
+       where p.pronamespace = 'public'::regnamespace
+         and p.proname like 'sarraf%'
+         and p.prorettype = 'pg_catalog.trigger'::regtype
+         and (has_function_privilege('authenticated', p.oid, 'execute')
+              or has_function_privilege('anon', p.oid, 'execute'))`).trim();
+    if (open) throw new Error(`a browser may call these trigger functions: ${open}`);
+  });
+
   check("no SECURITY DEFINER function can bypass row-level security", () => {
     const loose = psql(`
       select coalesce(string_agg(p.oid::regprocedure::text || ' (owned by ' || o.rolname || ')',
