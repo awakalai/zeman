@@ -97,12 +97,17 @@ try {
   // enforced on the document itself — so a fixture that skips them is refused exactly as a real
   // upload missing them would be.
   const extraction = (doc, fields = {}) => {
+    // refNo is the Order No. — "Order No." on the source image, per api/read-receipt.js. A real
+    // receipt always carries one, and since 202609010010 one without it cannot be accepted,
+    // forwarded or delivered. Passing refNo: null is how a scenario asks for a receipt that has
+    // none, which is a case worth being able to write.
     const f = { amount: 1000, fee: 0, net: 1000, currency: "CNY", payee: "ئەحمەد",
-      date: "2026-08-01", platform: "wechat", hasFee: false, ...fields };
+      date: "2026-08-01", platform: "wechat", hasFee: false, refNo: `ORD-${doc}`, ...fields };
     psql(`insert into public.receipt_extractions(document_id,version,is_original,provider,model,
-            gross_amount,fee_amount,net_amount,currency,payee,tx_date,platform,has_fee)
+            gross_amount,fee_amount,net_amount,currency,payee,tx_date,platform,has_fee,ref_no)
           values ('${doc}',1,true,'verify','flow',${n(f.amount)},${n(f.fee)},${n(f.net)},
-                  '${f.currency}','${f.payee}','${f.date}','${f.platform}',${f.hasFee})`);
+                  '${f.currency}','${f.payee}','${f.date}','${f.platform}',${f.hasFee},
+                  ${f.refNo === null ? "null" : `'${f.refNo}'`})`);
   };
 
   // ── 1 ───────────────────────────────────────────────────────────────────────

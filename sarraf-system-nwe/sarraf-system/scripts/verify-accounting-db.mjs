@@ -564,9 +564,10 @@ try {
   check("the documented happy path walks through every state", () => {
     psql(`insert into public.receipt_extractions(
             document_id,version,is_original,raw,gross_amount,fee_amount,fee_treatment,
-            net_amount,currency,payee,tx_date,confidence,platform,has_fee,transaction_status)
+            net_amount,currency,payee,tx_date,confidence,platform,has_fee,transaction_status,
+            ref_no)
           values ('doc-1',1,true,'{}'::jsonb,100,0,'no_fee',100,'CNY',
-                  'Receipt Customer',current_date,0.99,'wechat',false,'successful')`);
+                  'Receipt Customer',current_date,0.99,'wechat',false,'successful','ORD-DOC-1')`);
     const path = ["uploading","uploaded","ocr_pending","ocr_processing","parsed","validated",
                   "submitted","matched","accepted","finalized","forwarded","delivered"];
     for (const s of path) psql(`update public.receipt_documents set state='${s}' where id='doc-1'`);
@@ -828,9 +829,10 @@ try {
 
     psql(`insert into public.receipt_extractions(
             document_id,version,is_original,raw,gross_amount,fee_amount,fee_treatment,
-            net_amount,currency,payee,tx_date,confidence,platform,has_fee,transaction_status)
+            net_amount,currency,payee,tx_date,confidence,platform,has_fee,transaction_status,
+            ref_no)
           values ('doc-customer-sale',1,true,'{}'::jsonb,100,0,'no_fee',100,'CNY',
-                  'Receipt Customer',current_date,0.99,'alipay',false,'successful')`);
+                  'Receipt Customer',current_date,0.99,'alipay',false,'successful','ORD-CS-1')`);
 
     for (const state of ["uploaded","ocr_pending","ocr_processing","parsed","validated","submitted","matched","accepted","finalized"])
       psql(`update public.receipt_documents set state='${state}' where id='doc-customer-sale'`);
@@ -1174,11 +1176,15 @@ try {
   // A sale receipt, taken through to accepted.
   psql(`insert into public.receipt_documents(id,flow,uploader_id,customer_id,storage_path)
         values ('fw-1','customer_sells_to_zeman','fw-cust','fw-cust','ingest/fw/fw-1.jpg')`);
+  // ref_no is the Order No. — "Order No." on the source image, per api/read-receipt.js. This
+  // fixture used to leave it out and still take the receipt through to accepted, which
+  // 202609010010 now refuses. The fixture was making a receipt the business would not accept,
+  // so the fixture is what was wrong.
   psql(`insert into public.receipt_extractions(
           document_id,version,is_original,raw,gross_amount,fee_amount,fee_treatment,net_amount,
-          currency,payee,tx_date,confidence,platform,has_fee)
+          currency,payee,tx_date,confidence,platform,has_fee,ref_no)
         values ('fw-1',1,true,'{}'::jsonb,100,0,'no_fee',100,
-                'CNY','FW Partner',current_date,0.99,'wechat',false)`);
+                'CNY','FW Partner',current_date,0.99,'wechat',false,'ORD-FW-1')`);
   for (const st of ["uploading","uploaded","ocr_pending","ocr_processing","parsed","validated","submitted","accepted"])
     psql(`update public.receipt_documents set state='${st}' where id='fw-1'`);
   // And one left mid-review, which must never be forwarded.
@@ -1215,9 +1221,9 @@ try {
           values ('fw-3','customer_sells_to_zeman','fw-cust','fw-cust','ingest/fw/fw-3.jpg')`);
     psql(`insert into public.receipt_extractions(
             document_id,version,is_original,raw,gross_amount,fee_amount,fee_treatment,net_amount,
-            currency,payee,tx_date,confidence,platform,has_fee)
+            currency,payee,tx_date,confidence,platform,has_fee,ref_no)
           values ('fw-3',1,true,'{}'::jsonb,100,0,'no_fee',100,
-                  'CNY','FW Partner',current_date,0.99,'wechat',false)`);
+                  'CNY','FW Partner',current_date,0.99,'wechat',false,'ORD-FW-3')`);
     for (const st of ["uploading","uploaded","ocr_pending","ocr_processing","parsed","validated","submitted","accepted"])
       psql(`update public.receipt_documents set state='${st}' where id='fw-3'`);
     const out = psql(`select public.sarraf_forward_receipts('["fw-3"]'::jsonb,'fw-cust',null,
@@ -2634,9 +2640,9 @@ try {
   psql(`insert into public.receipt_documents(id,flow,uploader_id,customer_id,storage_path)
         values ('doc-link','customer_sells_to_zeman','cust-a','cust-a','ingest/link.jpg')`);
   psql(`insert into public.receipt_extractions(document_id,version,is_original,provider,model,
-          gross_amount,fee_amount,net_amount,currency,payee,tx_date,platform,fee_treatment)
+          gross_amount,fee_amount,net_amount,currency,payee,tx_date,platform,fee_treatment,ref_no)
         values ('doc-link',1,true,'verify','link',1000,0,1000,'CNY','ئەحمەد','2026-08-10',
-                'wechat','no_fee')`);
+                'wechat','no_fee','ORD-LINK-1')`);
   psql(`update public.receipts set document_id = 'doc-link' where id = 'r-pa1'`);
 
   check("a receipt reaches the image it was read from", () => {
