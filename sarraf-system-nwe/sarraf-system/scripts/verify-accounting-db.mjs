@@ -3172,6 +3172,110 @@ try {
     if (Number(difference) !== 0) throw new Error(`the books are out by ${difference}`);
   });
 
+  // ── the owner's own example: a service, and the fee for doing it ────────────
+  //
+  //   «تۆ دێیت دەڵێیت یەک ملیۆن ئێف ئای بیم بۆ داخڵ بکە، یەک ملیۆن لە حسابی ئێف ئای بی دەڕوات و
+  //    یەک ملیۆن بۆ قاسە زیاد دەبێت، بەڵام ٣٠٠٠ دینار عمولەت لێ وەردەگرم حەقی ئەو کارە.»
+  //
+  // FIB is the example, not the feature: any account a business holds money in behaves this way.
+  const iqdRate = () => psql(`insert into public.receipt_daily_rates(id,currency,effective_date,
+        rate_value,version,set_by,reason)
+      values ('verify-rate-iqd','IQD',current_date,1310,1,'u-a','verified IQD service rate')
+      on conflict do nothing`);
+
+  const safeIqd = () => Number(psql(
+    `select coalesce(sum(amount),0)::text from public.ledger
+      where cur_id='iqd' and cash_account_id is null`).trim());
+  const inAccount = (id) => Number(psql(
+    `select coalesce(sum(amount),0)::text from public.ledger where cash_account_id='${id}'`).trim());
+  const accountOf = (acc) => Number(psql(
+    `select coalesce(sum(case when side='debit' then amount else -amount end),0)::text
+       from public.journal_lines where account_id='${acc}'`).trim());
+
+  check("a business opens an account for the money it holds at a bank", () => {
+    iqdRate();
+    psql(`select public.sarraf_open_cash_account('fib-1','FIB','iqd','bank','the bank account')`);
+    const seen = psql(`select name||'/'||cur_id from public.cash_accounts where id='fib-1'`).trim();
+    if (seen !== "FIB/iqd") throw new Error(`the account reads ${seen}`);
+  });
+
+  check("money cannot leave an account that does not hold it", () => {
+    // The rule the owner's cashbox never had. An account gets it from its first day.
+    let refused = false;
+    try {
+      psql(`select public.sarraf_service_transaction('svc-empty','fib-1','into_safe',
+              1000000,3000,true,null,'FIB deposit','cmd-svc-empty')`);
+    } catch { refused = true; }
+    if (!refused) throw new Error("an empty account paid out a million");
+  });
+
+  check("one million moves from the account into the safe, and three thousand is earned", () => {
+    // Fund the account first, the way a real deposit would.
+    psql(`insert into public.ledger(id,type,cur_id,amount,cash_account_id,date,tenant_id)
+          values ('led-fib-open','deposit','iqd',1000000,'fib-1',now(),'t-sarkhel')`);
+    const safeBefore = safeIqd();
+    const feeBefore = accountOf("acc-4100");
+
+    const out = JSON.parse(psql(`select public.sarraf_service_transaction('svc-1','fib-1','into_safe',
+      1000000,3000,true,null,'FIB deposit into the safe','cmd-svc-1')::text`));
+
+    if (Number(out.principal) !== 1000000) throw new Error(`principal ${out.principal}`);
+    if (Number(out.commission) !== 3000) throw new Error(`commission ${out.commission}`);
+    // §3.3: the two are never merged into one figure.
+    if (Object.prototype.hasOwnProperty.call(out, "total")) {
+      throw new Error("principal and commission were combined into a total");
+    }
+
+    if (inAccount("fib-1") !== 0) throw new Error(`FIB holds ${inAccount("fib-1")}, expected 0`);
+    // The safe gains the principal and the collected commission, and nothing else.
+    const gained = safeIqd() - safeBefore;
+    if (gained !== 1003000) throw new Error(`the safe gained ${gained}, expected 1003000`);
+    const earned = accountOf("acc-4100") - feeBefore;
+    if (earned !== -3000) throw new Error(`fee income moved ${earned}, expected a 3000 credit`);
+  });
+
+  check("a service touches no inventory, no spread and no purchase or sale profit", () => {
+    // The heart of the requirement: this is not a currency trade.
+    const inv = Number(psql(`select coalesce(sum(case when side='debit' then amount else -amount end),0)::text
+       from public.journal_lines l join public.journal_entries e on e.id=l.entry_id
+      where l.account_id='acc-1400' and e.source_type in ('service','service_commission')`).trim());
+    const spread = Number(psql(`select coalesce(count(*),0)::text
+       from public.journal_lines l join public.journal_entries e on e.id=l.entry_id
+      where l.account_id in ('acc-4000','acc-4900','acc-5900')
+        and e.source_type in ('service','service_commission')`).trim());
+    if (spread !== 0) throw new Error(`a service touched the spread accounts ${spread} time(s)`);
+    // acc-1400 is the other side of the safe here, so it moves — but only by the principal, and
+    // never through a buy or sell command.
+    if (inv !== -1000000) throw new Error(`the account side moved ${inv}, expected -1000000`);
+    const trades = Number(psql(`select count(*)::text from public.txs where id like 'svc-%'`).trim());
+    if (trades !== 0) throw new Error("a service created a buy or sell transaction");
+  });
+
+  check("an uncollected commission is owed rather than counted as cash", () => {
+    psql(`insert into public.ledger(id,type,cur_id,amount,cash_account_id,date,tenant_id)
+          values ('led-fib-open2','deposit','iqd',500000,'fib-1',now(),'t-sarkhel')`);
+    const safeBefore = safeIqd();
+    const dueBefore = accountOf("acc-1200");
+    const out = JSON.parse(psql(`select public.sarraf_service_transaction('svc-2','fib-1','into_safe',
+      500000,2500,false,null,'FIB deposit, fee on account','cmd-svc-2')::text`));
+    if (Number(out.commission_receivable) !== 2500) {
+      throw new Error(`receivable ${out.commission_receivable}`);
+    }
+    // The safe gains only the principal: an uncollected fee is not money in hand.
+    const gained = safeIqd() - safeBefore;
+    if (gained !== 500000) throw new Error(`the safe gained ${gained}, expected only the principal`);
+    const owed = accountOf("acc-1200") - dueBefore;
+    if (owed !== 2500) throw new Error(`the customer owes ${owed}, expected 2500`);
+  });
+
+  check("pressing the same service twice does not charge twice", () => {
+    const before = safeIqd();
+    const again = JSON.parse(psql(`select public.sarraf_service_transaction('svc-1','fib-1','into_safe',
+      1000000,3000,true,null,'FIB deposit into the safe','cmd-svc-1')::text`));
+    if (again.replayed !== true) throw new Error("the repeat was not recognised as a replay");
+    if (safeIqd() !== before) throw new Error("a repeated press moved money a second time");
+  });
+
   check("a second reset cannot empty a system that has since gone live", () => {
     const out = JSON.parse(psql("select public.sarraf_reset_installation()::text"));
     if (out.done !== false) throw new Error(JSON.stringify(out));
