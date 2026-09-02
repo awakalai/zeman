@@ -1843,6 +1843,97 @@ try {
     });
   });
 
+  scenario(25, "a direct trade: the whole spread is the owner's, and nobody is holding it", () => {
+    // The owner named three flows they do every day. Two of them were executed here — the
+    // ordinary trade and the receipt batch — and the third was not:
+    //
+    //   «مامەڵەی ڕاستەوخۆ ( خێر ٪١٠٠ بۆخۆم و لای کەس هەڵناگیرێ )»
+    //
+    // The accounting gate does check that a direct pair is labelled `owner_cashbox`, but it
+    // does that by inserting two rows into public.txs by hand. That proves the label and
+    // nothing about the money: it never runs the owner's command, never asks what the profit
+    // came to, and never asks the question the sentence is actually about — whether anybody
+    // is left holding the currency afterwards.
+    //
+    // Both halves are checked below, from the command down to the ledger.
+    const j2 = (sql) => JSON.parse(psql(`select (${sql})::text`));
+    // Bought at 0.13888889 and sold at 0.14, on 7,200 CNY: 1,000.00 out, 1,008.00 back.
+    const pair = (id) => `{"id":"${id}","type":"%TYPE%","cp_id":"cus","cur_id":"cny",
+      "amount":7200,"rate":%RATE%,"against_id":"usd","total":%TOTAL%,
+      "direct":true,"pair_id":"pair-f25","direct_role":"%TYPE%","own_money":true,
+      "status":"completed","date":"2026-08-20T10:00:00Z"}`;
+    const buy = pair("f25-buy").replace(/%TYPE%/g, "buy").replace("%RATE%", "0.13888889").replace("%TOTAL%", "1000.00");
+    const sell = pair("f25-sell").replace(/%TYPE%/g, "sell").replace("%RATE%", "0.14").replace("%TOTAL%", "1008.00");
+
+    step("a direct trade must arrive as a pair, or not at all", () => {
+      be("admin");
+      // One leg alone is a half-finished trade, and the money would be genuinely lost: the
+      // buy leaves the cashbox and nothing brings it back.
+      if (!refused(`select public.sarraf_commit_transactions('[${buy}]'::jsonb,'[]'::jsonb,
+        null,'flow-25-half','مامەڵەی ڕاستەوخۆ','نیوەی جووتەکە')`)) {
+        throw new Error("one leg of a direct pair was accepted on its own");
+      }
+      // And it must be the owner's own money with nobody named. A partner on a direct trade
+      // is the contradiction the owner's sentence rules out: «لای کەس هەڵناگیرێ».
+      const withPartner = sell.replace('"own_money":true', '"own_money":true,"partner_id":"par"');
+      if (!refused(`select public.sarraf_commit_transactions('[${buy},${withPartner}]'::jsonb,'[]'::jsonb,
+        null,'flow-25-partner','مامەڵەی ڕاستەوخۆ','هاوبەشێک لەسەر ڕاستەوخۆ')`)) {
+        throw new Error("a direct trade was accepted with a partner holding it");
+      }
+    });
+
+    step("the owner makes the trade in one command", () => {
+      const out = j2(`public.sarraf_commit_transactions('[${buy},${sell}]'::jsonb,'[]'::jsonb,
+        null,'flow-25-pair','مامەڵەی ڕاستەوخۆ','کڕین و فرۆشتن لە یەک کاتدا')`);
+      if (!Array.isArray(out.transactions) || out.transactions.length !== 2) {
+        throw new Error(`the command returned ${JSON.stringify(out).slice(0, 160)}`);
+      }
+      eq(psql(`select count(*) from public.txs where pair_id='pair-f25'
+               and business_flow='owner_cashbox' and direct and own_money
+               and partner_id is null`).trim(), "2", "both legs are owner-cashbox, owned, unheld");
+    });
+
+    step("the whole spread is the owner's, with nothing taken out of it", () => {
+      // 1,008.00 back against 1,000.00 out. A partner-held trade would have had the partner's
+      // rate deducted here; a direct trade has no such deduction anywhere in the command, and
+      // this is the assertion that says so in money rather than in a label.
+      eq(psql(`select profit||'|'||profit_cur_id from public.txs where id='f25-sell'`).trim(),
+        "8.0000000000|usd", "the profit on the sell leg");
+      // The buy leg carries no profit of its own — the spread is not counted twice.
+      eq(psql("select coalesce(profit::text,'none') from public.txs where id='f25-buy'").trim(),
+        "none", "the buy leg's profit");
+      eq(psql(`select count(*) from public.ledger
+               where tx_id in ('f25-buy','f25-sell') and type='partner_fee'`).trim(),
+        "0", "commission deducted from a direct trade");
+    });
+
+    step("and nobody is holding it — not a partner, not an office, not an account", () => {
+      // «لای کەس هەڵناگیرێ», read as a fact about the ledger rather than as a promise.
+      eq(psql(`select count(*) from public.ledger where tx_id in ('f25-buy','f25-sell')
+               and (partner_id is not null or office_id is not null
+                    or cash_account_id is not null)`).trim(),
+        "0", "ledger rows for a direct trade naming a holder");
+      // The currency legs cancel: 7,200 in and 7,200 out, so the trade leaves no position
+      // behind in yuan at all.
+      eq(psql(`select coalesce(sum(amount),0) from public.ledger
+               where tx_id in ('f25-buy','f25-sell') and cur_id='cny'`).trim(),
+        "0.0000000000", "the yuan left behind by a direct trade");
+      // And the dollars it made are in the owner's cashbox, held by nobody.
+      eq(psql(`select coalesce(sum(amount),0) from public.ledger
+               where tx_id in ('f25-buy','f25-sell') and cur_id='usd'`).trim(),
+        "8.0000000000", "the dollars a direct trade leaves in the cashbox");
+    });
+
+    step("the books still balance, and no row has two owners", () => {
+      // The same partition INSPECT.sql reads on the live database, asked here of a database
+      // that has just been through all twenty-five flows.
+      eq(psql(`select count(*) from public.ledger
+               where (partner_id is not null)::int + (office_id is not null)::int
+                   + (cash_account_id is not null)::int > 1`).trim(),
+        "0", "ledger rows naming two holders");
+    });
+  });
+
 
   // ── the report ──────────────────────────────────────────────────────────────
   const failed = scenarios.filter((s) => !s.ok);
