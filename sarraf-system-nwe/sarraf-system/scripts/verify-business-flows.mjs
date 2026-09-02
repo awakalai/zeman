@@ -1696,6 +1696,154 @@ try {
     });
   });
 
+  scenario(24, "five receipts, three placed with one partner and two with another", () => {
+    // The owner's own description of the work, in their words:
+    //
+    //   «لەو کۆمەڵەیە ٥ فیش هەیە، ٣ دانەیان دەکەم بە مامەڵەیەک... و لای هاوبەشێک دایبنێم و
+    //    وردەکارییەکانیش بچێت بۆ هاوبەشەکە، ٢ دانەکەی تریش بە هەمان شێوە بەڵام لای هاوبەشێکی تر،
+    //    خۆ ئەشکرێ هەر ٥ی لای ١ هاوبەش دابنێم.»
+    //
+    // Every part of that had a piece somewhere — the command takes a list of receipt ids, and it
+    // recounts what is left — but the whole sentence had never been executed once. In particular
+    // the SECOND conversion is the interesting one: the batch has already been through this, and
+    // if anything about the first pass sticks to the batch, the owner cannot choose a different
+    // partner for the rest. That is the thing this proves, not the arithmetic.
+    const money = (sql) => Number(psql(sql).trim() || 0);
+
+    step("a batch of five accepted receipts, placed with nobody yet", () => {
+      be("admin");
+      psql(`delete from public.receipt_intake_items where batch_id='f24'`);
+      psql(`delete from public.receipt_batch_transactions where batch_id='f24'`);
+      psql(`delete from public.receipt_batches where id='f24'`);
+      psql(`insert into public.app_users(id,name,role,auth_id,tenant_id) values
+              ('par24a','هاوبەشی یەکەم','partner','f2400000-0000-0000-0000-00000000000a','t-sarkhel'),
+              ('par24b','هاوبەشی دووەم','partner','f2400000-0000-0000-0000-00000000000b','t-sarkhel')
+            on conflict (id) do update set tenant_id=excluded.tenant_id`);
+      psql(`update public.currencies set external = true where id='cny'`);
+      psql(`insert into public.receipt_batches(id,customer_id,customer_name,direction,status,currency,
+              uploaded_by,receipt_stage,tenant_id,n)
+            values ('f24','cus','کڕیار','in','new','CNY','cus','verified','t-sarkhel',5)`);
+      // 100, 200, 300 | 400, 500 — chosen so the two transaction totals cannot be confused with
+      // each other or with the batch total.
+      for (const [id, amount] of [["a", 100], ["b", 200], ["c", 300], ["d", 400], ["e", 500]]) {
+        psql(`insert into public.receipt_intake_items(id,batch_id,submitted_by,customer_id,direction,
+                image_path,source_status,intake_status,counted,currency,amount,fee,net_amount,
+                payee,tx_date,platform,has_fee)
+              values ('f24-${id}','f24','cus','cus','in',
+                      'ingest/flow-twentyfour-batch/receipt-f24-${id}.jpg','ok','accepted',true,
+                      'CNY',${amount},0,${amount},'ئەحمەد','2026-08-06','wechat',false)`);
+      }
+      eq(psql(`select count(*) from public.receipt_intake_items
+                where batch_id='f24' and transaction_id is null`).trim(), "5", "receipts free to convert");
+    });
+
+    step("three of the five become one purchase, for exactly their own total", () => {
+      const tx = {
+        id: "f24-tx-a", type: "buy", cur_id: "cny", against_id: "usd",
+        amount: 600, rate: 0.14, total: 84, status: "completed",
+        cp_id: "cus", date: new Date().toISOString(), partner_id: "par24a",
+      };
+      const out = j(`public.sarraf_convert_receipt_batch_to_transaction(
+        'f24'::text, '["f24-a","f24-b","f24-c"]'::jsonb, '${JSON.stringify(tx)}'::jsonb,
+        'سێ فیش بۆ هاوبەشی یەکەم'::text, 'receipt-convert:flow-24-first-partner-a'::text)`);
+      // 100 + 200 + 300, from the server's own count of what it accepted.
+      eq(Number(out.accepted_total), 600, "the total of the three receipts");
+      eq(Number(out.accepted_count), 3, "how many were converted");
+      eq(psql("select coalesce(partner_id,'⟨none⟩') from public.txs where id='f24-tx-a'").trim(),
+        "par24a", "who holds the first three");
+    });
+
+    step("the other two are still free, and the batch is still open", () => {
+      eq(psql(`select count(*) from public.receipt_intake_items
+                where batch_id='f24' and transaction_id is null`).trim(), "2", "receipts still free");
+      // If the batch had closed here, the owner could never place the rest anywhere.
+      eq(psql("select receipt_stage from public.receipt_batches where id='f24'").trim(),
+        "verified", "the batch is still convertible");
+      eq(psql("select status from public.receipt_batches where id='f24'").trim(),
+        "new", "the batch is not finished");
+    });
+
+    step("a receipt already converted cannot be converted a second time", () => {
+      // The owner's fear, stated plainly: «گەر بچێتە سیستەمەوە بە دووبارە حساب دەکرێت.»
+      if (!refused(`select public.sarraf_convert_receipt_batch_to_transaction(
+        'f24'::text, '["f24-a"]'::jsonb,
+        '{"id":"f24-tx-dup","type":"buy","cur_id":"cny","against_id":"usd","amount":100,
+          "rate":0.14,"total":14,"status":"completed","cp_id":"cus","partner_id":"par24a"}'::jsonb,
+        'هەمان فیش دووبارە'::text, 'receipt-convert:flow-24-duplicate-attempt'::text)`)) {
+        throw new Error("a receipt was converted twice and would be counted twice");
+      }
+    });
+
+    step("the remaining two become a second purchase, placed with a DIFFERENT partner", () => {
+      const tx = {
+        id: "f24-tx-b", type: "buy", cur_id: "cny", against_id: "usd",
+        amount: 900, rate: 0.14, total: 126, status: "completed",
+        cp_id: "cus", date: new Date().toISOString(), partner_id: "par24b",
+      };
+      const out = j(`public.sarraf_convert_receipt_batch_to_transaction(
+        'f24'::text, '["f24-d","f24-e"]'::jsonb, '${JSON.stringify(tx)}'::jsonb,
+        'دوو فیش بۆ هاوبەشی دووەم'::text, 'receipt-convert:flow-24-second-partner-b'::text)`);
+      eq(Number(out.accepted_total), 900, "the total of the other two");
+      // The whole point. If the first pass left its partner on the batch, this reads par24a.
+      eq(psql("select coalesce(partner_id,'⟨none⟩') from public.txs where id='f24-tx-b'").trim(),
+        "par24b", "who holds the other two");
+    });
+
+    step("each partner is holding their own receipts and nobody else's", () => {
+      eq(psql(`select string_agg(id, ',' order by id) from public.receipt_intake_items
+                where batch_id='f24' and transaction_id='f24-tx-a'`).trim(),
+        "f24-a,f24-b,f24-c", "the first partner's receipts");
+      eq(psql(`select string_agg(id, ',' order by id) from public.receipt_intake_items
+                where batch_id='f24' and transaction_id='f24-tx-b'`).trim(),
+        "f24-d,f24-e", "the second partner's receipts");
+      // And the money is where the receipts say it is, not pooled.
+      eq(money(`select coalesce(sum(amount),0) from public.ledger
+                 where partner_id='par24a' and cur_id='cny'`), 600, "held by the first partner");
+      eq(money(`select coalesce(sum(amount),0) from public.ledger
+                 where partner_id='par24b' and cur_id='cny'`), 900, "held by the second partner");
+    });
+
+    step("with nothing left, the batch closes itself", () => {
+      eq(psql(`select count(*) from public.receipt_intake_items
+                where batch_id='f24' and transaction_id is null`).trim(), "0", "receipts still free");
+      eq(psql("select status from public.receipt_batches where id='f24'").trim(),
+        "done", "the batch");
+      eq(psql("select receipt_stage from public.receipt_batches where id='f24'").trim(),
+        "matched", "the batch stage");
+    });
+
+    step("each partner may open the batch they are holding money in", () => {
+      // «وردەکارییەکانیش بچێت بۆ هاوبەشەکە» — and the second partner is a partner too.
+      //
+      // sarraf_partner_batch_detail decided the holder with `order by created_at limit 1`, which
+      // is right for a batch that went to one partner and wrong for one that was split. The
+      // second partner — holding 900 of the 1500 — was told "this receipt batch is not yours".
+      const opens = (uid) => {
+        psql(`create or replace function auth.uid() returns uuid language sql stable
+              as $fn$ select '${uid}'::uuid $fn$`);
+        try { psql("select public.sarraf_partner_batch_detail('f24')"); return true; }
+        catch { return false; }
+      };
+      const a = opens("f2400000-0000-0000-0000-00000000000a");
+      const b = opens("f2400000-0000-0000-0000-00000000000b");
+      be("admin");
+      if (!a) throw new Error("the first partner could not open the batch they hold");
+      if (!b) throw new Error("the SECOND partner could not open the batch they hold 900 of");
+    });
+
+    step("but a partner holding nothing in it still cannot", () => {
+      psql(`insert into public.app_users(id,name,role,auth_id,tenant_id)
+            values ('par24c','هاوبەشی سێیەم','partner','f2400000-0000-0000-0000-00000000000c','t-sarkhel')
+            on conflict (id) do update set tenant_id=excluded.tenant_id`);
+      psql(`create or replace function auth.uid() returns uuid language sql stable
+            as $fn$ select 'f2400000-0000-0000-0000-00000000000c'::uuid $fn$`);
+      const refusedIt = refused("select public.sarraf_partner_batch_detail('f24')");
+      be("admin");
+      if (!refusedIt) throw new Error("a partner with nothing in this batch opened it");
+    });
+  });
+
+
   // ── the report ──────────────────────────────────────────────────────────────
   const failed = scenarios.filter((s) => !s.ok);
   for (const s of scenarios) {
