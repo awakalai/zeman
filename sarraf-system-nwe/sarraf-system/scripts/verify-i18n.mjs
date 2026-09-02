@@ -200,6 +200,52 @@ for (const file of files.sort()) {
   if (n) counts[file] = n;
 }
 
+// ── one name per thing, in the reader's own language ─────────────────────────────────────
+//
+//   «تەنانەت نووسینەکانی ڕووکاریش ڕێک بکەوەو شتی زیادە لابدە»
+//
+// The application had a Kurdish name for the emergency freeze — «ڕاگرتنی فریاکەوتن» — on the
+// very screen that turns it on and off. The five messages a person actually reads when it
+// BLOCKS them said "Emergency Freeze" in English. Same for export: the navigation entry says
+// «هەناردە», the messages said "export".
+//
+// That is not a translation preference. It is one product calling one thing two names, and
+// the second name only ever appears at the moment somebody is confused enough to be reading
+// carefully.
+//
+// Listed by name rather than detected in general, because most English inside a Kurdish
+// string is a legitimate term of art — CNY, OCR, JSON, PITR, an example identifier — and a
+// rule that could not tell the difference would be turned off within a week.
+{
+  const SAME_THING_TWO_NAMES = [
+    ["Emergency Freeze", "ڕاگرتنی فریاکەوتن"],
+    ["export ـی", "هەناردە"],
+  ];
+  const offenders = [];
+  for (const file of files) {
+    const source = readFileSync(file, "utf8");
+    for (const [index, raw] of source.split("\n").entries()) {
+      const line = raw.trim();
+      if (line.startsWith("//") || line.startsWith("*")
+          || line.startsWith("/*") || line.startsWith("{/*")) continue;
+      for (const [english, kurdish] of SAME_THING_TWO_NAMES) {
+        for (const [, body] of line.matchAll(/"([^"\\\n]*)"/g)) {
+          if (!SCRIPT.test(body)) continue;
+          if (body.includes(english)) {
+            offenders.push(`${file}:${index + 1}  "${english}" — this `
+              + `application calls it «${kurdish}»`);
+          }
+        }
+      }
+    }
+  }
+  if (offenders.length) {
+    console.error(`\n${offenders.length} interface string(s) use an English name for something `
+      + `this application already names in Kurdish elsewhere:\n  ${offenders.join("\n  ")}\n`);
+    process.exit(1);
+  }
+}
+
 const total = Object.values(counts).reduce((a, b) => a + b, 0);
 
 if (process.argv.includes("--write")) {
