@@ -29,7 +29,7 @@ Each link is a gate that runs in CI and fails the `verified` check if it breaks.
 | Receipt reliability | `verify:receipts` | real migrations, real PostgreSQL | **35 checks** |
 | Tenant isolation | `verify:isolation` | real migrations, real PostgreSQL | **123 checks** |
 | Query plans at volume | `verify:scale` | seeded volume, 20,000 rows | **16 opening queries** |
-| The inspection itself | `verify:inspect` | real migrations, `auth.uid()` unset | **28 sections** |
+| The inspection itself | `verify:inspect` | real migrations, `auth.uid()` unset | **29 sections** |
 | Per-role interface | `verify:roles` | Chromium, dev server, 1280×900 **and 390×844** | **82 checks** |
 | The receipt's journey | `verify:journey` | Chromium + real PostgreSQL | **22 checks** |
 | The bundle that ships | `verify:bundle` | Chromium, `dist/` under vercel.json headers | **8 checks** |
@@ -152,6 +152,23 @@ rate, a cashbox or a debt, and a business owner may not open it at all — and a
 component's service imports so the screen cannot quietly start reading more than it should.
 
 A view nobody opened is a view nobody audited. Both facts were true of this one until today.
+
+## 2f. Not "does it name a business?" but "does it name the right one?"
+
+Section 3 of `INSPECT.sql` counts rows whose `tenant_id` is null, and section 4 says whether any
+are still being made. Neither can see the more dangerous shape: a row carrying the **wrong**
+tenant. It satisfies every not-null constraint, passes both existing sections, and puts one
+business's money inside another's books.
+
+Section 13 asks that question of seven parent-child relationships — ledger against its
+transaction, journal entries against their transaction and their batch, receipts against their
+batch, and transactions and batches against the people they name. **All seven read zero on the
+live database.**
+
+It is asserted in `verify:inspect` as well as printed, because a number a person has to notice
+is a number nobody notices on the morning it first stops being zero. Proved by planting one
+ledger row whose transaction belongs to another business: `1 row(s) sit in a different business
+than their parent`.
 
 ## 2e. Every command on the server, accounted for
 

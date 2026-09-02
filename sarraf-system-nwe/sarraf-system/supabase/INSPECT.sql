@@ -583,6 +583,66 @@ select count(*) as "commission wrongly in the spread account"
 
 \echo ''
 \echo ''
+\echo '════════ ١٣. تێکەڵبوونی بازرگانییەکان — کوڕ و باوک یەک بازرگانی بن ════════'
+\echo '   پێویستە: هەموویان سفر. ئەمە پرسیاری «بازرگانی هەیە؟» نییە — پرسیاری «بازرگانییە دروستەکەیە؟»یە'
+\echo ''
+
+-- Section 3 asks whether a row names a business. This asks whether it names the RIGHT one.
+--
+-- A row with a null tenant is visible: section 3 counts it and section 4 says whether such rows
+-- are still being made. A row with the WRONG tenant is invisible to both, satisfies every
+-- not-null constraint, and shows one business's money inside another's books. That is «هیچ
+-- تێکەڵ نابێت» read as a question about the data rather than about the policies.
+--
+-- Every pair below is a child and the parent it belongs to, where both carry a business. A
+-- disagreement between them cannot be explained away.
+select 'ledger → txs'                     as "child → parent",
+       count(*)                           as "disagree"
+  from public.ledger l
+  join public.txs t on t.id = l.tx_id
+ where l.tenant_id is distinct from t.tenant_id
+union all
+select 'journal_entries → txs',
+       count(*)
+  from public.journal_entries j
+  join public.txs t on t.id = j.transaction_id
+ where j.tenant_id is distinct from t.tenant_id
+union all
+select 'receipts → receipt_batches',
+       count(*)
+  from public.receipts r
+  join public.receipt_batches b on b.id = r.batch_id
+ where r.tenant_id is distinct from b.tenant_id
+union all
+select 'journal_entries → receipt_batches',
+       count(*)
+  from public.journal_entries j
+  join public.receipt_batches b on b.id = j.receipt_batch_id
+ where j.tenant_id is distinct from b.tenant_id
+union all
+-- And the people a transaction names: a counterparty or a partner from another business would
+-- be one business trading against another's customer without either of them knowing.
+select 'txs → its counterparty',
+       count(*)
+  from public.txs t
+  join public.app_users u on u.id = t.cp_id
+ where u.tenant_id is not null and t.tenant_id is distinct from u.tenant_id
+union all
+select 'txs → its partner',
+       count(*)
+  from public.txs t
+  join public.app_users u on u.id = t.partner_id
+ where u.tenant_id is not null and t.tenant_id is distinct from u.tenant_id
+union all
+select 'receipt_batches → its customer',
+       count(*)
+  from public.receipt_batches b
+  join public.app_users u on u.id = b.customer_id
+ where u.tenant_id is not null and b.tenant_id is distinct from u.tenant_id
+ order by 2 desc, 1;
+
+\echo ''
+\echo ''
 \echo '════════ ١٢. دەرکردنی کۆمەڵی فیش — کێ چی برد ════════'
 \echo '   هەر ڕیزێک لێرە واتە کۆمەڵێک فیش لە سیستەمەکە دەرچووە'
 \echo ''
