@@ -148,6 +148,10 @@ console.log(
 // the exact thing being counted, and skipping it would have hidden a whole file.
 const TABLE_OPENS = /^\s*(?:ku|en|ar)\s*:\s*\{/;
 const ARM = (lang) => new RegExp(`^\\s*${lang}\\s*:\\s*\\{`, "m");
+// Nothing but a string argument, ending the line or ending the call. Anything with code on it
+// is not a continuation, and is counted as it always was.
+const CONTINUATION = /^"(?:[^"\\]|\\.)*"\s*[,)]*\s*[;,]?$/;
+
 const depthOf = (line) => (line.match(/\{/g) || []).length - (line.match(/\}/g) || []).length;
 
 // A screen may not pretend to be translated.
@@ -176,9 +180,24 @@ const counts = {};
 for (const file of files.sort()) {
   const text = readFileSync(file, "utf8");
   const translated = ARM("ku").test(text) && ARM("en").test(text) && ARM("ar").test(text);
-  let n = 0, inTable = 0;
+  let n = 0, inTable = 0, inCall = false;
   for (const raw of text.split("\n")) {
     const line = raw.trim();
+    // A three-language call written across several lines is one call. Only its first line
+    // carries `l10n(`, so every continuation was counted as untranslated text — which punished
+    // writing them readably and rewarded one unreadable long line.
+    //
+    // Continuation is recognised by shape, not by counting parentheses: a line that is nothing
+    // but a string argument. Counting parentheses would have to know which ones are inside
+    // string literals, and getting that wrong swallows real lines — which is exactly what the
+    // first version of this did, silently, by reusing the brace counter.
+    if (inCall) {
+      if (CONTINUATION.test(line)) {
+        if (/\)/.test(line)) inCall = false;
+        continue;
+      }
+      inCall = false;
+    }
     if (inTable > 0) {
       inTable += depthOf(raw);
       continue;
@@ -194,7 +213,11 @@ for (const file of files.sort()) {
     // the code rather than on the code.
     if (line.startsWith("//") || line.startsWith("*")
         || line.startsWith("/*") || line.startsWith("{/*")) continue;
-    if (LOCALISED.test(line)) continue;
+    if (LOCALISED.test(line)) {
+      // Open if this line does not close what it opened.
+      inCall = (line.match(/\(/g) || []).length > (line.match(/\)/g) || []).length;
+      continue;
+    }
     n += 1;
   }
   if (n) counts[file] = n;

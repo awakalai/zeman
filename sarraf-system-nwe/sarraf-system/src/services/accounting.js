@@ -13,6 +13,16 @@ const upper = (value) => String(value ?? "").trim().toUpperCase();
 export const accountingCommandKey = (operation, subject = "none") =>
   `acct-${operation}:${String(subject).slice(0, 80)}:${id()}`;
 
+/**
+ * sarraf_commission_trade refuses any key that is not `commission:` followed by 8-200 characters
+ * of [A-Za-z0-9:_-]. Building it here, once, keeps that shape out of every caller and out of
+ * the server's error path — a key the server rejects is a press the owner cannot explain.
+ */
+export const commissionCommandKey = (subject) =>
+  // A default parameter only fills in for undefined, and the cash side of this trade is null.
+  `commission:${String(subject ?? "cash").replace(/[^A-Za-z0-9:_-]/g, "-").slice(0, 60)}:${id()}`
+    .slice(0, 211);
+
 const positive = (value) => {
   const n = Number(value);
   return Number.isFinite(n) && n > 0 ? n : null;
@@ -375,45 +385,49 @@ export async function firstNegativeMovement(client, currencyId, { holder = "owne
   };
 }
 
-/**
- * A service the business performs for a fee — not a currency trade (§3).
- *
- * The owner's example: one million leaves the FIB account, one million arrives in the safe, and
- * three thousand is charged for doing it. FIB is an example; any account a business holds money
- * in behaves this way. Mirrors public.sarraf_service_transaction.
- *
- * Principal and commission are kept apart all the way through — there is deliberately no
- * combined total, because they are not the same kind of money.
+/*
+ * recordService() was here: a principal that passed through an account plus a separate fee that
+ * was earned. The owner read the screen it fed and said the model was a misreading of the
+ * business — «ئەو لۆجیکە هەر بسڕەوە و دووبارە درووستی بکەرەوە». What replaces it is the
+ * function below.
  */
-export async function recordService(client, {
-  id, accountId, direction = "into_safe", amount, commission = 0,
-  commissionCollected = true, customerId = null, description = "", commandKey,
+
+/**
+ * مامەڵەی عمولە — money leaves one place at one price and arrives in another at another, and
+ * the difference is what the business earned.
+ *
+ *   «١٠٠ هەزار دینار ئێف ئایبی دەفرۆشم بە ١٠١ هەزار دیناری کاش، لە بەشی کاش زیاد دەبێت و
+ *    لە بەشی ئێف ئایبی کەم دەکات.»
+ *
+ * A null account on either side means the cash. All four shapes the owner named — account to
+ * cash, cash to account, account to account, and across two currencies — are this one call.
+ * The server decides whether the source can cover it; nothing is judged here.
+ *
+ * Mirrors public.sarraf_commission_trade.
+ */
+export async function commissionTrade(client, {
+  fromAccountId = null, fromCurrencyId, fromAmount,
+  toAccountId = null, toCurrencyId, toAmount,
+  note = null, commandKey,
 }) {
-  const { data, error } = await client.rpc("sarraf_service_transaction", {
-    p_id: id,
-    p_cash_account_id: accountId,
-    p_direction: direction,
-    p_amount: amount,
-    p_commission: commission,
-    p_commission_collected: commissionCollected,
-    p_customer_id: customerId,
-    p_description: description,
-    p_command_key: commandKey,
+  const key = commandKey || commissionCommandKey(fromAccountId || "cash");
+  const { data, error } = await client.rpc("sarraf_commission_trade", {
+    p_from_account_id: fromAccountId,
+    p_from_cur_id: fromCurrencyId,
+    p_from_amount: fromAmount,
+    p_to_account_id: toAccountId,
+    p_to_cur_id: toCurrencyId,
+    p_to_amount: toAmount,
+    p_note: note,
+    p_command_key: key,
   });
   if (error) throw error;
   const answer = data || {};
   return {
-    id: answer.id,
-    accountId: answer.account,
-    accountName: answer.account_name,
-    direction: answer.direction,
-    currency: answer.currency,
-    principal: Number(answer.principal ?? 0),
-    commission: Number(answer.commission ?? 0),
-    commissionCollected: answer.commission_collected === true,
-    commissionReceivable: Number(answer.commission_receivable ?? 0),
-    entryId: answer.entry_id || null,
-    commissionEntryId: answer.commission_entry_id || null,
+    transactionId: answer.transaction_id || null,
+    code: answer.code ?? null,
+    from: answer.from || null,
+    to: answer.to || null,
     replayed: answer.replayed === true,
   };
 }

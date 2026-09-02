@@ -91,8 +91,13 @@ const ROLE_EXPECTATIONS = {
     // Naming the sections here means the structure cannot quietly collapse back into a drawer.
     present: [
       "ئەمڕۆ", "مامەڵە", "فیش", "پارە", "خەڵک", "ڕاپۆرت",
-      "کاری ئەمڕۆ", "کۆمەڵەکان", "پشکنین", "ناردن",
-      "قەرز و قاسە", "حساب و عمولە", "شیکردنەوەی باڵانس",
+      // «کۆمەڵەکان» and «ناردن» were the old names. The batch list is now «فیشەکان» and holds
+      // both of the owner's two sections as tabs, and forwarding says what it is: a record.
+      "کاری ئەمڕۆ", "فیشەکان", "پشکنین", "فۆرواردکراوەکان",
+      // «حساب و عمولە» was a seventh entry here until the owner said the model behind it was a
+      // misreading — «ئەو لۆجیکە هەر بسڕەوە». Accounts now live inside قاسە, where the money
+      // they hold is, so there is one fewer place to look and nothing lost.
+      "قەرز و قاسە", "شیکردنەوەی باڵانس",
     ],
     // The tools drawer is gone, and it must stay gone: a grid of sixteen buttons at the foot of
     // one page is what the owner meant by «جەنجاڵ».

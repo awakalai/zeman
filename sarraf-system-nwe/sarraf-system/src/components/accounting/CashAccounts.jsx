@@ -1,86 +1,59 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Banknote, Loader2, Plus, RefreshCw } from "lucide-react";
-import { accountingCommandKey, loadCashAccounts, openCashAccount, recordService }
-  from "../../services/accounting.js";
+import { loadCashAccounts, openCashAccount } from "../../services/accounting.js";
 import { errorText } from "../../services/userFacingError";
 import "./debt-center.css";
 
 /**
- * The places this business holds money that are not the main safe, and the commission it earns
- * for moving money through them (§3).
+ * The places this business holds money that are not the cash in the drawer.
  *
- *   «تۆ دێیت دەڵێیت یەک ملیۆن ئێف ئای بیم بۆ داخڵ بکە، یەک ملیۆن لە حسابی ئێف ئای بی دەڕوات و
- *    یەک ملیۆن بۆ قاسە زیاد دەبێت، بەڵام ٣٠٠٠ دینار عمولەت لێ وەردەگرم حەقی ئەو کارە.
- *    ئەمە نمونەیە ئەگینا دەیان شتیبتر عمولەی هەیە.»
+ *   «لە قاسەدا دەبێت پارەی جیاوازیش هەبێت نەک تەنها کاش. دەبێت ئەو پارانەش بوونیان هەبێت کە لە
+ *    حساب بانکییەکانمە. واتا قاسەی گشتی وەک ئێستا بێت هەر بەس بەشێکی تری بۆ زیادببێت
+ *    (پارەی کاش)(پارەی ناو حسابەکانت).»
  *
- * FIB is the example, not the feature. What the owner described is a kind of transaction the
- * system did not have: money moves between an account and the safe, and a separate fee is earned
- * for doing it. So this screen has no idea what FIB is — it knows about accounts, in any
- * currency, of any kind, and about a commission.
+ *   «حسابەکان خۆم داخڵی بکەم وەک چۆنە پارەی تر داخڵ ئەکەم. بۆ نموونە (داخڵکردنی حساب) ناوێکی بۆ
+ *    دادەنێم (کی کارد ، ئێف ئایبی ، هتد).»
  *
- * ── One million and three thousand are different kinds of money ───────────────────────────────
+ * So this panel lives inside قاسە, not beside it. It does one thing: name the places and show
+ * what each holds. Money arrives in them the same way money arrives anywhere — through the
+ * entry form in قاسە, which now asks which place — and it moves between them through مامەڵەی
+ * عمولە, which is a trade and belongs with the other trades.
  *
- * The principal passes through; the commission is earned. They land in different accounts —
- * acc-4100 داهاتی فی, never acc-4000 قازانجی ئاڵوگۆڕ, because a fee is not a trading spread and
- * mixing them makes the profit figure meaningless. This screen never offers a single figure that
- * adds them together, and the confirmation after a service says both separately for the same
- * reason.
+ * ── What used to be here, and why it is gone ─────────────────────────────────────────────────
  *
- * A commission can also be earned without being collected yet. That is a receivable, not cash,
- * and saying so is the difference between knowing what you have and knowing what you are owed.
+ * A "service transaction": a principal that passed through plus a separate fee that was earned.
+ * That was a misreading of the business, and the owner said so plainly:
+ *
+ *   «بابەتی حسابات و عموولە هەڵە تێگەشتووی. ئەو لۆجیکە هەر بسڕەوە و دووبارە درووستی بکەرەوە.»
+ *
+ * There is no separate fee. There is a price you part with money at and a price you receive it
+ * at, and the difference is the earning — which is مامەڵەی عمولە, one trade, not two figures.
  */
 
 const COPY = {
   ku: {
-    title: "حسابەکان و عمولە",
-    subtitle: "ئەو شوێنانەی پارەت تێدایە جگە لە قاسەی گشتی — و ئەو عمولەیەی لێی وەردەگریت",
-    accounts: "حسابەکان", none: "هێشتا هیچ حسابێک نەکراوەتەوە",
-    open: "کردنەوەی حسابێکی نوێ", name: "ناوی حساب", currency: "دراو", kind: "جۆر",
+    title: "حسابەکان", subtitle: "ئەو شوێنانەی پارەت تێدایە جگە لە کاش",
+    none: "هێشتا هیچ حسابێک نەکراوەتەوە — ناوێک دابنێ بۆ ئێف ئایبی، کی کارد، یان هەر شوێنێکی تر",
+    name: "ناوی حساب", currency: "دراو", kind: "جۆر",
     kinds: { bank: "بانک", wallet: "جزدان", safe: "قاسە", other: "شتی تر" },
-    create: "بکەرەوە", balance: "باڵانس", refresh: "نوێکردنەوە", loading: "بارکردن…",
-    failed: "زانیارییەکان بار نەبوون",
-    service: "مامەڵەی خزمەتگوزاری", pick: "حساب هەڵبژێرە",
-    intoSafe: "لە حسابەوە بۆ قاسە", fromSafe: "لە قاسەوە بۆ حساب",
-    amount: "بڕی سەرەکی", commission: "عمولە",
-    collected: "عمولەکە وەرگیراوە", owed: "عمولەکە قەرزە",
-    note: "تێبینی", record: "تۆمارکردن", recording: "تۆمار دەکرێت…",
-    done: "تۆمار کرا ✓", principalWas: "بڕی سەرەکی", commissionWas: "عمولە",
-    receivable: "عمولەی قەرز",
-    hint: "بڕی سەرەکی و عمولە دوو شتی جیاوازن — عمولە دەچێتە داهاتی فی، نەک قازانجی ئاڵوگۆڕ",
+    create: "بیکەرەوە", refresh: "نوێکردنەوە", loading: "بارکردن…",
+    failed: "زانیارییەکان بار نەبوون", closed: "داخراوە",
   },
   en: {
-    title: "Accounts & commission",
-    subtitle: "Where you hold money other than the main safe — and the fee you earn on it",
-    accounts: "Accounts", none: "No account has been opened yet",
-    open: "Open a new account", name: "Account name", currency: "Currency", kind: "Kind",
+    title: "Accounts", subtitle: "Where you hold money other than cash",
+    none: "No account opened yet — give a name to FIB, a Key Card, or anywhere else you hold money",
+    name: "Account name", currency: "Currency", kind: "Kind",
     kinds: { bank: "Bank", wallet: "Wallet", safe: "Safe", other: "Other" },
-    create: "Open", balance: "Balance", refresh: "Refresh", loading: "Loading…",
-    failed: "Could not load",
-    service: "Service transaction", pick: "Choose an account",
-    intoSafe: "From the account into the safe", fromSafe: "From the safe into the account",
-    amount: "Principal", commission: "Commission",
-    collected: "The commission was collected", owed: "The commission is owed",
-    note: "Note", record: "Record", recording: "Recording…",
-    done: "Recorded ✓", principalWas: "Principal", commissionWas: "Commission",
-    receivable: "Commission owed",
-    hint: "Principal and commission are different money — the fee goes to fee income, never to the trading spread",
+    create: "Open", refresh: "Refresh", loading: "Loading…",
+    failed: "Could not load", closed: "closed",
   },
   ar: {
-    title: "الحسابات والعمولة",
-    subtitle: "أين تحتفظ بالمال غير الخزنة الرئيسية — والعمولة التي تكسبها عليه",
-    accounts: "الحسابات", none: "لم يُفتح أي حساب بعد",
-    open: "فتح حساب جديد", name: "اسم الحساب", currency: "العملة", kind: "النوع",
+    title: "الحسابات", subtitle: "أين تحتفظ بالمال غير النقد",
+    none: "لم يُفتح أي حساب بعد — سمِّ حسابك في البنك أو محفظتك أو أي مكان آخر",
+    name: "اسم الحساب", currency: "العملة", kind: "النوع",
     kinds: { bank: "بنك", wallet: "محفظة", safe: "خزنة", other: "أخرى" },
-    create: "افتح", balance: "الرصيد", refresh: "تحديث", loading: "جارٍ التحميل…",
-    failed: "تعذّر التحميل",
-    service: "معاملة خدمة", pick: "اختر حسابًا",
-    intoSafe: "من الحساب إلى الخزنة", fromSafe: "من الخزنة إلى الحساب",
-    amount: "المبلغ الأساسي", commission: "العمولة",
-    collected: "تم تحصيل العمولة", owed: "العمولة مستحقة",
-    note: "ملاحظة", record: "تسجيل", recording: "جارٍ التسجيل…",
-    done: "تم التسجيل ✓", principalWas: "المبلغ الأساسي", commissionWas: "العمولة",
-    receivable: "عمولة مستحقة",
-    hint: "المبلغ الأساسي والعمولة مالان مختلفان — تذهب العمولة إلى إيراد الرسوم، لا إلى فرق السعر",
+    create: "افتح", refresh: "تحديث", loading: "جارٍ التحميل…",
+    failed: "تعذّر التحميل", closed: "مغلق",
   },
 };
 
@@ -91,32 +64,26 @@ const money = (n) => Number(n || 0).toLocaleString("en-US",
 const newId = (prefix) =>
   `${prefix}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 
-export function CashAccounts({ client, lang = "ku", currencies = [] }) {
+/**
+ * @param onAccounts — called with the loaded accounts whenever they change, so قاسە can offer
+ *   them in the money-entry form without asking the server a second time.
+ */
+export function CashAccounts({ client, lang = "ku", currencies = [], onAccounts }) {
   const copy = COPY[localeKey(lang)];
   const [state, setState] = useState("loading");
   const [accounts, setAccounts] = useState([]);
   const [failure, setFailure] = useState("");
 
-  // Opening an account
   const [name, setName] = useState("");
   const [curId, setCurId] = useState("");
   const [kind, setKind] = useState("bank");
   const [opening, setOpening] = useState(false);
 
-  // Recording a service
-  const [accountId, setAccountId] = useState("");
-  const [direction, setDirection] = useState("into_safe");
-  const [amount, setAmount] = useState("");
-  const [commission, setCommission] = useState("");
-  const [collected, setCollected] = useState(true);
-  const [note, setNote] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [done, setDone] = useState(null);
-
   const load = useCallback(async () => {
     setState("loading");
     try {
-      setAccounts(await loadCashAccounts(client));
+      const rows = await loadCashAccounts(client);
+      setAccounts(rows);
       setState("ready");
     } catch {
       setState("error");
@@ -124,48 +91,21 @@ export function CashAccounts({ client, lang = "ku", currencies = [] }) {
   }, [client]);
 
   useEffect(() => { load(); }, [load]);
+  // The parent needs the same list for its entry form; handing it over here keeps one fetch.
+  useEffect(() => { if (typeof onAccounts === "function") onAccounts(accounts); }, [accounts, onAccounts]);
 
-  const active = useMemo(() => accounts.filter((a) => a.active), [accounts]);
-
-  const create = async () => {
-    if (!name.trim() || !curId) return;
-    setOpening(true); setFailure("");
-    try {
-      await openCashAccount(client, { id: newId("acct"), name: name.trim(), currencyId: curId, kind });
-      setName(""); setCurId("");
-      await load();
-    } catch (error) {
-      setFailure(errorText(error).slice(0, 200));
-    } finally {
-      setOpening(false);
+  const byCurrency = useMemo(() => {
+    const out = new Map();
+    for (const a of accounts) {
+      if (!out.has(a.currencyId)) out.set(a.currencyId, []);
+      out.get(a.currencyId).push(a);
     }
-  };
+    return out;
+  }, [accounts]);
 
-  const record = async () => {
-    if (!accountId || !(Number(amount) > 0)) return;
-    setBusy(true); setFailure(""); setDone(null);
-    try {
-      // The server refuses a movement the account cannot cover, and that refusal reaches the
-      // owner as written. Nothing is decided here about whether the money is there.
-      const answer = await recordService(client, {
-        id: newId("svc"),
-        accountId,
-        direction,
-        amount: Number(amount),
-        commission: Number(commission) || 0,
-        commissionCollected: collected,
-        description: note.trim(),
-        commandKey: accountingCommandKey("service", accountId),
-      });
-      setDone(answer);
-      setAmount(""); setCommission(""); setNote("");
-      await load();
-    } catch (error) {
-      setFailure(errorText(error).slice(0, 200));
-    } finally {
-      setBusy(false);
-    }
-  };
+  const currencyName = useCallback(
+    (id) => currencies.find((c) => c.id === id)?.name || currencies.find((c) => c.id === id)?.code || id,
+    [currencies]);
 
   if (state === "loading") return (
     <section className="debt-panel"><p className="debt-empty">
@@ -198,21 +138,28 @@ export function CashAccounts({ client, lang = "ku", currencies = [] }) {
       </div>}
 
       {accounts.length === 0 ? <p className="debt-empty">{copy.none}</p> : (
-        <div className="debt-cards" role="status">
-          {accounts.map((a) => (
-            <div className="debt-card" key={a.id}>
-              <span className="debt-card-label">{a.name}</span>
-              <strong>{money(a.balance)}</strong>
-              <span className="debt-card-note">
-                {copy.kinds[a.kind] || a.kind}
-                {a.active ? "" : ` · ${copy.kinds.other}`}
-              </span>
+        // Grouped by currency, because «چەندم هەیە» is a question about one currency at a time
+        // and a flat list of mixed currencies invites adding dinars to dollars by eye.
+        [...byCurrency.entries()].map(([cid, rows]) => (
+          <div key={cid}>
+            <p className="debt-empty" style={{ textAlign: "start", padding: "0.5rem 0 0" }}>
+              {currencyName(cid)}
+            </p>
+            <div className="debt-cards" role="status">
+              {rows.map((a) => (
+                <div className="debt-card" key={a.id}>
+                  <span className="debt-card-label">{a.name}</span>
+                  <strong>{money(a.balance)}</strong>
+                  <span className="debt-card-note">
+                    {copy.kinds[a.kind] || a.kind}{a.active ? "" : ` · ${copy.closed}`}
+                  </span>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
+          </div>
+        ))
       )}
 
-      {/* ── open an account ── */}
       <div className="cashbox-form">
         <label>{copy.name}
           <input value={name} onChange={(e) => setName(e.target.value)} aria-label={copy.name} />
@@ -229,76 +176,24 @@ export function CashAccounts({ client, lang = "ku", currencies = [] }) {
               <option key={k} value={k}>{copy.kinds[k]}</option>)}
           </select>
         </label>
-        <button type="button" disabled={opening || !name.trim() || !curId} onClick={create}>
+        <button type="button" disabled={opening || !name.trim() || !curId}
+                onClick={async () => {
+                  if (!name.trim() || !curId) return;
+                  setOpening(true); setFailure("");
+                  try {
+                    await openCashAccount(client,
+                      { id: newId("acct"), name: name.trim(), currencyId: curId, kind });
+                    setName(""); setCurId("");
+                    await load();
+                  } catch (error) {
+                    setFailure(errorText(error).slice(0, 200));
+                  } finally {
+                    setOpening(false);
+                  }
+                }}>
           <Plus aria-hidden="true" /> {copy.create}
         </button>
       </div>
-
-      {/* ── record a service ── */}
-      {active.length > 0 && (
-        <>
-          <header className="debt-header">
-            <div><h2>{copy.service}</h2><p>{copy.hint}</p></div>
-          </header>
-
-          <div className="cashbox-form">
-            <label>{copy.pick}
-              <select value={accountId} onChange={(e) => setAccountId(e.target.value)}
-                      aria-label={copy.pick}>
-                <option value="">{copy.pick}</option>
-                {active.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-              </select>
-            </label>
-            <label>{copy.kind}
-              <select value={direction} onChange={(e) => setDirection(e.target.value)}
-                      aria-label={copy.service}>
-                <option value="into_safe">{copy.intoSafe}</option>
-                <option value="from_safe">{copy.fromSafe}</option>
-              </select>
-            </label>
-            <label>{copy.amount}
-              <input type="number" inputMode="decimal" value={amount} aria-label={copy.amount}
-                     onChange={(e) => setAmount(e.target.value)} />
-            </label>
-            <label>{copy.commission}
-              <input type="number" inputMode="decimal" value={commission} aria-label={copy.commission}
-                     onChange={(e) => setCommission(e.target.value)} />
-            </label>
-            <label>
-              <input type="checkbox" checked={collected}
-                     onChange={(e) => setCollected(e.target.checked)} />
-              {collected ? copy.collected : copy.owed}
-            </label>
-            <label>{copy.note}
-              <input value={note} onChange={(e) => setNote(e.target.value)} aria-label={copy.note} />
-            </label>
-            <button type="button" disabled={busy || !accountId || !(Number(amount) > 0)}
-                    onClick={record}>
-              {busy ? copy.recording : copy.record}
-            </button>
-          </div>
-
-          {/* Two figures, never one. §3.3: one million and three thousand are different kinds of
-              money, and a single total would hide which is which. */}
-          {done && (
-            <div className="debt-cards" role="status">
-              <div className="debt-card">
-                <span className="debt-card-label">{copy.principalWas}</span>
-                <strong>{money(done.principal)}</strong>
-                <span className="debt-card-note">{done.currency} · {copy.done}</span>
-              </div>
-              <div className="debt-card">
-                <span className="debt-card-label">{copy.commissionWas}</span>
-                <strong>{money(done.commission)}</strong>
-                <span className="debt-card-note">
-                  {done.commissionCollected ? copy.collected
-                    : `${copy.receivable}: ${money(done.commissionReceivable)}`}
-                </span>
-              </div>
-            </div>
-          )}
-        </>
-      )}
     </section>
   );
 }

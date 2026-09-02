@@ -1,12 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, ArrowDownLeft, ArrowUpRight, RefreshCw, Scale, Wallet } from "lucide-react";
 import {
-  AGING_BUCKETS, agingBucketOf, loadCustomerVaults, loadDebts,
+  AGING_BUCKETS, agingBucketOf, loadCashAccounts, loadCustomerVaults, loadDebts,
   loadSubledgerReconciliation, loadTrialBalance, summarizeDebts,
 } from "../../services/accounting";
 import {
   DEBT_EVENT_KU, OFFSET_REASON_MIN, VOUCHER_KIND_KU, WRITE_OFF_REASON_MIN,
-  loadDebtHistory, loadVoucherRegister, offsetAmount, offsetDebts, offsetObjection, writeOffDebt,
+  loadDebtHistory, loadVoucherRegister, offsetAmount, offsetDebts, offsetObjection,
+  remindDebtor, settleDebt, writeOffDebt,
 } from "../../services/debtRegister";
 import "./debt-center.css";
 import { errorText } from "../../services/userFacingError";
@@ -27,6 +28,10 @@ const COPY = {
     willCancel: "ئەمەندە دەبڕدرێتەوە", offsetDone: "دانانەوە کرا", writeOffDone: "قەرزەکە بەخشرا",
     voucher: "پسووڵە", pickTwo: "دوو قەرز هەڵبژێرە بۆ دانانەوە",
     reasonHint: (n) => `لانیکەم ${n} پیت`,
+    settle: "سفرکردنەوە", remind: "بیرخستنەوە", amount: "بڕ", place: "شوێن", cash: "کاش",
+    settleAll: "هەموو ئەوەی ماوە", settleDone: "قەرزەکە دایەوە", remindDone: "بیرخستنەوەکە نێردرا",
+    settleHint: "پارەکە بەڕاستی دەجوڵێت — بەخشینی قەرز شتێکی ترە",
+    remindHint: "ئەم کەسە ئاگادار دەکرێتەوە کە ئەوەندەی لەسەرە",
   },
   en: {
     title: "Debt & Cashbox Centre", subtitle: "Debts by explicit direction and currency — never netted",
@@ -44,6 +49,10 @@ const COPY = {
     willCancel: "This much cancels", offsetDone: "Offset recorded", writeOffDone: "Debt written off",
     voucher: "Voucher", pickTwo: "Select two debts to offset",
     reasonHint: (n) => `at least ${n} characters`,
+    settle: "Settle", remind: "Remind", amount: "Amount", place: "Place", cash: "Cash",
+    settleAll: "All that is left", settleDone: "The debt was paid", remindDone: "Reminder sent",
+    settleHint: "The money really moves — writing a debt off is a different thing",
+    remindHint: "They are told what is still outstanding",
   },
   ar: {
     title: "مركز الديون والخزنة", subtitle: "الديون باتجاه وعملة واضحين — دون دمج العملات",
@@ -61,6 +70,10 @@ const COPY = {
     willCancel: "المبلغ المقاصّ", offsetDone: "تمت المقاصّة", writeOffDone: "أُعدم الدين",
     voucher: "سند", pickTwo: "اختر دينين للمقاصّة",
     reasonHint: (n) => `${n} حرفاً على الأقل`,
+    settle: "تسديد", remind: "تذكير", amount: "المبلغ", place: "المكان", cash: "نقد",
+    settleAll: "كل ما تبقّى", settleDone: "تم تسديد الدين", remindDone: "أُرسل التذكير",
+    settleHint: "المال ينتقل فعلاً — إعدام الدين شيء آخر",
+    remindHint: "يُبلَّغ بما لا يزال مستحقاً عليه",
   },
 };
 const localeKey = (lang) => (lang === "en" || lang === "ar" ? lang : "ku");
@@ -91,7 +104,11 @@ export function DebtCenter({ client, lang = "ku", partyId = null, nameOf = (id) 
   const [error, setError] = useState("");
   // §13.C.6/7: the two commands, and §13.F.1's register beside them.
   const [picked, setPicked] = useState([]);
-  const [action, setAction] = useState(null);   // { kind: "offset" | "write_off", debtId? }
+  const [action, setAction] = useState(null);   // { kind: "offset" | "write_off" | "settle", debtId? }
+  // Settling asks two things a write-off does not: how much, and out of or into where.
+  const [settleAmount, setSettleAmount] = useState("");
+  const [settlePlace, setSettlePlace] = useState("");
+  const [places, setPlaces] = useState([]);
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [vouchers, setVouchers] = useState([]);
@@ -114,6 +131,10 @@ export function DebtCenter({ client, lang = "ku", partyId = null, nameOf = (id) 
       } catch { setLedger(null); }
       try { setVouchers(await loadVoucherRegister(client, { partyId, limit: 50 })); }
       catch { setVouchers([]); }
+      // The places a settlement can move money to or from. Staff-only, like the ledger check
+      // above: a party reading their own debts must not fail on a list they cannot see.
+      try { setPlaces((await loadCashAccounts(client)).filter((a) => a.active)); }
+      catch { setPlaces([]); }
       setState("ready");
     } catch (e) {
       console.error("debt centre", e);
@@ -131,7 +152,10 @@ export function DebtCenter({ client, lang = "ku", partyId = null, nameOf = (id) 
   // The same check the database makes, shown beside the button rather than arriving afterwards.
   const objection = chosen.length === 2 ? offsetObjection(chosen[0], chosen[1]) : copy.pickTwo;
   const cancels = chosen.length === 2 ? offsetAmount(chosen[0], chosen[1]) : null;
-  const reasonMin = action?.kind === "write_off" ? WRITE_OFF_REASON_MIN : OFFSET_REASON_MIN;
+  // A settlement needs no written reason: money that actually moved is its own explanation,
+  // and demanding a sentence for it is what made writing a debt off the easier button to press.
+  const reasonMin = action?.kind === "settle" ? 0
+    : action?.kind === "write_off" ? WRITE_OFF_REASON_MIN : OFFSET_REASON_MIN;
 
   const togglePick = (debtId) => setPicked((prev) => (
     prev.includes(debtId) ? prev.filter((x) => x !== debtId) : [...prev.slice(-1), debtId]));
@@ -148,6 +172,18 @@ export function DebtCenter({ client, lang = "ku", partyId = null, nameOf = (id) 
         });
         say(`${copy.offsetDone} · ${copy.voucher} ${result?.voucher || ""}`);
         setPicked([]);
+      } else if (action.kind === "settle") {
+        // A blank amount means all of it, which is «سفرکردنەوە» in one press. The server
+        // refuses more than is outstanding rather than capping it, so a typo is caught there
+        // instead of quietly moving a different sum than the one on screen.
+        const { result } = await settleDebt(client, {
+          debtId: action.debtId,
+          amount: settleAmount.trim() === "" ? null : Number(settleAmount),
+          cashAccountId: settlePlace || null,
+          note: reason,
+        });
+        say(`${copy.settleDone} · ${copy.voucher} ${result?.voucher || ""}`);
+        setSettleAmount(""); setSettlePlace("");
       } else {
         const { result } = await writeOffDebt(client, { debtId: action.debtId, reason });
         say(`${copy.writeOffDone} · ${copy.voucher} ${result?.voucher || ""}`);
@@ -280,9 +316,38 @@ export function DebtCenter({ client, lang = "ku", partyId = null, nameOf = (id) 
                       <span className="debt-row-actions">
                         <button type="button" onClick={() => openHistory(d.id)}>{copy.history}</button>
                         {canAct && (
-                          <button type="button" onClick={() => { setAction({ kind: "write_off", debtId: d.id }); setReason(""); }}>
-                            {copy.writeOff}
-                          </button>
+                          <>
+                            {/* «هەر لەوێوە بتوانم قەرزەکان سفر بکەمەوە» — first, because paying
+                                a debt is the ordinary end of one and giving it up is not. */}
+                            <button type="button" onClick={() => {
+                              setAction({ kind: "settle", debtId: d.id });
+                              setSettleAmount(""); setSettlePlace(""); setReason("");
+                            }}>
+                              {copy.settle}
+                            </button>
+                            {/* «یان نۆتفیکەیشن بۆ ئەوان بنێرم کە ئەوەنە قەرزارن». Only offered
+                                on a debt somebody else owes: the server refuses the other way
+                                round, and a button that always fails is not an offer. */}
+                            {d.debtorType !== "zeman" && (
+                              <button type="button" disabled={busy} onClick={async () => {
+                                setBusy(true);
+                                try {
+                                  await remindDebtor(client, { debtId: d.id });
+                                  say(copy.remindDone);
+                                } catch (e) {
+                                  console.error("debt reminder", e);
+                                  say(errorText(e));
+                                } finally {
+                                  setBusy(false);
+                                }
+                              }}>
+                                {copy.remind}
+                              </button>
+                            )}
+                            <button type="button" onClick={() => { setAction({ kind: "write_off", debtId: d.id }); setReason(""); }}>
+                              {copy.writeOff}
+                            </button>
+                          </>
                         )}
                       </span>
                       {history?.debt_id === d.id && (
@@ -321,14 +386,36 @@ export function DebtCenter({ client, lang = "ku", partyId = null, nameOf = (id) 
       )}
 
       {action && (
-        <div className="debt-action" role="dialog" aria-label={action.kind === "offset" ? copy.offset : copy.writeOff}>
+        <div className="debt-action" role="dialog"
+             aria-label={action.kind === "offset" ? copy.offset
+               : action.kind === "settle" ? copy.settle : copy.writeOff}>
+          {action.kind === "settle" && (
+            <>
+              <p className="debt-muted">{copy.settleHint}</p>
+              <label htmlFor="debt-settle-amount">
+                {copy.amount} <span className="debt-muted">({copy.settleAll})</span>
+              </label>
+              <input id="debt-settle-amount" type="number" inputMode="decimal" value={settleAmount}
+                     onChange={(e) => setSettleAmount(e.target.value)} />
+              <label htmlFor="debt-settle-place">{copy.place}</label>
+              <select id="debt-settle-place" value={settlePlace}
+                      onChange={(e) => setSettlePlace(e.target.value)}>
+                <option value="">{copy.cash}</option>
+                {places.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+              </select>
+            </>
+          )}
           <label htmlFor="debt-action-reason">
-            {copy.reason} <span className="debt-muted">({copy.reasonHint(reasonMin)})</span>
+            {copy.reason}{" "}
+            <span className="debt-muted">
+              {reasonMin > 0 ? `(${copy.reasonHint(reasonMin)})` : `(${copy.remindHint})`}
+            </span>
           </label>
           <textarea id="debt-action-reason" value={reason} rows={2}
             onChange={(e) => setReason(e.target.value)} />
           <div className="debt-action-buttons">
-            <button type="button" onClick={() => { setAction(null); setReason(""); }} disabled={busy}>
+            <button type="button" disabled={busy}
+                    onClick={() => { setAction(null); setReason(""); setSettleAmount(""); setSettlePlace(""); }}>
               {copy.cancel}
             </button>
             <button type="button" onClick={runAction} disabled={busy || reason.trim().length < reasonMin}>

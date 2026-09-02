@@ -6,6 +6,10 @@ import path from "node:path";
 const root = path.resolve(import.meta.dirname, "..");
 const fail = (message) => { throw new Error(message); };
 const text = (file) => readFileSync(path.join(root, file), "utf8");
+// A file git still tracks but that is no longer on disk — a deletion not yet staged — used to
+// crash this gate with ENOENT, and a crash reads like a result. It is not one: skip it and let
+// the checks below report on what is actually there.
+const textIfPresent = (file) => { try { return text(file); } catch { return null; } };
 
 // Include staged/tracked and not-yet-added source so a local gate cannot miss the exact new API
 // or migration that is about to enter the commit.
@@ -14,7 +18,8 @@ const tracked = execFileSync("git", ["ls-files", "--cached", "--others", "--excl
   .filter((file) => !file.startsWith("dist/") && !file.includes("package-lock.json"));
 
 for (const file of tracked) {
-  const source = text(file);
+  const source = textIfPresent(file);
+  if (source === null) continue;
   if (/^(<{7}|={7}|>{7})(?: |$)/m.test(source)) fail(`merge-conflict marker in ${file}`);
   if (/\beval\s*\(|\bnew\s+Function\s*\(/.test(source)) fail(`runtime code generation in ${file}`);
 }
@@ -253,9 +258,73 @@ for (const file of tracked) {
 // Helpers that only shape or validate data are not commands and are not asked about — the rule
 // looks only at functions whose own body calls client.rpc or client.storage.
 const SERVICE_DIR = "src/services";
-const componentText = tracked
+
+// ── a service importing a sibling names the file ────────────────────────────────────────────
+//
+// Vite resolves "./userFacingError" to userFacingError.js. Node does not, and Node is what runs
+// the unit tests, so an extensionless sibling import inside a service breaks every test that
+// reaches it — with ERR_MODULE_NOT_FOUND, which looks nothing like the thing that is wrong.
+// It cost a green run that was not green. Components may keep the short form: nothing loads a
+// .jsx file outside the bundler.
+for (const file of tracked.filter((f) => f.startsWith(SERVICE_DIR) && f.endsWith(".js"))) {
+  const source = textIfPresent(file);
+  if (source === null) continue;
+  for (const [, spec] of source.matchAll(/from\s+["'](\.[^"']*)["']/g)) {
+    if (!/\.(js|json|css)$/.test(spec)) {
+      fail(`${file}: imports "${spec}" without a file extension. Node cannot resolve that, so `
+        + `every unit test reaching this module fails with ERR_MODULE_NOT_FOUND. Write "${spec}.js".`);
+    }
+  }
+}
+
+// ── What counts as "a screen" ────────────────────────────────────────────────────────────────
+//
+// Every .jsx used to count, which meant a component file that nothing renders satisfied this
+// rule on its own. Proved by deleting the line that renders CommissionTrade: the gate stayed
+// green while the owner had no way to reach the command behind it — the exact failure this rule
+// exists to catch, one level further out than it was looking.
+//
+// So a screen is a component the entry point can actually reach: walk out from src/main.jsx
+// through the files each one imports, static and lazy alike, and only those count. An orphan
+// component is not a place the owner can get to, however complete it looks.
+const REACHABLE_ROOTS = ["src/main.jsx", "src/App.jsx"].filter((f) => tracked.includes(f));
+const reachableComponents = (() => {
+  const seen = new Set();
+  const queue = [...REACHABLE_ROOTS];
+  const resolve = (fromFile, spec) => {
+    if (!spec.startsWith(".")) return null;
+    const dir = fromFile.split("/").slice(0, -1).join("/");
+    const parts = `${dir}/${spec}`.split("/");
+    const out = [];
+    for (const part of parts) {
+      if (part === "." || part === "") continue;
+      if (part === "..") out.pop();
+      else out.push(part);
+    }
+    const base = out.join("/");
+    for (const candidate of [base, `${base}.jsx`, `${base}.js`, `${base}/index.jsx`, `${base}/index.js`]) {
+      if (tracked.includes(candidate)) return candidate;
+    }
+    return null;
+  };
+  while (queue.length) {
+    const file = queue.pop();
+    if (seen.has(file)) continue;
+    seen.add(file);
+    const source = textIfPresent(file);
+    if (source === null) continue;
+    for (const [, spec] of source.matchAll(/(?:from|import)\s*\(?\s*["']([^"']+)["']/g)) {
+      const next = resolve(file, spec);
+      if (next && !seen.has(next)) queue.push(next);
+    }
+  }
+  return seen;
+})();
+
+const componentText = [...reachableComponents]
   .filter((f) => f.endsWith(".jsx"))
-  .map((f) => text(f))
+  .sort()
+  .map((f) => textIfPresent(f) ?? "")
   .join("\n");
 
 // Is this service file itself imported by something the owner can open? One level, which is what

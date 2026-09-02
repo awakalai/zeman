@@ -3313,90 +3313,462 @@ try {
   const accountOf = (acc) => Number(psql(
     `select coalesce(sum(case when side='debit' then amount else -amount end),0)::text
        from public.journal_lines where account_id='${acc}'`).trim());
+  // An income account earns by being credited, so its balance falls as the business earns.
+  // Reading it the other way round keeps the intent of a check about earning readable.
+  const earnedInto = (acc) => -accountOf(acc);
 
-  check("a business opens an account for the money it holds at a bank", () => {
-    iqdRate();
-    psql(`select public.sarraf_open_cash_account('fib-1','FIB','iqd','bank','the bank account')`);
-    const seen = psql(`select name||'/'||cur_id from public.cash_accounts where id='fib-1'`).trim();
-    if (seen !== "FIB/iqd") throw new Error(`the account reads ${seen}`);
-  });
+  // ── What was here, and why it is gone ────────────────────────────────────────────────────
+  //
+  // Six checks of sarraf_service_transaction: a principal that passed through an account plus a
+  // separate fee that was earned. The owner read it and said the model itself was wrong —
+  // «بابەتی حسابات و عموولە هەڵە تێگەشتووی. ئەو لۆجیکە هەر بسڕەوە و دووبارە درووستی بکەرەوە» —
+  // so the command is dropped in 202609020005 and its checks go with it. What replaces it is
+  // مامەڵەی عمولە below: one trade, two prices, and the difference is the earning.
 
-  check("money cannot leave an account that does not hold it", () => {
-    // The rule the owner's cashbox never had. An account gets it from its first day.
-    let refused = false;
-    try {
-      psql(`select public.sarraf_service_transaction('svc-empty','fib-1','into_safe',
-              1000000,3000,true,null,'FIB deposit','cmd-svc-empty')`);
-    } catch { refused = true; }
-    if (!refused) throw new Error("an empty account paid out a million");
-  });
+  // ── مامەڵەی عمولە — the third kind of trade ─────────────────────────────────────────────
+  //
+  //   «١٠٠ هەزار دینار ئێف ئایبی دەفرۆشم بە ١٠١ هەزار دیناری کاش ، لە بەشی کاش زیاد دەبێت و
+  //    لە بەشی ئێف ئایبی کەم دەکات»
+  //
+  // The old service transaction took a principal and a separate fee, which is not this business:
+  // there is no separate fee, there is a price you give money at and a price you receive it at.
+  // These check the trade the owner actually described, in all four shapes they named.
+  const commissionChecks = () => {
+    check("a business opens an account for the money it holds", () => {
+      iqdRate();
+      // Names distinct from the accounts the older checks above open: cash_accounts is unique
+      // on (business, currency, name), so reusing "FIB" here made every trade below fail with
+      // "account not found" — one collision reported as five broken trades.
+      psql(`select public.sarraf_open_cash_account('cmx-fib','FIB Trading','iqd','bank','the bank account')`);
+      psql(`select public.sarraf_open_cash_account('cmx-key','Key Card','iqd','wallet',null)`);
+      psql(`insert into public.ledger(id,type,cur_id,amount,cash_account_id,date,tenant_id)
+            values ('led-cmx-fund','deposit','iqd',500000,'cmx-fib',now(),'t-sarkhel')`);
+      psql(`insert into public.ledger(id,type,cur_id,amount,date,tenant_id)
+            values ('led-cmx-cash','deposit','iqd',500000,now(),'t-sarkhel')`);
+    });
 
-  check("one million moves from the account into the safe, and three thousand is earned", () => {
-    // Fund the account first, the way a real deposit would.
-    psql(`insert into public.ledger(id,type,cur_id,amount,cash_account_id,date,tenant_id)
-          values ('led-fib-open','deposit','iqd',1000000,'fib-1',now(),'t-sarkhel')`);
-    const safeBefore = safeIqd();
-    const feeBefore = accountOf("acc-4100");
+    check("حساب → کاش: the account falls, the cash rises, and the difference is the earning", () => {
+      const fibBefore = inAccount("cmx-fib"), cashBefore = safeIqd(), feeBefore = earnedInto("acc-4100");
+      psql(`select public.sarraf_commission_trade('cmx-fib','iqd',100000,null,'iqd',101000,
+              'فرۆشتنی ئێف ئایبی','commission:cmx-account-to-cash')`);
+      // Two facts, not one: «لە بەشی کاش زیاد دەبێت و لە بەشی ئێف ئایبی کەم دەکات».
+      if (inAccount("cmx-fib") - fibBefore !== -100000) {
+        throw new Error(`FIB moved ${inAccount("cmx-fib") - fibBefore}, expected -100000`);
+      }
+      if (safeIqd() - cashBefore !== 101000) {
+        throw new Error(`cash moved ${safeIqd() - cashBefore}, expected 101000`);
+      }
+      // 1,000 IQD earned, valued in USD by the day's rate, and it lands in fee income.
+      const earned = earnedInto("acc-4100") - feeBefore;
+      if (!(earned > 0)) {
+        throw new Error(`fee income moved ${earned}, expected a credit for the 1,000 IQD earned`);
+      }
+    });
 
-    const out = JSON.parse(psql(`select public.sarraf_service_transaction('svc-1','fib-1','into_safe',
-      1000000,3000,true,null,'FIB deposit into the safe','cmd-svc-1')::text`));
+    check("and never in the trading spread account", () => {
+      // «دەبێت لە ڕاپۆرتدا هەموو خێرێک هەبێت کە لەم ئیشە یان هەر ئیشێکی تر چەندم خێر کردووە.»
+      // One number cannot answer that, so a commission earning must not be added to acc-4000.
+      const inSpread = psql(`select count(*)::text from public.journal_lines l
+         join public.journal_entries e on e.id = l.entry_id
+        where l.account_id = 'acc-4000'
+          and e.transaction_id in (select id from public.txs where business_flow='commission')`).trim();
+      if (inSpread !== "0") throw new Error(`${inSpread} commission line(s) landed in the spread account`);
+    });
 
-    if (Number(out.principal) !== 1000000) throw new Error(`principal ${out.principal}`);
-    if (Number(out.commission) !== 3000) throw new Error(`commission ${out.commission}`);
-    // §3.3: the two are never merged into one figure.
-    if (Object.prototype.hasOwnProperty.call(out, "total")) {
-      throw new Error("principal and commission were combined into a total");
-    }
+    check("کاش → حساب: the same trade in the other direction", () => {
+      const fibBefore = inAccount("cmx-fib"), cashBefore = safeIqd();
+      psql(`select public.sarraf_commission_trade(null,'iqd',50000,'cmx-fib','iqd',49500,
+              'کڕینی ئێف ئایبی','commission:cmx-cash-to-account')`);
+      if (safeIqd() - cashBefore !== -50000) throw new Error("cash did not fall");
+      if (inAccount("cmx-fib") - fibBefore !== 49500) throw new Error("the account did not rise");
+    });
 
-    if (inAccount("fib-1") !== 0) throw new Error(`FIB holds ${inAccount("fib-1")}, expected 0`);
-    // The safe gains the principal and the collected commission, and nothing else.
-    const gained = safeIqd() - safeBefore;
-    if (gained !== 1003000) throw new Error(`the safe gained ${gained}, expected 1003000`);
-    const earned = accountOf("acc-4100") - feeBefore;
-    if (earned !== -3000) throw new Error(`fee income moved ${earned}, expected a 3000 credit`);
-  });
+    check("حساب → حساب: between two accounts, with neither being cash", () => {
+      const fibBefore = inAccount("cmx-fib"), keyBefore = inAccount("cmx-key"), cashBefore = safeIqd();
+      psql(`select public.sarraf_commission_trade('cmx-fib','iqd',20000,'cmx-key','iqd',20300,
+              'ئێف ئایبی بۆ کی کارد','commission:cmx-account-to-account')`);
+      if (inAccount("cmx-fib") - fibBefore !== -20000) throw new Error("FIB did not fall");
+      if (inAccount("cmx-key") - keyBefore !== 20300) throw new Error("Key Card did not rise");
+      if (safeIqd() !== cashBefore) throw new Error("cash moved in a trade that never touched it");
+    });
 
-  check("a service touches no inventory, no spread and no purchase or sale profit", () => {
-    // The heart of the requirement: this is not a currency trade.
-    const inv = Number(psql(`select coalesce(sum(case when side='debit' then amount else -amount end),0)::text
-       from public.journal_lines l join public.journal_entries e on e.id=l.entry_id
-      where l.account_id='acc-1400' and e.source_type in ('service','service_commission')`).trim());
-    const spread = Number(psql(`select coalesce(count(*),0)::text
-       from public.journal_lines l join public.journal_entries e on e.id=l.entry_id
-      where l.account_id in ('acc-4000','acc-4900','acc-5900')
-        and e.source_type in ('service','service_commission')`).trim());
-    if (spread !== 0) throw new Error(`a service touched the spread accounts ${spread} time(s)`);
-    // acc-1400 is the other side of the safe here, so it moves — but only by the principal, and
-    // never through a buy or sell command.
-    if (inv !== -1000000) throw new Error(`the account side moved ${inv}, expected -1000000`);
-    const trades = Number(psql(`select count(*)::text from public.txs where id like 'svc-%'`).trim());
-    if (trades !== 0) throw new Error("a service created a buy or sell transaction");
-  });
+    check("دراوی جیاواز: dinars out of an account, dollars into the cash", () => {
+      const fibBefore = inAccount("cmx-fib"), usdBefore = Number(psql(
+        `select coalesce(sum(amount),0)::text from public.ledger
+          where cur_id='usd' and cash_account_id is null
+            and partner_id is null and office_id is null`).trim());
+      psql(`select public.sarraf_commission_trade('cmx-fib','iqd',30000,null,'usd',22,
+              'دینار بۆ دۆلار','commission:cmx-across-currencies')`);
+      if (inAccount("cmx-fib") - fibBefore !== -30000) throw new Error("FIB did not fall");
+      const usdNow = Number(psql(
+        `select coalesce(sum(amount),0)::text from public.ledger
+          where cur_id='usd' and cash_account_id is null
+            and partner_id is null and office_id is null`).trim());
+      if (usdNow - usdBefore !== 22) throw new Error(`dollars moved ${usdNow - usdBefore}, expected 22`);
+    });
 
-  check("an uncollected commission is owed rather than counted as cash", () => {
-    psql(`insert into public.ledger(id,type,cur_id,amount,cash_account_id,date,tenant_id)
-          values ('led-fib-open2','deposit','iqd',500000,'fib-1',now(),'t-sarkhel')`);
-    const safeBefore = safeIqd();
-    const dueBefore = accountOf("acc-1200");
-    const out = JSON.parse(psql(`select public.sarraf_service_transaction('svc-2','fib-1','into_safe',
-      500000,2500,false,null,'FIB deposit, fee on account','cmd-svc-2')::text`));
-    if (Number(out.commission_receivable) !== 2500) {
-      throw new Error(`receivable ${out.commission_receivable}`);
-    }
-    // The safe gains only the principal: an uncollected fee is not money in hand.
-    const gained = safeIqd() - safeBefore;
-    if (gained !== 500000) throw new Error(`the safe gained ${gained}, expected only the principal`);
-    const owed = accountOf("acc-1200") - dueBefore;
-    if (owed !== 2500) throw new Error(`the customer owes ${owed}, expected 2500`);
-  });
+    check("money cannot leave a place that does not hold it", () => {
+      let refused = false;
+      try {
+        psql(`select public.sarraf_commission_trade('cmx-key','iqd',999999999,null,'iqd',1,
+                'زۆرتر لەوەی هەیە','commission:cmx-more-than-held')`);
+      } catch { refused = true; }
+      if (!refused) throw new Error("an account paid out money it did not have");
+    });
 
-  check("pressing the same service twice does not charge twice", () => {
-    const before = safeIqd();
-    const again = JSON.parse(psql(`select public.sarraf_service_transaction('svc-1','fib-1','into_safe',
-      1000000,3000,true,null,'FIB deposit into the safe','cmd-svc-1')::text`));
-    if (again.replayed !== true) throw new Error("the repeat was not recognised as a replay");
-    if (safeIqd() !== before) throw new Error("a repeated press moved money a second time");
-  });
+    check("the same money in the same place on both sides is refused", () => {
+      let refused = false;
+      try {
+        psql(`select public.sarraf_commission_trade('cmx-fib','iqd',100,'cmx-fib','iqd',110,
+                'هەمان شوێن','commission:cmx-same-place-twice')`);
+      } catch { refused = true; }
+      if (!refused) throw new Error("a trade with itself was accepted");
+    });
+
+    check("pressing the same commission trade twice does not move the money twice", () => {
+      const before = inAccount("cmx-key");
+      psql(`select public.sarraf_commission_trade('cmx-fib','iqd',1000,'cmx-key','iqd',1010,
+              'دووبارە','commission:cmx-pressed-twice')`);
+      const once = inAccount("cmx-key");
+      psql(`select public.sarraf_commission_trade('cmx-fib','iqd',1000,'cmx-key','iqd',1010,
+              'دووبارە','commission:cmx-pressed-twice')`);
+      if (inAccount("cmx-key") !== once) throw new Error("the second press moved money again");
+      if (once - before !== 1010) throw new Error("the first press did not move the money");
+    });
+
+    check("an ordinary trade still refuses the same currency on both sides", () => {
+      // The old command is untouched, and it is right to refuse: dinars for dinars in an
+      // ordinary trade is a typo. Only a commission trade knows about places.
+      let refused = false;
+      try {
+        psql(`insert into public.txs(id,type,cp_id,cur_id,amount,rate,against_id,total,status,date)
+              values ('tx-same-cur','buy','cust-1','iqd',100,1,'iqd',100,'completed',now())`);
+        psql(`select public.sarraf_commit_transactions(
+                '[{"id":"x","type":"buy","cur_id":"iqd","amount":100,"rate":1,"against_id":"iqd","total":100}]'::jsonb,
+                '[]'::jsonb,null,'tx:same:cur:aaaaaaaaaaaaaaaa','test','test')`);
+      } catch { refused = true; }
+      if (!refused) throw new Error("an ordinary trade accepted the same currency on both sides");
+    });
+  };
+  commissionChecks();
+
+  // ── پارە دەچێتە شوێنێکی ناودار ────────────────────────────────────────────────────────────
+  //
+  //   «حسابەکان خۆم داخڵی بکەم وەک چۆنە پارەی تر داخڵ ئەکەم.»
+  //   «لە قاسەدا دەبێت پارەی جیاوازیش هەبێت نەک تەنها کاش — (پارەی کاش)(پارەی ناو حسابەکانت).»
+  //
+  // Until now every hand-entered movement went to the cash, because the command never read
+  // cash_account_id. These prove it now goes where the owner says, and — the part that is easy
+  // to get wrong — that the two places are checked separately.
+  const holdingEntryChecks = () => {
+    const ledgerCommand = (row, key, action) => psql(
+      `select public.sarraf_post_ledger_command('[${JSON.stringify(row)}]'::jsonb,
+              '${key}', '${action}', '${action}')::text`);
+
+    check("money entered into a named account lands there and not in the cash", () => {
+      iqdRate();
+      psql(`select public.sarraf_open_cash_account('hold-key','Key Card Entry','iqd','wallet',null)`);
+      const cashBefore = safeIqd(), accountBefore = inAccount("hold-key");
+      ledgerCommand({ id: "led-hold-in", type: "deposit", owner: "self", cur_id: "iqd",
+                      amount: 250000, cash_account_id: "hold-key", date: new Date().toISOString() },
+                    "hold:entry:into:account", "داخڵکردنی حساب");
+      if (inAccount("hold-key") - accountBefore !== 250000) {
+        throw new Error(`the account moved ${inAccount("hold-key") - accountBefore}, expected 250000`);
+      }
+      if (safeIqd() !== cashBefore) throw new Error("the cash moved on an entry that named an account");
+    });
+
+    check("money entered without naming a place still lands in the cash, exactly as before", () => {
+      const cashBefore = safeIqd(), accountBefore = inAccount("hold-key");
+      ledgerCommand({ id: "led-hold-cash", type: "deposit", owner: "self", cur_id: "iqd",
+                      amount: 70000, date: new Date().toISOString() },
+                    "hold:entry:into:cash", "داخڵکردنی کاش");
+      if (safeIqd() - cashBefore !== 70000) {
+        throw new Error(`the cash moved ${safeIqd() - cashBefore}, expected 70000`);
+      }
+      if (inAccount("hold-key") !== accountBefore) throw new Error("an unnamed entry reached an account");
+    });
+
+    check("the cash cannot pay out money that is sitting in an account", () => {
+      // The defect this migration closes. sarraf_locked_cash_balance summed every row of a
+      // currency, so 250,000 held at Key Card would have made a cash withdrawal look funded.
+      const held = inAccount("hold-key"), cash = safeIqd();
+      if (!(held > 0)) throw new Error("the account holds nothing, so this proves nothing");
+      let refused = false;
+      try {
+        ledgerCommand({ id: "led-hold-overdraw", type: "withdraw", owner: "self", cur_id: "iqd",
+                        amount: -(cash + held), date: new Date().toISOString() },
+                      "hold:entry:cash:overdrawn", "دەرهێنانی زۆرتر");
+      } catch { refused = true; }
+      if (!refused) throw new Error("the cash paid out money an account was holding");
+      if (safeIqd() !== cash) throw new Error("a refused withdrawal moved the cash anyway");
+    });
+
+    check("an account cannot pay out money that is sitting in the cash", () => {
+      const held = inAccount("hold-key"), cash = safeIqd();
+      if (!(cash > 0)) throw new Error("the cash holds nothing, so this proves nothing");
+      let refused = false;
+      try {
+        ledgerCommand({ id: "led-hold-acct-overdraw", type: "withdraw", owner: "self", cur_id: "iqd",
+                        amount: -(cash + held), cash_account_id: "hold-key",
+                        date: new Date().toISOString() },
+                      "hold:entry:account:overdrawn", "دەرهێنانی زۆرتر لە حساب");
+      } catch { refused = true; }
+      if (!refused) throw new Error("an account paid out money the cash was holding");
+      if (inAccount("hold-key") !== held) throw new Error("a refused withdrawal moved the account anyway");
+    });
+
+    check("a place that is not this business's own cannot be named", () => {
+      let refused = false;
+      try {
+        ledgerCommand({ id: "led-hold-stranger", type: "deposit", owner: "self", cur_id: "iqd",
+                        amount: 1000, cash_account_id: "no-such-account",
+                        date: new Date().toISOString() },
+                      "hold:entry:unknown:place", "حسابی نەناسراو");
+      } catch { refused = true; }
+      if (!refused) throw new Error("an entry named a place that does not exist");
+    });
+
+    check("an account holding dinars cannot be named on a dollar entry", () => {
+      // An account is opened for one currency. Naming it on another would put money in a place
+      // that, by its own definition, cannot hold it.
+      let refused = false;
+      try {
+        ledgerCommand({ id: "led-hold-wrong-cur", type: "deposit", owner: "self", cur_id: "usd",
+                        amount: 500, cash_account_id: "hold-key",
+                        date: new Date().toISOString() },
+                      "hold:entry:wrong:currency", "دراوی هەڵە");
+      } catch { refused = true; }
+      if (!refused) throw new Error("a dinar account accepted dollars");
+    });
+
+    check("the trial balance still reconciles once money lives in two kinds of place", () => {
+      // base_amount, not amount: the lines are in their own currencies and only their USD
+      // valuations are comparable. Summing the raw amounts adds dinars to dollars.
+      const diff = Number(psql(`select coalesce(round(sum(case when l.side='debit' then l.base_amount
+              else -l.base_amount end), 6),0)::text from public.journal_lines l
+        join public.journal_entries e on e.id=l.entry_id where e.status='posted'`).trim());
+      if (diff !== 0) throw new Error(`the books are out by ${diff}`);
+    });
+  };
+  holdingEntryChecks();
+
+  // ── قەرزەکە بدەمەوە ───────────────────────────────────────────────────────────────────────
+  //
+  //   «دەمەوێت زۆر ورد و پڕۆفیشناڵ بێت. وە هەر لەوێوە بتوانم قەرزەکان سفر بکەمەوە، واتا
+  //    قەرزەکە بدەمەوە.»
+  //
+  // The debt centre could offset two debts and give one up. It could not do the ordinary
+  // thing — pay it, or be paid — so «سفر کردنەوە» could only be reached by recording a loss.
+  const settlementChecks = () => {
+    const debtRow = (id) => psql(
+      `select status||'|'||outstanding_principal from public.debts where id='${id}'`).trim();
+
+    check("a debt owed to the business closes when the money arrives", () => {
+      iqdRate();
+      psql(`insert into public.debts(id,debtor_type,debtor_id,creditor_type,creditor_id,currency,
+              original_principal,outstanding_principal,source_type,reason,created_by)
+            values ('d-pay-in','customer','cust-1','zeman',null,'IQD',60000,60000,
+                    'unpaid_transaction','they took the money and owe it','u-a')`);
+      const cashBefore = safeIqd();
+      const out = JSON.parse(psql(`select public.sarraf_settle_debt('d-pay-in',60000,null,
+        'قەرزەکەی دایەوە','settle-debt:paid-in-full-cash')::text`));
+      if (Number(out.settled) !== 60000) throw new Error(`settled ${out.settled}`);
+      if (out.we_owed !== false) throw new Error("a debt owed to the business was read as one it owes");
+      if (debtRow("d-pay-in") !== "settled|0.0000000000") {
+        throw new Error(`the debt is ${debtRow("d-pay-in")}`);
+      }
+      if (safeIqd() - cashBefore !== 60000) {
+        throw new Error(`the cash moved ${safeIqd() - cashBefore}, expected 60000`);
+      }
+    });
+
+    check("and it is a receipt of money, never an expense", () => {
+      // The whole reason this command exists: writing the debt off instead would put 60,000
+      // into acc-5200 and report a loss on a debt that was paid in full.
+      const loss = Number(psql(`select coalesce(sum(case when l.side='debit' then l.base_amount
+              else -l.base_amount end),0)::text from public.journal_lines l
+        join public.journal_entries e on e.id=l.entry_id
+       where l.account_id='acc-5200' and e.source_type='debt_settlement'`).trim());
+      if (loss !== 0) throw new Error(`a settlement reached the write-off expense by ${loss}`);
+    });
+
+    check("a debt the business owes closes when the money leaves", () => {
+      psql(`insert into public.debts(id,debtor_type,debtor_id,creditor_type,creditor_id,currency,
+              original_principal,outstanding_principal,source_type,reason,created_by)
+            values ('d-pay-out','zeman',null,'customer','cust-1','IQD',20000,20000,
+                    'unpaid_transaction','their money is still with us','u-a')`);
+      const cashBefore = safeIqd();
+      const out = JSON.parse(psql(`select public.sarraf_settle_debt('d-pay-out',20000,null,
+        'پارەکەم دایەوە','settle-debt:paid-out-in-full')::text`));
+      if (out.we_owed !== true) throw new Error("a debt the business owes was read the other way");
+      if (debtRow("d-pay-out") !== "settled|0.0000000000") {
+        throw new Error(`the debt is ${debtRow("d-pay-out")}`);
+      }
+      if (safeIqd() - cashBefore !== -20000) {
+        throw new Error(`the cash moved ${safeIqd() - cashBefore}, expected -20000`);
+      }
+    });
+
+    check("paying part of a debt leaves the rest open", () => {
+      psql(`insert into public.debts(id,debtor_type,debtor_id,creditor_type,creditor_id,currency,
+              original_principal,outstanding_principal,source_type,reason,created_by)
+            values ('d-part','customer','cust-1','zeman',null,'IQD',50000,50000,
+                    'unpaid_transaction','part of it will come later','u-a')`);
+      psql(`select public.sarraf_settle_debt('d-part',30000,null,'بەشێکی','settle-debt:part-payment-one')`);
+      if (debtRow("d-part") !== "partially_settled|20000.0000000000") {
+        throw new Error(`the debt is ${debtRow("d-part")}`);
+      }
+    });
+
+    check("paying more than is left is refused rather than quietly capped", () => {
+      // Capping it would move money the debt cannot account for, and the owner would have no
+      // way to tell that the amount they typed is not the amount that moved.
+      const cash = safeIqd();
+      let refused = false;
+      try {
+        psql(`select public.sarraf_settle_debt('d-part',999999,null,'زۆرتر','settle-debt:over-the-remainder')`);
+      } catch { refused = true; }
+      if (!refused) throw new Error("a payment larger than the debt was accepted");
+      if (safeIqd() !== cash) throw new Error("a refused payment moved the cash anyway");
+      if (debtRow("d-part") !== "partially_settled|20000.0000000000") {
+        throw new Error(`a refused payment changed the debt to ${debtRow("d-part")}`);
+      }
+    });
+
+    check("the business cannot pay a debt from a place that does not hold the money", () => {
+      psql(`insert into public.debts(id,debtor_type,debtor_id,creditor_type,creditor_id,currency,
+              original_principal,outstanding_principal,source_type,reason,created_by)
+            values ('d-broke','zeman',null,'customer','cust-1','IQD',999999999,999999999,
+                    'unpaid_transaction','more than the business holds','u-a')`);
+      let refused = false;
+      try {
+        psql(`select public.sarraf_settle_debt('d-broke',999999999,null,'ناتوانم','settle-debt:more-than-held')`);
+      } catch { refused = true; }
+      if (!refused) throw new Error("the business paid out money it does not have");
+    });
+
+    check("a debt paid into a named account raises that account, not the cash", () => {
+      psql(`select public.sarraf_open_cash_account('debt-fib','Debt FIB','iqd','bank',null)`);
+      psql(`insert into public.debts(id,debtor_type,debtor_id,creditor_type,creditor_id,currency,
+              original_principal,outstanding_principal,source_type,reason,created_by)
+            values ('d-to-acct','customer','cust-1','zeman',null,'IQD',15000,15000,
+                    'unpaid_transaction','they will send it to the bank','u-a')`);
+      const cashBefore = safeIqd(), acctBefore = inAccount("debt-fib");
+      psql(`select public.sarraf_settle_debt('d-to-acct',15000,'debt-fib','بۆ بانک','settle-debt:into-the-bank')`);
+      if (inAccount("debt-fib") - acctBefore !== 15000) {
+        throw new Error(`the account moved ${inAccount("debt-fib") - acctBefore}, expected 15000`);
+      }
+      if (safeIqd() !== cashBefore) throw new Error("the cash moved on a payment into an account");
+    });
+
+    check("pressing the same payment twice does not pay it twice", () => {
+      const cash = safeIqd(), before = debtRow("d-part");
+      psql(`select public.sarraf_settle_debt('d-part',5000,null,'دووبارە','settle-debt:pressed-twice-here')`);
+      const once = debtRow("d-part"), cashOnce = safeIqd();
+      if (once === before) throw new Error("the first press did nothing");
+      psql(`select public.sarraf_settle_debt('d-part',5000,null,'دووبارە','settle-debt:pressed-twice-here')`);
+      if (debtRow("d-part") !== once) throw new Error("the second press moved the debt again");
+      if (safeIqd() !== cashOnce) throw new Error("the second press moved the money again");
+      if (cash === cashOnce) throw new Error("the first press moved no money");
+    });
+
+    check("a debt already settled cannot be settled again", () => {
+      let refused = false;
+      try {
+        psql(`select public.sarraf_settle_debt('d-pay-in',1,null,'دووبارە','settle-debt:already-closed-once')`);
+      } catch { refused = true; }
+      if (!refused) throw new Error("a closed debt accepted another payment");
+    });
+
+    check("the books still reconcile after money has settled debts both ways", () => {
+      const diff = Number(psql(`select coalesce(round(sum(case when l.side='debit' then l.base_amount
+              else -l.base_amount end), 6),0)::text from public.journal_lines l
+        join public.journal_entries e on e.id=l.entry_id where e.status='posted'`).trim());
+      if (diff !== 0) throw new Error(`the books are out by ${diff}`);
+    });
+  };
+  settlementChecks();
+
+  // ── «نۆتفیکەیشن بۆ ئەوان بنێرم کە ئەوەنە قەرزارن» ─────────────────────────────────────────
+  //
+  // Every notification kind this system had was about a receipt. Debt is the other half of what
+  // a person needs to be told, and the owner's only options were to phone them or say nothing.
+  const reminderChecks = () => {
+    const inboxOf = (userId) => psql(
+      `select coalesce(string_agg(kind||'|'||title, ' / ' order by title),'none')
+         from public.zeman_notifications where recipient_id='${userId}'`).trim();
+
+    check("the person who owes money is told what they owe", () => {
+      psql(`insert into public.debts(id,debtor_type,debtor_id,creditor_type,creditor_id,currency,
+              original_principal,outstanding_principal,source_type,reason,created_by)
+            values ('d-remind','customer','cust-1','zeman',null,'IQD',75000,75000,
+                    'unpaid_transaction','مامەڵەی نەدراوە','u-a')`);
+      const out = JSON.parse(psql(`select public.sarraf_remind_debtor('d-remind',null,
+        'debt-reminder:first-reminder-sent')::text`));
+      if (out.recipient_id !== "cust-1") throw new Error(`it went to ${out.recipient_id}`);
+      if (Number(out.outstanding) !== 75000) throw new Error(`it says ${out.outstanding}`);
+      const inbox = inboxOf("cust-1");
+      if (!inbox.includes("debt_reminder")) throw new Error(`their inbox reads ${inbox}`);
+      // The amount has to be in it: a reminder that does not say how much is not a reminder.
+      if (!inbox.includes("75000")) throw new Error(`the amount is missing from ${inbox}`);
+    });
+
+    check("pressing remind twice sends one reminder, not two", () => {
+      const before = Number(psql(`select count(*)::text from public.zeman_notifications
+                                   where recipient_id='cust-1' and kind='debt_reminder'`).trim());
+      psql(`select public.sarraf_remind_debtor('d-remind',null,'debt-reminder:first-reminder-sent')`);
+      const after = Number(psql(`select count(*)::text from public.zeman_notifications
+                                  where recipient_id='cust-1' and kind='debt_reminder'`).trim());
+      if (after !== before) throw new Error(`the inbox went from ${before} to ${after}`);
+    });
+
+    // Written this way on purpose. The first version only asked "was it refused", and it
+    // passed with every guard in the command deleted: recipient_id is NOT NULL, so the row
+    // was rejected by the column rather than by anything anybody wrote. A refusal the owner
+    // cannot read and the code did not intend is not the behaviour this claims to check, so
+    // it asks the database for the SQLSTATE — 22023 is a deliberate refusal, 23502 is a null
+    // arriving somewhere it should never have reached.
+    psql(`create or replace function public.zeman_probe_remind(p_debt text, p_key text)
+          returns text language plpgsql as $fn$
+          begin
+            perform public.sarraf_remind_debtor(p_debt, null, p_key);
+            return 'accepted';
+          exception when others then return sqlstate;
+          end $fn$`);
+
+    check("a debt the business itself owes cannot be turned into a reminder", () => {
+      // Telling somebody they owe money when the business owes THEM is the opposite of true.
+      psql(`insert into public.debts(id,debtor_type,debtor_id,creditor_type,creditor_id,currency,
+              original_principal,outstanding_principal,source_type,reason,created_by)
+            values ('d-ours','zeman',null,'customer','cust-1','IQD',9000,9000,
+                    'unpaid_transaction','پارەکەیان لای ئێمەیە','u-a')`);
+      const state = psql(
+        `select public.zeman_probe_remind('d-ours','debt-reminder:our-own-debt-here')`).trim();
+      if (state === "accepted") throw new Error("the business reminded somebody of a debt it owes them");
+      if (state !== "22023") throw new Error(`refused with ${state}, not a deliberate refusal`);
+    });
+
+    check("a debt already paid cannot be turned into a reminder", () => {
+      const state = psql(
+        `select public.zeman_probe_remind('d-pay-in','debt-reminder:already-paid-off')`).trim();
+      if (state === "accepted") throw new Error("a settled debt was chased");
+      if (state !== "23514") throw new Error(`refused with ${state}, not a deliberate refusal`);
+    });
+
+    check("a reminder reaches only the person who owes it", () => {
+      const others = Number(psql(`select count(*)::text from public.zeman_notifications
+         where kind='debt_reminder' and recipient_id <> 'cust-1'`).trim());
+      if (others !== 0) throw new Error(`${others} reminder(s) reached somebody else`);
+    });
+
+    check("sending a reminder moves no money and closes no debt", () => {
+      const st = psql(`select status||'|'||outstanding_principal from public.debts
+                        where id='d-remind'`).trim();
+      if (st !== "open|75000.0000000000") throw new Error(`the debt is now ${st}`);
+    });
+  };
+  reminderChecks();
 
   check("a second reset cannot empty a system that has since gone live", () => {
     const out = JSON.parse(psql("select public.sarraf_reset_installation()::text"));
