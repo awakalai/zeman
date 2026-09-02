@@ -539,7 +539,14 @@ try {
 
     // Not "some receipts word appeared" — the batch is listed as one still awaiting a decision,
     // and the figures on it are the figures the customer's receipt actually carried.
-    record(/فیشی نوێ\s*\(\s*[1-9]/.test(ownerScreen),
+    // The four tabs became the owner's two — «تەنها دوو بەش هەیە» — so this no longer looks
+    // for a tab called «فیشی نوێ». It asks the same question more exactly than that regex did:
+    // one of the two sections counts this send, AND the send's own state is one that still
+    // needs the owner. A batch already «بەستراو» has had its decision made and would pass a
+    // count-only check while proving nothing.
+    record(/(قبووڵکراوەکان|پشکنینیان دەوێت)\s*\(\s*[1-9]/.test(ownerScreen)
+      && /پشتڕاستکراو|پشکنین پێویستە|دەخوێندرێتەوە|وەرگیرا/.test(ownerScreen)
+      && !/بەستراو/.test(ownerScreen),
       "the owner's own screen lists the batch as still awaiting their decision",
       ownerScreen.replace(/\s+/g, " ").slice(0, 220));
 

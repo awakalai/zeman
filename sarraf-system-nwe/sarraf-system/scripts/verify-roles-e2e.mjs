@@ -91,7 +91,9 @@ const ROLE_EXPECTATIONS = {
     // Naming the sections here means the structure cannot quietly collapse back into a drawer.
     present: [
       "ئەمڕۆ", "مامەڵە", "فیش", "پارە", "خەڵک", "ڕاپۆرت",
-      "کاری ئەمڕۆ", "کۆمەڵەکان", "پشکنین", "ناردن",
+      // «کۆمەڵەکان» and «ناردن» were the old names. The batch list is now «فیشەکان» and holds
+      // both of the owner's two sections as tabs, and forwarding says what it is: a record.
+      "کاری ئەمڕۆ", "فیشەکان", "پشکنین", "فۆرواردکراوەکان",
       // «حساب و عمولە» was a seventh entry here until the owner said the model behind it was a
       // misreading — «ئەو لۆجیکە هەر بسڕەوە». Accounts now live inside قاسە, where the money
       // they hold is, so there is one fewer place to look and nothing lost.

@@ -1266,7 +1266,8 @@ export default function App() {
       window.location.hash = `#/portal/${profile.role}/upload`;
     } else if (profile.role === "admin") {
       const q = new URLSearchParams(window.location.search);
-      q.set("receiptTab", "add");
+      q.set("receiptTab", "review");
+      q.set("receiptAdd", "1");
       window.history.replaceState(null, "", `${window.location.pathname}?${q}${window.location.hash}`);
       setPage("receipts");
     }
@@ -3039,14 +3040,19 @@ export default function App() {
       ],
     },
     {
-      // All receipt work together. It was in three places — the batch list under Trading, the
-      // per-receipt examination and the forwarding both buried in the tools drawer — and they
-      // are three steps of one job.
+      // All receipt work together, and only the work.
+      //
+      //   «تەنها دوو بەش هەیە کە پەیوەندی بە فیشەوە هەبێت. یەکەم ئەو فیشانەی کە یووسەرەکان
+      //    ناردوویانە و دووەم ئەوانەی کە ئەوان ناردوویانە بەس پشکنینیان دەوێت.»
+      //
+      // «فیشەکان» is those two, as the two sections of one screen. «پشکنین» is where the one
+      // that needs looking at is actually looked at. Forwarding is neither: the owner keeps it
+      // «بۆ بینینی ئەوەی فۆرۆرد کراوە» — a record of what went where, so it says so.
       label: navSectionLabel("فیش", "Receipts", "الإيصالات"),
       items: [
-        ["receipts", navSectionLabel("کۆمەڵەکان", "Batches", "الدفعات"), ScanLine],
+        ["receipts", navSectionLabel("فیشەکان", "Receipts", "الإيصالات"), ScanLine],
         ["receipt-review", navSectionLabel("پشکنین", "Review", "المراجعة"), ClipboardCheck],
-        ["receipt-forwarding", navSectionLabel("ناردن", "Forwarding", "الإرسال"), Send],
+        ["receipt-forwarding", navSectionLabel("فۆرواردکراوەکان", "Forwarded", "المُحوَّلة"), Send],
       ],
     },
     {
@@ -7840,7 +7846,15 @@ function ReceiptUploader({ customerId, customerName, partnerId, uploaderId, dire
 /* ─────────── ناوەندی فیشەکان (ئەدمین) ─────────── */
 function ReceiptsHub({ data, usr, batches, batchLoadError, reloadBatches, flash, onMakeTx, profile, calc, cur, searchFocus = "" }) {
   const initialReceiptQuery = useMemo(() => new URLSearchParams(window.location.search), []);
-  const [tab, setTab] = useState(initialReceiptQuery.get("receiptTab") || "inbox");
+  const [tab, setTab] = useState(initialReceiptQuery.get("receiptTab") || "accepted");
+  // «من فیش نانێرم، تەنها فرۆشیار ئەینێرێ» — so uploading on behalf of somebody is not one of
+  // this screen's sections. It stays as a capability for the day a seller cannot upload, and
+  // for images shared into the app from elsewhere, opened by asking for it.
+  const [addOpen, setAddOpen] = useState(initialReceiptQuery.get("receiptAdd") === "1");
+  // Open on the work. A send that is waiting for the owner is the reason they opened this
+  // screen, so if anything is waiting that is what shows — once, when the batches first
+  // arrive, and never again, so it cannot pull the reader off a section they chose.
+  const openedOnWork = useRef(false);
   const [sel, setSel] = useState(null);
   const [loc, setLoc] = useState("me");
   const [addFor, setAddFor] = useState("");
@@ -7852,7 +7866,7 @@ function ReceiptsHub({ data, usr, batches, batchLoadError, reloadBatches, flash,
   useEffect(() => {
     if (!searchFocus) return;
     setBatchSearch(searchFocus);
-    setTab("control");
+    setTab("accepted");
     setStageFilter("all");
     setBatchPage(1);
   }, [searchFocus]);
@@ -7865,29 +7879,54 @@ function ReceiptsHub({ data, usr, batches, batchLoadError, reloadBatches, flash,
     && (tx.type === "buy" || (tx.type === "sell" && tx.partnerId)));
   const u = usdConv(data);
 
-  const newN = (batches || []).filter((b) => b.status === "new").length;
-  const inbox = (batches || []).filter((b) => (tab === "inbox" ? b.status === "new" : b.status !== "new"));
-
-  const waN = (batches || []).filter((b) => b.status === "new" && b.source === "whatsapp").length;
-  const TABS = [["inbox", `${l10n("فیشی نوێ", "New receipts", "إيصالات جديدة")} (${newN})`], ["done", tr("بەستراوەکان")], ["add", tr("ناردنی فیش")], ["control", l10n("هەموو فیشەکان", "All receipts", "كل الإيصالات")]];
   const lifecycleOf = (b) => b.receipt_stage || (b.tx_id ? "matched" : b.status === "new" ? "needs_review" : "verified");
   const lifecycleTone = (stage) => stage === "matched" || stage === "finalized" ? "green" : stage === "rejected" ? "red" : stage === "archived" ? "slate" : "amber";
   const lifecycleLabel = (stage) => ({ received: l10n("وەرگیرا", "Received", "مستلم"), reading: l10n("دەخوێندرێتەوە", "Reading", "قيد القراءة"), needs_review: l10n("پشکنین پێویستە", "Needs review", "بحاجة إلى مراجعة"), verified: l10n("پشتڕاستکراو", "Verified", "موثّق"), matched: l10n("بەستراو", "Matched", "مرتبط"), rejected: l10n("ڕەتکراو", "Rejected", "مرفوض"), finalized: l10n("کۆتایی‌هاتوو", "Finalized", "مغلق نهائياً"), archived: l10n("ئەرشیفکراو", "Archived", "مؤرشف") }[stage] || stage);
+  // ── Two sections, because there are two ────────────────────────────────────────────────────
+  //
+  //   «تەنها دوو بەش هەیە کە پەیوەندی بە فیشەوە هەبێت. یەکەم ئەو فیشانەی کە یووسەرەکان
+  //    ناردوویانە و دووەم ئەوانەی کە ئەوان ناردوویانە بەس پشکنینیان دەوێت. تەواو، ئیتر
+  //    پێویست بەو هەموو بەشە زیادەیە ناکات.»
+  //
+  //   «٨ وێنە دەنێرێ بۆ نموونە / ٧ دانە قبووڵکراون دانەیەک پشکنینی ئەوێت / ئەوەی پشکنینەکە
+  //    دەپشکنم و دەبێتە بەشێک لە قبووڵکراوەکان.»
+  //
+  // A send either needs the owner or it does not. That is the whole division, and it is the
+  // one the owner reads it by. The four tabs before this — new, matched, upload-on-behalf, and
+  // a second full list with its own filters — were four names for two questions and a job the
+  // owner does not do.
+  const needsMe = (b) => lifecycleOf(b) === "needs_review" || lifecycleOf(b) === "reading";
+  const reviewBatches = (batches || []).filter(needsMe);
+  const acceptedBatches = (batches || []).filter((b) => !needsMe(b));
+  const TABS = [
+    ["accepted", `${l10n("قبووڵکراوەکان", "Accepted", "المقبولة")} (${acceptedBatches.length})`],
+    ["review", `${l10n("پشکنینیان دەوێت", "Need review", "بحاجة إلى مراجعة")} (${reviewBatches.length})`],
+  ];
   const summary = (batches || []).reduce((out, b) => {
     const stage = lifecycleOf(b); out.total += Number(b.n) || 0; out[stage] = (out[stage] || 0) + (Number(b.n) || 0);
     out.duplicates += Number(b.dup_n) || 0; out.failed += Number(b.rejected_n) || 0; return out;
   }, { total: 0, reading: 0, needs_review: 0, verified: 0, matched: 0, rejected: 0, finalized: 0, archived: 0, duplicates: 0, failed: 0 });
-  const filteredBatches = (batches || []).filter((b) => {
+  // The list the reader is looking at: the section they chose, narrowed by what they typed.
+  // A lifecycle filter on top of a two-way split would be a third way of saying the same thing,
+  // which is what «زۆر ناڕوونن» was about, so the chosen section is the only filter.
+  useEffect(() => {
+    if (openedOnWork.current || !batches) return;
+    openedOnWork.current = true;
+    if (initialReceiptQuery.get("receiptTab")) return;
+    if (reviewBatches.length) setTab("review");
+  }, [batches, reviewBatches.length]);
+
+  const filteredBatches = (tab === "review" ? reviewBatches : acceptedBatches).filter((b) => {
     const query = normalizeSearchText(batchSearch);
     const haystack = normalizeSearchText([b.id, b.customer_name, b.partner_id && usr(b.partner_id).name, b.source, b.currency].filter(Boolean).join(" "));
-    return (!query || haystack.includes(query)) && (stageFilter === "all" || lifecycleOf(b) === stageFilter);
+    return !query || haystack.includes(query);
   }).sort((a, b) => batchSort === "oldest" ? new Date(a.created_at) - new Date(b.created_at)
     : batchSort === "amount" ? Number(b.total_net || 0) - Number(a.total_net || 0)
       : batchSort === "status" ? lifecycleOf(a).localeCompare(lifecycleOf(b)) : new Date(b.created_at) - new Date(a.created_at));
   const pageSize = 20, pageBatches = filteredBatches.slice(0, batchPage * pageSize);
   useEffect(() => {
     const q = new URLSearchParams(window.location.search);
-    [["receiptTab", tab], ["receiptSearch", batchSearch], ["receiptStage", stageFilter], ["receiptSort", batchSort]].forEach(([key, value]) => value && value !== "all" && value !== "newest" ? q.set(key, value) : q.delete(key));
+    [["receiptTab", tab], ["receiptAdd", addOpen ? "1" : ""], ["receiptSearch", batchSearch], ["receiptStage", stageFilter], ["receiptSort", batchSort]].forEach(([key, value]) => value && value !== "all" && value !== "newest" ? q.set(key, value) : q.delete(key));
     window.history.replaceState(null, "", `${window.location.pathname}${q.size ? `?${q}` : ""}${window.location.hash}`);
   }, [tab, batchSearch, stageFilter, batchSort]);
 
@@ -7907,73 +7946,79 @@ function ReceiptsHub({ data, usr, batches, batchLoadError, reloadBatches, flash,
         ))}
       </div>
 
-      {tab === "control" && <>
-        <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-2" role="status" aria-label={l10n("پوختەی فیشە هەڵگیراوەکان", "Persisted receipt summary", "ملخص الإيصالات المحفوظة")}>
-          {[[l10n("کۆ", "Total", "المجموع"), summary.total], ...["reading", "needs_review", "verified", "matched", "rejected", "finalized", "archived"].map((stage) => [lifecycleLabel(stage), summary[stage]])].map(([label, value]) => <Card key={label} className="p-3"><div className="text-[10px] text-[var(--txt-3)]">{label}</div><div className="text-xl font-bold mt-1" style={num}>{value}</div></Card>)}
+      {/* One list, for whichever of the two sections is open. «فرۆشیارێک لای خۆی هەموو
+        * فیشەکانی ببینێت کە ناردوویتی ، منیش هەمووی ببینم بەڵام کاتێک وردم کردەوە ، ئاوا
+        * ئاسایی هەر کۆمەلەیەک بەجیا ببینم» — one card per send, opening onto that send. */}
+      <Card className="p-4 space-y-3">
+        <div className="grid grid-cols-1 md:grid-cols-[minmax(240px,1fr)_160px] gap-2">
+          <label className="relative"><span className="sr-only">{l10n("گەڕان لە کۆمەڵە فیشەکان", "Search receipt batches", "البحث في دُفعات الإيصالات")}</span><Search className="absolute start-3 top-3 w-4 h-4 text-[var(--txt-3)]"/><Inp className="ps-9" value={batchSearch} onChange={(e) => { setBatchSearch(e.target.value); setBatchPage(1); }} placeholder={l10n("ناسنامە، کڕیار، هاوبەش، پلاتفۆرم یان دراو…", "Batch ID, customer, partner, platform, or currency…", "معرّف الدفعة أو الزبون أو الشريك أو المنصة أو العملة…")} /></label>
+          <Sel aria-label={l10n("ڕیزکردنی کۆمەڵەکان", "Sort batches", "ترتيب الدُفعات")} value={batchSort} onChange={(e) => setBatchSort(e.target.value)}><option value="newest">{l10n("نوێترین", "Newest", "الأحدث")}</option><option value="oldest">{l10n("کۆنترین", "Oldest", "الأقدم")}</option><option value="amount">{l10n("بڕ", "Amount", "المبلغ")}</option></Sel>
         </div>
-        <Card className="p-4 space-y-3">
-          <div className="grid grid-cols-1 md:grid-cols-[minmax(240px,1fr)_180px_160px] gap-2">
-            <label className="relative"><span className="sr-only">{l10n("گەڕان لە کۆمەڵە فیشەکان", "Search receipt batches", "البحث في دُفعات الإيصالات")}</span><Search className="absolute start-3 top-3 w-4 h-4 text-[var(--txt-3)]"/><Inp className="ps-9" value={batchSearch} onChange={(e) => { setBatchSearch(e.target.value); setBatchPage(1); }} placeholder={l10n("ناسنامە، کڕیار، هاوبەش، پلاتفۆرم یان دراو…", "Batch ID, customer, partner, platform, or currency…", "معرّف الدفعة أو الزبون أو الشريك أو المنصة أو العملة…")} /></label>
-            <Sel aria-label={l10n("فلتەری ڕێڕەو", "Lifecycle filter", "تصفية دورة الإيصال")} value={stageFilter} onChange={(e) => { setStageFilter(e.target.value); setBatchPage(1); }}><option value="all">{l10n("هەموو دۆخەکان", "All lifecycle states", "جميع الحالات")}</option>{["received","reading","needs_review","verified","matched","rejected","finalized","archived"].map((x) => <option value={x} key={x}>{lifecycleLabel(x)}</option>)}</Sel>
-            <Sel aria-label={l10n("ڕیزکردنی کۆمەڵەکان", "Sort batches", "ترتيب الدُفعات")} value={batchSort} onChange={(e) => setBatchSort(e.target.value)}><option value="newest">{l10n("نوێترین", "Newest", "الأحدث")}</option><option value="oldest">{l10n("کۆنترین", "Oldest", "الأقدم")}</option><option value="amount">{l10n("بڕ", "Amount", "المبلغ")}</option><option value="status">{l10n("دۆخ", "Status", "الحالة")}</option></Sel>
-          </div>
-          {!pageBatches.length ? <StatePanel type="empty" title={l10n("هیچ کۆمەڵەیەک نەدۆزرایەوە", "No receipt batches match", "لم يتم العثور على دفعات مطابقة")} compact /> : <div className="space-y-2">{pageBatches.map((b) => <button type="button" key={b.id} onClick={() => setSel(b.id)} className="w-full min-h-14 text-start rounded-xl p-3 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--ac)]" style={{ background: "var(--surf-2)", border: "1px solid var(--line)" }} aria-label={l10n(`کردنەوەی کۆمەڵەی ${b.id}`, `Open batch ${b.id}`, `فتح الدفعة ${b.id}`)}><div className="flex justify-between gap-3"><div className="min-w-0"><div className="font-bold truncate">{b.customer_name || (b.partner_id ? usr(b.partner_id).name : b.id)}</div><div className="text-[10px] text-[var(--txt-3)] mt-1" dir="ltr">{b.id} · {new Date(b.created_at).toLocaleString("en-GB")}</div></div><div className="text-end shrink-0"><Pill tone={lifecycleTone(lifecycleOf(b))}>{lifecycleLabel(lifecycleOf(b))}</Pill><div className="text-xs font-bold mt-1" style={num}>{fmtMoney(data, b.total_net, b.currency)} {b.currency}</div></div></div></button>)}</div>}
-          {pageBatches.length < filteredBatches.length && <Btn kind="ghost" className="w-full" onClick={() => setBatchPage((p) => p + 1)}>{l10n(`${Math.min(pageSize, filteredBatches.length - pageBatches.length)} دانەی تر`, `Load ${Math.min(pageSize, filteredBatches.length - pageBatches.length)} more`, `تحميل ${Math.min(pageSize, filteredBatches.length - pageBatches.length)} إضافية`)}</Btn>}
-          <div className="text-[10px] text-[var(--txt-3)]" aria-live="polite">{l10n(`${pageBatches.length} لە ${filteredBatches.length} کۆمەڵە نیشان دەدرێت؛ بارکردنی سێرڤەر سنووردارە بە ٢٠٠ کۆمەڵە.`, `Showing ${pageBatches.length} of ${filteredBatches.length}; server load is bounded to 200 batches.`, `يتم عرض ${pageBatches.length} من ${filteredBatches.length}؛ تحميل الخادم محدود بـ200 دفعة.`)}</div>
-        </Card>
-      </>}
 
-      {(tab === "inbox" || tab === "done") && (
-        inbox.length === 0 ? <Card><Empty t={tab === "inbox" ? "هیچ کۆمەڵەیەکی نوێ نییە" : "هیچ نییە"} /></Card> :
-          inbox.map((b, i) => (
-            <Card key={b.id} className="p-4 rise" style={{ animationDelay: `${i * 40}ms` }} onClick={() => setSel(b.id)}>
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="font-semibold text-[var(--txt)]">{b.customer_name || (b.partner_id ? usr(b.partner_id).name : "—")}</div>
-                  <div className="text-xs text-[var(--txt-2)] mt-0.5" style={num}>{b.n} فیش · {new Date(b.created_at).toLocaleString("en-GB")}</div>
-                  <div className="flex gap-1.5 mt-1.5 flex-wrap">
-                    {b.source === "whatsapp" && (
-                      <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-600 text-white flex items-center gap-1">
-                        <MessageCircle className="w-3 h-3" /> {tr("واتساپ")}
-                      </span>
-                    )}
-                    <Pill tone={b.direction === "out" ? "amber" : "green"}>{DIR_KU[b.direction || "in"]}</Pill>
-                    <Pill tone={lifecycleTone(lifecycleOf(b))}>{lifecycleLabel(lifecycleOf(b))}</Pill>
-                    {(b.rejected_n || b.dup_n) > 0 && <Pill tone="red">{b.rejected_n || b.dup_n} ڕەتکراو</Pill>}
-                    {b.partner_id && <Pill tone="amber">لای {usr(b.partner_id).name}</Pill>}
+        {!pageBatches.length
+          ? <StatePanel type="empty" compact title={tab === "review"
+              ? l10n("هیچ فیشێک چاوەڕێی تۆ نییە ✓", "Nothing is waiting for you ✓", "لا شيء بانتظارك ✓")
+              : l10n("هێشتا هیچ ناردنێک نەهاتووە", "No send has arrived yet", "لم تصل أي إرسالية بعد")} />
+          : <div className="space-y-2">
+              {pageBatches.map((b, i) => (
+                <Card key={b.id} className="p-4 rise" style={{ animationDelay: `${i * 40}ms` }} onClick={() => setSel(b.id)}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="font-semibold text-[var(--txt)]">{b.customer_name || (b.partner_id ? usr(b.partner_id).name : "—")}</div>
+                      <div className="text-xs text-[var(--txt-2)] mt-0.5" style={num}>{b.n} {tr("فیش")} · {new Date(b.created_at).toLocaleString("en-GB")}</div>
+                      <div className="flex gap-1.5 mt-1.5 flex-wrap">
+                        {b.source === "whatsapp" && (
+                          <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-600 text-white flex items-center gap-1">
+                            <MessageCircle className="w-3 h-3" /> {tr("واتساپ")}
+                          </span>
+                        )}
+                        <Pill tone={b.direction === "out" ? "amber" : "green"}>{DIR_KU[b.direction || "in"]}</Pill>
+                        <Pill tone={lifecycleTone(lifecycleOf(b))}>{lifecycleLabel(lifecycleOf(b))}</Pill>
+                        {(b.rejected_n || b.dup_n) > 0 && <Pill tone="red">{b.rejected_n || b.dup_n} {tr("ڕەتکراو")}</Pill>}
+                        {b.partner_id && <Pill tone="amber">{tr("لای")} {usr(b.partner_id).name}</Pill>}
+                      </div>
+                    </div>
+                    <div className="text-left shrink-0">
+                      <div className="text-xl font-bold text-[var(--pos)]" style={num}>{fmtMoney(data, b.total_net, b.currency)}</div>
+                      <div className="text-[11px] text-[var(--txt-3)]">{b.currency} {tr("بێ فی")}</div>
+                      {u(b.total_net, b.currency) != null && <div className="text-[11px] text-[var(--txt-2)]" style={num}>≈ {fmt(u(b.total_net, b.currency), 0)} $</div>}
+                      {b.total_fee > 0 && <div className="text-[10px] text-[var(--txt-3)]" style={num}>{tr("بە فی")} {fmtMoney(data, b.total_gross, b.currency)}</div>}
+                    </div>
                   </div>
-                </div>
-                <div className="text-left shrink-0">
-                  <div className="text-xl font-bold text-[var(--pos)]" style={num}>{fmtMoney(data, b.total_net, b.currency)}</div>
-                  <div className="text-[11px] text-[var(--txt-3)]">{b.currency} بێ فی</div>
-                  {u(b.total_net, b.currency) != null && <div className="text-[11px] text-[var(--txt-2)]" style={num}>≈ {fmt(u(b.total_net, b.currency), 0)} $</div>}
-                  {b.total_fee > 0 && <div className="text-[10px] text-[var(--txt-3)]" style={num}>بە فی {fmtMoney(data, b.total_gross, b.currency)}</div>}
-                </div>
-              </div>
-            </Card>
-          ))
+                </Card>
+              ))}
+            </div>}
+
+        {pageBatches.length < filteredBatches.length && <Btn kind="ghost" className="w-full" onClick={() => setBatchPage((p) => p + 1)}>{l10n(`${Math.min(pageSize, filteredBatches.length - pageBatches.length)} دانەی تر`, `Load ${Math.min(pageSize, filteredBatches.length - pageBatches.length)} more`, `تحميل ${Math.min(pageSize, filteredBatches.length - pageBatches.length)} إضافية`)}</Btn>}
+        <div className="text-[10px] text-[var(--txt-3)]" aria-live="polite">{l10n(`${pageBatches.length} لە ${filteredBatches.length} کۆمەڵە نیشان دەدرێت؛ بارکردنی سێرڤەر سنووردارە بە ٢٠٠ کۆمەڵە.`, `Showing ${pageBatches.length} of ${filteredBatches.length}; server load is bounded to 200 batches.`, `يتم عرض ${pageBatches.length} من ${filteredBatches.length}؛ تحميل الخادم محدود بـ200 دفعة.`)}</div>
+      </Card>
+
+      {/* Two more sections used to be rendered here, for tab values "loc" and "wa". Neither was
+        * ever in TABS and no button set them, so they had been unreachable for as long as the
+        * four-tab bar existed: two more names for the receipts screen that nobody could open.
+        * LocationReceipts is still rendered by the partner holdings screen, which is where
+        * «فیشەکانی لای هاوبەشەکان» actually belongs. */}
+
+      {/* Not a section. «من فیش نانێرم، تەنها فرۆشیار ئەینێرێ» — but a seller whose phone will
+        * not upload still has to be served, and images shared into ZEMAN from another app land
+        * here too. So it opens when it is asked for, and the reason is written down. */}
+      {!addOpen && (
+        <button type="button" onClick={() => setAddOpen(true)}
+          className="w-full text-[12px] py-2.5 rounded-[var(--r-sm)] tap"
+          style={{ color: "var(--txt-3)", background: "var(--surf-2)", border: "1px solid var(--line)" }}>
+          {tr("ناردنی فیش لە جیاتی کەسێک")}
+        </button>
       )}
 
-      {tab === "loc" && (
-        <>
-          <div className="flex gap-1 rounded-[var(--r)] p-1 overflow-x-auto" style={{ background: "var(--surf)", border: "1px solid var(--line)", boxShadow: "var(--sh-1)" }}>
-            <button onClick={() => setLoc("me")}
-              className={`whitespace-nowrap px-4 py-2 rounded-lg text-sm ${loc === "me" ? "bg-slate-900 text-white font-semibold" : "text-[var(--txt-2)]"}`}>{tr("لای خۆم")}</button>
-            {partners.map((p) => (
-              <button key={p.id} onClick={() => setLoc(p.id)}
-                className={`whitespace-nowrap px-4 py-2 rounded-lg text-sm ${loc === p.id ? "bg-[var(--pos)] text-white font-semibold" : "text-[var(--txt-2)]"}`}>{p.name}</button>
-            ))}
-          </div>
-          <LocationReceipts partnerId={loc === "me" ? null : loc} data={data} flash={flash}
-            title={loc === "me" ? "فیشەکانی لای خۆم" : `فیشەکانی لای ${usr(loc).name}`} />
-        </>
-      )}
-
-      {tab === "wa" && <WhatsAppInfo batches={batches} waN={waN} />}
-
-      {tab === "add" && (
+      {addOpen && (
         <Card className="p-5">
-          <SecLbl>{tr("ناردنی فیش لە جیاتی کەسێک")}</SecLbl>
+          <div className="flex items-start justify-between gap-3 mb-1">
+            <SecLbl>{tr("ناردنی فیش لە جیاتی کەسێک")}</SecLbl>
+            <button type="button" onClick={() => { setAddOpen(false); setAddFor(""); }}
+              aria-label={tr("داخستن")} className="p-1.5 rounded-lg" style={{ color: "var(--txt-3)" }}>
+              <X className="w-4 h-4" />
+            </button>
+          </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
             <div>
               <Lbl>{tr("کڕیار")}</Lbl>
@@ -8007,7 +8052,7 @@ function ReceiptsHub({ data, usr, batches, batchLoadError, reloadBatches, flash,
             <ReceiptUploader customerId={addFor} customerName={usr(addFor).name} uploaderId={profile?.id}
               data={data} direction="in" allowDirection flash={flash} staffReview role={profile?.role}
               adminOverrideReason={addReason}
-              onDone={() => { setAddFor(""); reloadBatches(); setTab("inbox"); }} />
+              onDone={() => { setAddFor(""); setAddOpen(false); reloadBatches(); setTab("review"); }} />
           )}
         </Card>
       )}
@@ -8295,65 +8340,6 @@ function ShareTable({ rows, data, who, title, onClose, flash }) {
   );
 }
 
-/* ─────────── ڕێنمایی واتساپ ─────────── */
-function WhatsAppInfo({ batches, waN }) {
-  const wa = (batches || []).filter((b) => b.source === "whatsapp");
-  const today = new Date().toISOString().slice(0, 10);
-  const todayN = wa.filter((b) => (b.created_at || "").slice(0, 10) === today).length;
-  return (
-    <div className="space-y-4">
-      <Card className="p-5 bg-emerald-600 border-[var(--pos)] text-white">
-        <div className="flex items-center gap-2.5 mb-3">
-          <MessageCircle className="w-6 h-6" />
-          <div className="font-bold">{tr("وەرگرتنی فیش لە واتساپەوە")}</div>
-        </div>
-        <div className="grid grid-cols-3 gap-3">
-          <div>
-            <div className="text-[11px] text-emerald-100">{tr("کۆی کۆمەڵەکان")}</div>
-            <div className="text-2xl font-bold" style={num}>{wa.length}</div>
-          </div>
-          <div>
-            <div className="text-[11px] text-emerald-100">{tr("ئەمڕۆ")}</div>
-            <div className="text-2xl font-bold" style={num}>{todayN}</div>
-          </div>
-          <div>
-            <div className="text-[11px] text-emerald-100">{tr("چاوەڕوان")}</div>
-            <div className="text-2xl font-bold" style={num}>{waN}</div>
-          </div>
-        </div>
-      </Card>
-
-      <Card className="p-5">
-        <SecLbl>{tr("چۆن کار دەکات")}</SecLbl>
-        <div className="space-y-3 text-sm text-[var(--txt-2)] leading-relaxed">
-          <div className="flex gap-3">
-            <span className="w-6 h-6 rounded-full bg-[var(--pos)] text-white flex items-center justify-center text-xs font-bold shrink-0">{tr("١")}</span>
-            <span>{tr("کڕیار فیشەکان لە واتساپەوە")} <b>{tr("فۆرۆرد")}</b> {tr("دەکات بۆ ژمارەی کۆمپانیاکە")}</span>
-          </div>
-          <div className="flex gap-3">
-            <span className="w-6 h-6 rounded-full bg-[var(--pos)] text-white flex items-center justify-center text-xs font-bold shrink-0">{tr("٢")}</span>
-            <span>{tr("سیستەمەکە خۆکار وێنەکان دەخوێنێتەوە و دووبارەکان دەدۆزێتەوە")}</span>
-          </div>
-          <div className="flex gap-3">
-            <span className="w-6 h-6 rounded-full bg-[var(--pos)] text-white flex items-center justify-center text-xs font-bold shrink-0">{tr("٣")}</span>
-            <span>{tr("کۆمەڵەیەکی نوێ لە")} <b>{tr("ئینباکس")}</b> {tr("دەردەکەوێت — تۆ تەنها مامەڵەکەی لێ درووست دەکەیت")}</span>
-          </div>
-        </div>
-        <div className="mt-4 pt-4 border-t border-[var(--line)] text-xs text-[var(--txt-2)] leading-relaxed">
-          <b className="text-[var(--txt)]">{tr("تێبینی:")}</b> {tr("فیشەکان کە بە ماوەی ١٥ خولەک بنێردرێن، هەموویان لە یەک کۆمەڵەدا کۆدەبنەوە.")}
-          کڕیارەکە بە ژمارەی مۆبایلەکەی دەناسرێتەوە — بۆیە دڵنیابە ژمارەکەی لە ئەکاونتەکەیدا دروستە.
-        </div>
-      </Card>
-
-      <Card className="p-4 bg-[var(--line)]">
-        <div className="text-xs text-[var(--txt-2)] leading-relaxed">
-          <b className="text-[var(--txt)]">{tr("نرخ:")}</b> {tr("وەرگرتنی نامە لە کڕیارەکانەوە")} <b>{tr("بەخۆڕاییە")}</b> {tr("— تەنها ئەگەر تۆ وەڵامیان بدەیتەوە پارەی لەسەرە.")}
-          سیستەمەکە بە شێوەی بنەڕەت وەڵام نادات.
-        </div>
-      </Card>
-    </div>
-  );
-}
 
 /* ─────────── فیشەکانی شوێنێک (لای خۆم یان لای هاوبەشێک) ─────────── */
 function LocationReceipts({ partnerId, data, title, flash, showValuation = true }) {
