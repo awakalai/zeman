@@ -153,6 +153,29 @@ component's service imports so the screen cannot quietly start reading more than
 
 A view nobody opened is a view nobody audited. Both facts were true of this one until today.
 
+## 2e. Every command on the server, accounted for
+
+216 functions are declared across the 112 migrations. Each one was traced to something that
+runs it — the browser, an API route, another function's body, a trigger, or a gate — and the
+inventory comes out as follows.
+
+**Four are called by nothing anywhere.** They are named in `verify:source` with the reason, so
+the list is reviewed rather than assumed, and a fifth fails the gate:
+
+| command | why it is still there |
+|---|---|
+| `sarraf_confirm_receipt_match` | superseded by `sarraf_convert_receipt_batch_to_transaction` (202608280024) |
+| `sarraf_current_role` | a helper from the legacy baseline; role checks go through `sarraf_self_profile` |
+| `sarraf_rate_limit_sweep` | a maintenance sweep with **no scheduler behind it** — see below |
+| `sarraf_set_tenant_rate` | superseded by `sarraf_set_receipt_daily_rate`, which is what the rates screen calls |
+
+**None of them has been dropped.** Removing a function from a live database is a destructive
+change, and this is not the kind of finding that justifies one unasked. Three are simply dead
+weight. The fourth is a decision for the owner: `sarraf_rate_limit_sweep` exists to clear old
+rate-limit rows and nothing calls it, so **that table grows without bound**. It is small and
+slow-growing, and the choice is between scheduling the sweep and deleting the function — not
+between doing nothing and doing nothing.
+
 ## 3. Only the owner can do these
 
 None of these can be done from the repository. Each is a real blocker for selling the system.
