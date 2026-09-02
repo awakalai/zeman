@@ -61,7 +61,7 @@ const COMPUTED_KEY = /\btr\(\s*([^"\s)][^)\n]{0,30})/g;
 // file → the expression each computed key starts with, and the table it is read from.
 const COMPUTED = {
   "src/components/portal/PortalReceiptSummary.jsx": [["STAGE_LABEL[", "STAGE_LABEL"]],
-  "src/components/portal/MyReceipts.jsx": [["outcome.label", "OUTCOME"]],
+  "src/components/portal/MyReceipts.jsx": [["state.label", "OUTCOME"]],
   "src/App.jsx": [["ROLE_KU[", "ROLE_KU"], ["category", "XCATS"]],
 };
 

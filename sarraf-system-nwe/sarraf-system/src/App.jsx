@@ -12,6 +12,7 @@ import { errorText, errorTextOr } from "./services/userFacingError";
 import { flashIsGood } from "./services/flashTone.js";
 import { settlementChoices, settlementWords } from "./services/settlement.js";
 import { loadMoneyAtOffices, moneyAtOfficeText } from "./services/accounting.js";
+import { buildBundleForReceipts, bundleArchiveName, shareOrSaveBundle } from "./services/receiptBundleTransfer.js";
 import { reportFault } from "./services/faultReport.js";
 import { MyReceipts } from "./components/portal/MyReceipts";
 import { intakeReceipt, intakeStatusText, loadMyReceipts, noteReceiptReadFailure, receiptReadFailureText, replaceReceipt, requestStoredReceiptOcr } from "./services/receiptIntake";
@@ -8722,6 +8723,22 @@ function ReceiptArchive({ customerId, data, flash, simple = false }) {
 
   useEffect(() => { reloadMine(); }, [reloadMine]);
 
+  // §11. The selection is a list of ids from a checkbox column, which is a request and not an
+  // authorization: sarraf_release_receipts_for_bundle decides which of them the subject may
+  // actually have, and everything below works only from what it returned. customerId is passed
+  // as the subject for the same reason the loaders above take it — an administrator previewing
+  // a customer's portal must bundle that customer's receipts, not their own.
+  const bundleThese = useCallback(async (ids, { mode = "share", onProgress } = {}) => {
+    const built = await buildBundleForReceipts(supabase, ids, {
+      subjectId: customerId, onProgress,
+    });
+    const name = bundleArchiveName(built.included);
+    const delivery = mode === "save"
+      ? await shareOrSaveBundle(built.zip, name, { navigatorImpl: null })
+      : await shareOrSaveBundle(built.zip, name);
+    return { ...built, delivery };
+  }, [customerId]);
+
   // The upload is the ordinary one; the link is made after it, so a replacement that cannot be
   // linked is still a receipt that arrived rather than an image that was lost.
   const replaceOne = async (receipt, file) => {
@@ -8763,7 +8780,7 @@ function ReceiptArchive({ customerId, data, flash, simple = false }) {
           ui={{ Card, Empty, Hero, Pill, fmtMoney, tr, num }}
           loadSummary={(batchId) => loadBatchSummary(supabase, batchId)} /></DeferredPanel>
         <MyReceipts receipts={mine} loading={mine === null} error={mineError}
-          onReload={reloadMine} onReplace={replaceOne}
+          onReload={reloadMine} onReplace={replaceOne} onBundle={bundleThese}
           ui={{ Card, Pill, Empty, StatePanel, tr }} />
       </div>
     );
