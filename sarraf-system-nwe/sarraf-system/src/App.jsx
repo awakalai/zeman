@@ -778,28 +778,6 @@ function AdminCenterHub({ lang = "ku", onNavigate, data, calc, cur, batches }) {
 
   const attention = waiting.length + unpriced.length + approvals + unpaid + officesOwed.length;
 
-  // Everything the centre used to list. Still all here, still one press away — but small, and
-  // below the work, because a tool you reach for twice a month should not be the size of the
-  // thing you do forty times a day.
-  const tools = [
-    ["action-inbox", label("ئینباکسی کارەکان", "Action inbox", "صندوق الإجراءات"), Inbox],
-    ["receipt-review", label("پشکنینی وردی فیش", "Receipt review", "مراجعة الإيصالات"), ClipboardCheck],
-    ["receipt-forwarding", label("ناردنی فیش", "Receipt forwarding", "إرسال الإيصالات"), Send],
-    ["partner-holdings", label("ئەوەی لای هاوبەش دانراوە", "Placed with partners", "المودع لدى الشركاء"), Boxes],
-    ["debt-center", label("قەرز و قاسە", "Debt & cashbox", "الديون والخزنة"), Scale],
-    ["cashbox", label("قاسەی کڕیاران", "Customer cashbox", "خزنة الزبائن"), Wallet],
-    ["partner-accounts", label("حسابی هاوبەشان", "Partner accounts", "حسابات الشركاء"), Handshake],
-    ["office-payments", label("پارەدانی نووسینگە", "Office payments", "مدفوعات المكتب"), Building2],
-    ["cash-accounts", label("حسابەکان و عمولە", "Accounts & commission", "الحسابات والعمولة"), Banknote],
-    ["explain-balance", label("ئەم باڵانسە بۆچی ئەوەندەیە؟", "Explain a balance", "لماذا هذا الرصيد؟"), Search],
-    ["approvals", label("کۆنترۆڵ و پەسەندکردن", "Controls & approvals", "التحكم والموافقات"), ShieldCheck],
-    ["insights", label("ڕەوت و شیکاری", "Trends & insights", "الاتجاهات والتحليلات"), TrendingUp],
-    ["integrity", label("ناوەندی یەکپارچەیی", "Integrity centre", "مركز سلامة البيانات"), ShieldAlert],
-    ["audit", label("تۆماری گۆڕانکاری", "Change log", "سجل التغييرات"), History],
-    ["export-audit", label("هەناردە و وردبینی", "Export & audit", "التصدير والتدقيق"), FileCheck2],
-    ["backup", label("پاراستنی داتا", "Data protection", "حماية البيانات"), Database],
-  ];
-
   return (
     <div className="space-y-6">
       <div className="dashboard-page-head flex items-end justify-between gap-4">
@@ -893,20 +871,13 @@ function AdminCenterHub({ lang = "ku", onNavigate, data, calc, cur, batches }) {
           action={label("بیبەستەوە", "Close", "أقفل")} onClick={go("close")} />
       </section>
 
-      <section aria-labelledby="today-tools">
-        <h2 id="today-tools" className="text-[12px] font-semibold mb-3" style={{ color: "var(--txt-2)" }}>
-          {label("ئامرازەکان", "Tools", "الأدوات")}
-        </h2>
-        <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-2">
-          {tools.map(([id, title, Icon]) => (
-            <button key={id} type="button" onClick={go(id)}
-              className="card tap hov px-3 py-3 text-start flex items-center gap-2.5 min-h-[48px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ac)]">
-              <Icon className="w-4 h-4 shrink-0" style={{ color: "var(--txt-3)" }} aria-hidden="true" />
-              <span className="text-[12px] font-semibold truncate" style={{ color: "var(--txt-2)" }}>{title}</span>
-            </button>
-          ))}
-        </div>
-      </section>
+      {/*
+        * The sixteen-tool grid that used to sit here is gone, and nothing went with it.
+        * Every one of those screens now has a named place in the navigation — «فیش», «پارە»,
+        * «ڕاپۆرت» — because a grid of sixteen buttons at the foot of a page is not a section,
+        * it is a drawer, and a drawer is where things go when nobody has decided what they are.
+        * This page is now what its title says: the work waiting today.
+        */}
     </div>
   );
 }
@@ -2991,41 +2962,91 @@ export default function App() {
     },
   ];
 
+  // ── the sections, and why there are six of them ──────────────────────────────────────────
+  //
+  //   «دەمەوێت بەشەکان زۆر بە ڕوونی جیا بکەیتەوە نەک ئاوا هەمووی لە یەک شوێن بێت.»
+  //
+  // There were four groups holding seven entries, and SIXTEEN more screens listed at the foot of
+  // one of them. So two thirds of the application was reachable only by opening «کاری ئەمڕۆ» and
+  // scrolling past the work to a grid of tools — which is not a section, it is a drawer, and a
+  // drawer is where things go when nobody has decided what they are.
+  //
+  // These six are the decision. Each is a question a person in this business actually has, and
+  // every screen belongs to exactly one of them:
+  //
+  //   ئەمڕۆ      what needs doing right now
+  //   مامەڵە     buying and selling
+  //   فیش        everything about receipts, in one place instead of three
+  //   پارە       where the money is and who owes whom
+  //   خەڵک       the people it is done with
+  //   ڕاپۆرت     what happened, and whether the books are sound
+  //
+  // Nothing was removed. What changed is that a screen is now found by asking what it is for
+  // rather than by remembering where it was put.
   const NAV_GROUPS = isSystemManager ? MANAGER_NAV_GROUPS : [
     {
-      label: navSectionLabel("سەرەکی", "Overview", "نظرة عامة"),
+      label: navSectionLabel("ئەمڕۆ", "Today", "اليوم"),
       items: [
         ["dash", tr("داشبۆرد"), LayoutDashboard],
+        ["admin-center", navSectionLabel("کاری ئەمڕۆ", "Today's work", "عمل اليوم"), Inbox],
+        ["approvals", navSectionLabel("پەسەندکردن", "Approvals", "الموافقات"), ShieldCheck],
       ],
     },
     {
-      label: navSectionLabel("بازرگانی", "Trading", "التداول"),
+      label: navSectionLabel("مامەڵە", "Trading", "التداول"),
       items: [
         ["newtx", tr("مامەڵەی نوێ"), ArrowLeftRight],
         ["txs", tr("مامەڵەکان"), ListOrdered],
-        // Not "پشکنینی فیش": the admin centre already has a screen by that name, and two
-        // different things with one name is a person opening the wrong one and concluding the
-        // right one is broken. This is the working list of batches — where a batch becomes a
-        // transaction. The other is the per-receipt examination.
-        ["receipts", tr("فیشەکان"), ScanLine],
       ],
     },
     {
-      label: navSectionLabel("بەڕێوەبردن", "Management", "الإدارة"),
+      // All receipt work together. It was in three places — the batch list under Trading, the
+      // per-receipt examination and the forwarding both buried in the tools drawer — and they
+      // are three steps of one job.
+      label: navSectionLabel("فیش", "Receipts", "الإيصالات"),
+      items: [
+        ["receipts", navSectionLabel("کۆمەڵەکان", "Batches", "الدفعات"), ScanLine],
+        ["receipt-review", navSectionLabel("پشکنین", "Review", "المراجعة"), ClipboardCheck],
+        ["receipt-forwarding", navSectionLabel("ناردن", "Forwarding", "الإرسال"), Send],
+      ],
+    },
+    {
+      label: navSectionLabel("پارە", "Money", "المال"),
+      items: [
+        ["debt-center", navSectionLabel("قەرز و قاسە", "Debt & cashbox", "الديون والخزنة"), Scale],
+        ["cash-accounts", navSectionLabel("حساب و عمولە", "Accounts & fees", "الحسابات والعمولة"), Banknote],
+        ["office-payments", navSectionLabel("نووسینگە", "Offices", "المكاتب"), Building2],
+        ["partner-holdings", navSectionLabel("لای هاوبەشان", "With partners", "لدى الشركاء"), Boxes],
+        ["explain-balance", navSectionLabel("شیکردنەوەی باڵانس", "Explain a balance", "تفسير الرصيد"), Search],
+      ],
+    },
+    {
+      label: navSectionLabel("خەڵک", "People", "الأشخاص"),
       items: [
         ["people", tr("بەکارهێنەران"), Users],
-        ["report", tr("ڕاپۆرت"), PieChart],
+        ["cashbox", navSectionLabel("قاسەی کڕیاران", "Customer cashbox", "خزنة الزبائن"), Wallet],
+        ["partner-accounts", navSectionLabel("حسابی هاوبەشان", "Partner accounts", "حسابات الشركاء"), Handshake],
       ],
     },
     {
-      label: navSectionLabel("کارەکان", "Work", "الأعمال"),
+      label: navSectionLabel("ڕاپۆرت", "Reports", "التقارير"),
       items: [
-        ["admin-center", navSectionLabel("کاری ئەمڕۆ", "Today's work", "عمل اليوم"), Inbox],
+        ["report", tr("ڕاپۆرت"), PieChart],
+        ["insights", navSectionLabel("ڕەوت و شیکاری", "Trends", "الاتجاهات"), TrendingUp],
+        ["integrity", navSectionLabel("یەکپارچەیی", "Integrity", "السلامة"), ShieldAlert],
+        ["audit", navSectionLabel("تۆماری گۆڕانکاری", "Change log", "سجل التغييرات"), History],
+        ["export-audit", navSectionLabel("هەناردە", "Export", "التصدير"), FileCheck2],
+        ["backup", navSectionLabel("پاراستنی داتا", "Data protection", "حماية البيانات"), Database],
       ],
     },
   ];
   const NAV = NAV_GROUPS.flatMap((g) => g.items);
-  const isNavActive = (id) => id === "admin-center" ? ADMIN_CENTER_PAGE_IDS.has(page) : page === id;
+  // Exactly one entry lights up. It used to be that «کاری ئەمڕۆ» claimed every page in
+  // ADMIN_CENTER_PAGE_IDS, which was right while those pages had no entry of their own and is
+  // wrong now that they do — two lit entries tell a person they are in two places at once.
+  const isNavActive = (id) => id === "admin-center"
+    ? (page === "admin-center" || page === "action-inbox" || page === "close")
+    : page === id;
 
 
   const shared = { data, calc, cur, usr, mySafe, profitAll, profitIn, ownProfitIn, ownProfitAll,
