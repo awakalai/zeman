@@ -3313,6 +3313,9 @@ try {
   const accountOf = (acc) => Number(psql(
     `select coalesce(sum(case when side='debit' then amount else -amount end),0)::text
        from public.journal_lines where account_id='${acc}'`).trim());
+  // An income account earns by being credited, so its balance falls as the business earns.
+  // Reading it the other way round keeps the intent of a check about earning readable.
+  const earnedInto = (acc) => -accountOf(acc);
 
   check("a business opens an account for the money it holds at a bank", () => {
     iqdRate();
@@ -3397,6 +3400,133 @@ try {
     if (again.replayed !== true) throw new Error("the repeat was not recognised as a replay");
     if (safeIqd() !== before) throw new Error("a repeated press moved money a second time");
   });
+
+  // ── مامەڵەی عمولە — the third kind of trade ─────────────────────────────────────────────
+  //
+  //   «١٠٠ هەزار دینار ئێف ئایبی دەفرۆشم بە ١٠١ هەزار دیناری کاش ، لە بەشی کاش زیاد دەبێت و
+  //    لە بەشی ئێف ئایبی کەم دەکات»
+  //
+  // The old service transaction took a principal and a separate fee, which is not this business:
+  // there is no separate fee, there is a price you give money at and a price you receive it at.
+  // These check the trade the owner actually described, in all four shapes they named.
+  const commissionChecks = () => {
+    check("a business opens an account for the money it holds", () => {
+      iqdRate();
+      // Names distinct from the accounts the older checks above open: cash_accounts is unique
+      // on (business, currency, name), so reusing "FIB" here made every trade below fail with
+      // "account not found" — one collision reported as five broken trades.
+      psql(`select public.sarraf_open_cash_account('cmx-fib','FIB Trading','iqd','bank','the bank account')`);
+      psql(`select public.sarraf_open_cash_account('cmx-key','Key Card','iqd','wallet',null)`);
+      psql(`insert into public.ledger(id,type,cur_id,amount,cash_account_id,date,tenant_id)
+            values ('led-cmx-fund','deposit','iqd',500000,'cmx-fib',now(),'t-sarkhel')`);
+      psql(`insert into public.ledger(id,type,cur_id,amount,date,tenant_id)
+            values ('led-cmx-cash','deposit','iqd',500000,now(),'t-sarkhel')`);
+    });
+
+    check("حساب → کاش: the account falls, the cash rises, and the difference is the earning", () => {
+      const fibBefore = inAccount("cmx-fib"), cashBefore = safeIqd(), feeBefore = earnedInto("acc-4100");
+      psql(`select public.sarraf_commission_trade('cmx-fib','iqd',100000,null,'iqd',101000,
+              'فرۆشتنی ئێف ئایبی','commission:cmx-account-to-cash')`);
+      // Two facts, not one: «لە بەشی کاش زیاد دەبێت و لە بەشی ئێف ئایبی کەم دەکات».
+      if (inAccount("cmx-fib") - fibBefore !== -100000) {
+        throw new Error(`FIB moved ${inAccount("cmx-fib") - fibBefore}, expected -100000`);
+      }
+      if (safeIqd() - cashBefore !== 101000) {
+        throw new Error(`cash moved ${safeIqd() - cashBefore}, expected 101000`);
+      }
+      // 1,000 IQD earned, valued in USD by the day's rate, and it lands in fee income.
+      const earned = earnedInto("acc-4100") - feeBefore;
+      if (!(earned > 0)) {
+        throw new Error(`fee income moved ${earned}, expected a credit for the 1,000 IQD earned`);
+      }
+    });
+
+    check("and never in the trading spread account", () => {
+      // «دەبێت لە ڕاپۆرتدا هەموو خێرێک هەبێت کە لەم ئیشە یان هەر ئیشێکی تر چەندم خێر کردووە.»
+      // One number cannot answer that, so a commission earning must not be added to acc-4000.
+      const inSpread = psql(`select count(*)::text from public.journal_lines l
+         join public.journal_entries e on e.id = l.entry_id
+        where l.account_id = 'acc-4000'
+          and e.transaction_id in (select id from public.txs where business_flow='commission')`).trim();
+      if (inSpread !== "0") throw new Error(`${inSpread} commission line(s) landed in the spread account`);
+    });
+
+    check("کاش → حساب: the same trade in the other direction", () => {
+      const fibBefore = inAccount("cmx-fib"), cashBefore = safeIqd();
+      psql(`select public.sarraf_commission_trade(null,'iqd',50000,'cmx-fib','iqd',49500,
+              'کڕینی ئێف ئایبی','commission:cmx-cash-to-account')`);
+      if (safeIqd() - cashBefore !== -50000) throw new Error("cash did not fall");
+      if (inAccount("cmx-fib") - fibBefore !== 49500) throw new Error("the account did not rise");
+    });
+
+    check("حساب → حساب: between two accounts, with neither being cash", () => {
+      const fibBefore = inAccount("cmx-fib"), keyBefore = inAccount("cmx-key"), cashBefore = safeIqd();
+      psql(`select public.sarraf_commission_trade('cmx-fib','iqd',20000,'cmx-key','iqd',20300,
+              'ئێف ئایبی بۆ کی کارد','commission:cmx-account-to-account')`);
+      if (inAccount("cmx-fib") - fibBefore !== -20000) throw new Error("FIB did not fall");
+      if (inAccount("cmx-key") - keyBefore !== 20300) throw new Error("Key Card did not rise");
+      if (safeIqd() !== cashBefore) throw new Error("cash moved in a trade that never touched it");
+    });
+
+    check("دراوی جیاواز: dinars out of an account, dollars into the cash", () => {
+      const fibBefore = inAccount("cmx-fib"), usdBefore = Number(psql(
+        `select coalesce(sum(amount),0)::text from public.ledger
+          where cur_id='usd' and cash_account_id is null
+            and partner_id is null and office_id is null`).trim());
+      psql(`select public.sarraf_commission_trade('cmx-fib','iqd',30000,null,'usd',22,
+              'دینار بۆ دۆلار','commission:cmx-across-currencies')`);
+      if (inAccount("cmx-fib") - fibBefore !== -30000) throw new Error("FIB did not fall");
+      const usdNow = Number(psql(
+        `select coalesce(sum(amount),0)::text from public.ledger
+          where cur_id='usd' and cash_account_id is null
+            and partner_id is null and office_id is null`).trim());
+      if (usdNow - usdBefore !== 22) throw new Error(`dollars moved ${usdNow - usdBefore}, expected 22`);
+    });
+
+    check("money cannot leave a place that does not hold it", () => {
+      let refused = false;
+      try {
+        psql(`select public.sarraf_commission_trade('cmx-key','iqd',999999999,null,'iqd',1,
+                'زۆرتر لەوەی هەیە','commission:cmx-more-than-held')`);
+      } catch { refused = true; }
+      if (!refused) throw new Error("an account paid out money it did not have");
+    });
+
+    check("the same money in the same place on both sides is refused", () => {
+      let refused = false;
+      try {
+        psql(`select public.sarraf_commission_trade('cmx-fib','iqd',100,'cmx-fib','iqd',110,
+                'هەمان شوێن','commission:cmx-same-place-twice')`);
+      } catch { refused = true; }
+      if (!refused) throw new Error("a trade with itself was accepted");
+    });
+
+    check("pressing the same commission trade twice does not move the money twice", () => {
+      const before = inAccount("cmx-key");
+      psql(`select public.sarraf_commission_trade('cmx-fib','iqd',1000,'cmx-key','iqd',1010,
+              'دووبارە','commission:cmx-pressed-twice')`);
+      const once = inAccount("cmx-key");
+      psql(`select public.sarraf_commission_trade('cmx-fib','iqd',1000,'cmx-key','iqd',1010,
+              'دووبارە','commission:cmx-pressed-twice')`);
+      if (inAccount("cmx-key") !== once) throw new Error("the second press moved money again");
+      if (once - before !== 1010) throw new Error("the first press did not move the money");
+    });
+
+    check("an ordinary trade still refuses the same currency on both sides", () => {
+      // The old command is untouched, and it is right to refuse: dinars for dinars in an
+      // ordinary trade is a typo. Only a commission trade knows about places.
+      let refused = false;
+      try {
+        psql(`insert into public.txs(id,type,cp_id,cur_id,amount,rate,against_id,total,status,date)
+              values ('tx-same-cur','buy','cust-1','iqd',100,1,'iqd',100,'completed',now())`);
+        psql(`select public.sarraf_commit_transactions(
+                '[{"id":"x","type":"buy","cur_id":"iqd","amount":100,"rate":1,"against_id":"iqd","total":100}]'::jsonb,
+                '[]'::jsonb,null,'tx:same:cur:aaaaaaaaaaaaaaaa','test','test')`);
+      } catch { refused = true; }
+      if (!refused) throw new Error("an ordinary trade accepted the same currency on both sides");
+    });
+  };
+  commissionChecks();
 
   check("a second reset cannot empty a system that has since gone live", () => {
     const out = JSON.parse(psql("select public.sarraf_reset_installation()::text"));
