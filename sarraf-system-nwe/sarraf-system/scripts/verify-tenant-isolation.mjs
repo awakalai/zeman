@@ -1603,6 +1603,71 @@ try {
       "one customer reading another's receipt summary");
   });
 
+  // ── where a customer's money actually is ────────────────────────────────────
+  //
+  //   «کاتێک مامەڵەیەکی کڕین دەکەم و پارەکەی لای نوسینگەیە نابێت من قەرزاری مشتەری بم،
+  //    دەبێت لای ئەو بنووسرێت پارەکەت لە فڵان نوسینگەیە.»
+  //
+  // The balance on a customer's home screen has always said how much and never where.
+  // 202609010015 lets it name the office, and it reads office_payment_assignments — a table one
+  // customer must never see another's rows in. So the same six questions View As was made to
+  // answer are asked of it here, against a real database, before it is believed.
+  psql(`
+    begin;
+    set local session_replication_role = replica;
+    insert into public.app_users(id,name,role,auth_id,tenant_id)
+    values ('iso-off','نووسینگەی هەولێر','office','ffffffff-0000-0000-0000-000000000001','t-sarkhel')
+    on conflict (id) do update set auth_id = excluded.auth_id, tenant_id = excluded.tenant_id;
+    insert into public.office_payment_assignments(
+      id,office_id,transaction_id,customer_id,amount,currency,status,assigned_by,tenant_id)
+    values
+      ('vas-asg1','iso-off',null,'vas-c1', 5000,'CNY','assigned','iso-a','t-sarkhel'),
+      ('vas-asg2','iso-off',null,'vas-c2', 7000,'CNY','assigned','iso-a','t-sarkhel'),
+      ('vas-asg3','iso-off',null,'vas-c1', 900,'CNY','confirmed','iso-a','t-sarkhel')
+    on conflict (id) do nothing;
+    commit;`);
+
+  const atOffices = (uid, subject) => asUser(uid,
+    `select coalesce(string_agg(assignment_id, ',' order by assignment_id), '<none>')
+       from public.sarraf_my_money_at_offices(${subject === null ? "null" : `'${subject}'`})`).trim();
+
+  check("a customer is told which office holds their money", () => {
+    const seen = atOffices(PORTAL_C1_UID, "vas-c1");
+    if (seen !== "vas-asg1") throw new Error(`saw ${seen}, expected only vas-asg1`);
+  });
+
+  // An assignment the office has already paid and had confirmed is money that is no longer
+  // there. Saying otherwise would be worse than saying nothing, so vas-asg3 must not appear.
+  check("an assignment already confirmed is not still reported as money at the office", () => {
+    const seen = atOffices(PORTAL_C1_UID, "vas-c1");
+    if (seen.includes("vas-asg3")) throw new Error(`saw ${seen}, which includes a settled assignment`);
+  });
+
+  check("one customer cannot read where another customer's money is", () => {
+    refused(PORTAL_C1_UID, "select * from public.sarraf_my_money_at_offices('vas-c2')",
+      "one customer reading another customer's office assignments");
+  });
+
+  check("an administrator viewing a customer's portal sees that customer's offices", () => {
+    const seen = atOffices(PORTAL_ADMIN, "vas-c2");
+    if (seen !== "vas-asg2") throw new Error(`saw ${seen}, expected only vas-asg2`);
+  });
+
+  check("the other business's owner cannot name a customer of this one", () => {
+    refused(B_UID, "select * from public.sarraf_my_money_at_offices('vas-c1')",
+      "an owner of another business reading this one's customer");
+  });
+
+  // The office is only "holding" the money once sarraf_office_advance has actually moved it out
+  // of the safe. Until then the honest sentence is that the office will pay, not that it has the
+  // money — and a screen that cannot tell those apart is the screen that made the owner ask.
+  check("an office nobody advanced money to is not reported as holding it", () => {
+    const held = asUser(PORTAL_C1_UID,
+      `select coalesce(bool_or(advance_held), false)::text
+         from public.sarraf_my_money_at_offices('vas-c1')`).trim();
+    if (held !== "false") throw new Error(`the office reads as holding money it was never sent: ${held}`);
+  });
+
   // ── the balance nobody could explain ────────────────────────────────────────
   //
   // The owner reported a CNY cashbox that goes negative for no visible reason. It is not one bad

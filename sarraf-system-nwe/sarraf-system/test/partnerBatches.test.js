@@ -32,35 +32,77 @@ test("a platform nobody recognised is shown as it came rather than dropped", () 
 
 test("the table carries the four things the owner asked to see", () => {
   const [first] = detailRows(detail);
-  assert.equal(first["وەرگر"], "ئەحمەد");
-  assert.equal(first["بەروار"], "2026-08-10");
-  assert.equal(first["پلاتفۆرم"], "ویچات");
-  assert.equal(first["دۆخی فی"], "بێ فی");
+  assert.equal(first.receiver, "ئەحمەد");
+  assert.equal(first.date, "2026-08-10");
+  assert.equal(first.platform, "ویچات");
+  assert.equal(first.feeStatus, "بێ فی");
 });
 
 test("a receipt that carries a fee says so in words, not as a number to compare", () => {
   const rows = detailRows(detail);
-  assert.equal(rows[1]["دۆخی فی"], "بە فی");
-  assert.equal(rows[1]["فی"], 5);
+  assert.equal(rows[1].feeStatus, "بە فی");
+  assert.equal(rows[1].fee, 5);
 });
 
 test("both totals travel with every row: with the fee and without it", () => {
   const rows = detailRows(detail);
-  assert.equal(rows[0]["بڕ (بە فی)"], 1000);
-  assert.equal(rows[0]["بڕ (بێ فی)"], 1000);
-  assert.equal(rows[1]["بڕ (بە فی)"], 500);
-  assert.equal(rows[1]["بڕ (بێ فی)"], 495);
+  assert.equal(rows[0].withFee, 1000);
+  assert.equal(rows[0].withoutFee, 1000);
+  assert.equal(rows[1].withFee, 500);
+  assert.equal(rows[1].withoutFee, 495);
 });
 
 test("a missing date reads as a dash rather than as the word null", () => {
   const [row] = detailRows({ rows: [{ receiver: null, tx_date: null, platform: "unknown" }] });
-  assert.equal(row["بەروار"], "—");
-  assert.equal(row["وەرگر"], "—");
+  assert.equal(row.date, "—");
+  assert.equal(row.receiver, "—");
+});
+
+test("the Order No. has its own column, under its own name", () => {
+  const [first] = detailRows(detail);
+  assert.equal(first.orderNo, "PA-1");
+});
+
+// api/read-receipt.js: "refNo MUST come from 'Order No.'", "merchantOrderNo MUST come from
+// 'Merchant order No.'", "Never swap these two IDs". A column that falls back from one to the
+// other tells the reader the merchant's number is the Order No., which is how a receipt gets
+// matched against the wrong transaction.
+test("a merchant order number is never shown as the Order No.", () => {
+  const [row] = detailRows({ rows: [{ ref_no: null, merchant_order_no: "M-77" }] });
+  assert.equal(row.orderNo, "—");
+  assert.equal(row.merchantOrderNo, "M-77");
+});
+
+test("both numbers are shown when a receipt carries both", () => {
+  const [row] = detailRows({ rows: [{ ref_no: "PA-9", merchant_order_no: "M-9" }] });
+  assert.equal(row.orderNo, "PA-9");
+  assert.equal(row.merchantOrderNo, "M-9");
 });
 
 test("a rejected row says why instead of claiming to be counted", () => {
   const [row] = detailRows({ rows: [{ counted: false, reject_reason: "ژمارەکان یەک ناگرنەوە" }] });
-  assert.equal(row["دۆخ"], "ژمارەکان یەک ناگرنەوە");
+  assert.equal(row.state, "ژمارەکان یەک ناگرنەوە");
+});
+
+// Architecture 4: an English reader saw "بە فی" in a column headed "Fee status", because these
+// two cells were the only ones in the table that spelled out a word and neither looked at lang.
+test("the words in the cells follow the reader's language, not only the headings", () => {
+  const [en] = detailRows(detail, { lang: "en" });
+  assert.equal(en.feeStatus, "Without fee");
+  assert.equal(en.state, "Counted");
+  const [ar] = detailRows(detail, { lang: "ar" });
+  assert.equal(ar.feeStatus, "بدون الرسوم");
+  const [ku] = detailRows(detail, { lang: "ku" });
+  assert.equal(ku.feeStatus, "بێ فی");
+  assert.equal(ku.state, "ژمێردراوە");
+});
+
+// The server writes the refusal in the reader's language already, and it says more than a bare
+// "not counted" would. Translating over the top of it would lose the reason.
+test("a rejection keeps the server's own sentence rather than a generic word", () => {
+  const [row] = detailRows({ rows: [{ counted: false, reject_reason: "ژمارەکان یەک ناگرنەوە" }] },
+                           { lang: "en" });
+  assert.equal(row.state, "ژمارەکان یەک ناگرنەوە");
 });
 
 test("the holder of the money is named when the trade is indirect", () => {

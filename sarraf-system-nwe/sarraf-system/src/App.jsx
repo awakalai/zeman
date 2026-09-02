@@ -6,10 +6,12 @@ import { arithmeticObjection, receiptNetFrom, sendableSet, validateReceiptArithm
 import { BuildStamp, UpdateBanner } from "./components/system/UpdateBanner";
 import { loadNotifications, markAllNotificationsRead, markNotificationRead, subscribeToNotifications } from "./services/notifications";
 import { loadWholeTable } from "./services/tableLoader";
-import { setActiveLanguage } from "./services/activeLanguage";
+import { activeLanguage, setActiveLanguage } from "./services/activeLanguage";
 import { currencyDecimals as currencyDecimalsOf, formatMoney, formatNumber, roundToCurrency } from "./services/money";
 import { errorText, errorTextOr } from "./services/userFacingError";
 import { flashIsGood } from "./services/flashTone.js";
+import { settlementChoices, settlementWords } from "./services/settlement.js";
+import { loadMoneyAtOffices, moneyAtOfficeText } from "./services/accounting.js";
 import { reportFault } from "./services/faultReport.js";
 import { MyReceipts } from "./components/portal/MyReceipts";
 import { intakeReceipt, intakeStatusText, loadMyReceipts, noteReceiptReadFailure, receiptReadFailureText, replaceReceipt, requestStoredReceiptOcr } from "./services/receiptIntake";
@@ -2238,10 +2240,12 @@ export default function App() {
         p_action: isBuy ? "پارە درا" : "پارە وەرگیرا",
         p_detail: `#${t.code || "—"} — ${fmt(t.total)} ${cur(t.againstId).code}`,
       });
-      if (t.cpId) await notify(t.cpId, "payment",
-        isBuy ? tr("پارەکەت درا") : tr("پارەکەت وەرگیرا"),
+      // The words the owner picked at creation, said back to them now. p_action above is left
+      // alone: that is the audit trail's own vocabulary and it agrees with the server's memo.
+      const said = settlementWords({ type: t.type, lang });
+      if (t.cpId) await notify(t.cpId, "payment", said.notice,
         `${fmt(t.total, cur(t.againstId).dec ?? 0)} ${cur(t.againstId).code}`, null, t.id);
-      flash(isBuy ? "پارەدان تۆمار کرا ✓" : "وەرگرتن تۆمار کرا ✓");
+      flash(said.done);
     }, `settle:${t.id}:direct`);
   };
   const officePay = (t, officeId) => {
@@ -5261,10 +5265,7 @@ function TxForm({ data, cur, calc, usr, avgRate, inventoryPosition, usdValueAt, 
             <div>
               <Lbl>{tr("دۆخی پارە")}</Lbl>
               <div className="flex gap-2">
-                {(f.type === "buy"
-                  ? [["completed", tr("پارەم داوە")], ["pending", tr("چاوەڕوانی پارە")]]
-                  : [["completed", tr("پارەم وەرگرتووە")], ["pending", tr("چاوەڕوانی وەرگرتن")]]
-                ).map(([k, l]) => (
+                {settlementChoices(f.type, activeLanguage()).map(([k, l]) => (
                   <button key={k} onClick={() => setF({ ...f, status: k, officeId: k === "pending" ? f.officeId : "" })}
                     className="flex-1 py-2.5 rounded-[var(--r-sm)] text-[12.5px] font-medium tap"
                     style={f.status === k
@@ -5568,6 +5569,8 @@ function TxList({ data, cur, usr, onEdit, onDel, settle, unsettle, loadTxHistory
 
 /* flip = بینینی مامەڵەکە لە ڕوانگەی لایەنی بەرامبەرەوە / lite = بێ وردەکاری ناوخۆیی */
 function TxRow({ t, cur, usr, onEdit, onDel, flip, lite, settle, unsettle }) {
+  // The state, the button and the flash are three views of one question, so they are asked once.
+  const said = settlementWords({ type: t.type, flip, lang: activeLanguage() });
   const [open, setOpen] = useState(false);
   const [qr, setQr] = useState(false);
   const name = t.cpId ? (usr(t.cpId).name || t.cpName) : t.cpName;
@@ -5645,10 +5648,7 @@ function TxRow({ t, cur, usr, onEdit, onDel, flip, lite, settle, unsettle }) {
 
             {pend ? (
               <div className="pt-2.5" style={{ borderTop: "1px solid var(--line)" }}>
-                <Pill tone="amber">
-                  {flip ? (t.type === "buy" ? tr("چاوەڕوانی وەرگرتنی پارە") : tr("چاوەڕوانی پارەدان"))
-                        : (t.type === "buy" ? tr("پارە نەدراوە") : tr("پارە وەرنەگیراوە"))}
-                </Pill>
+                <Pill tone="amber">{said.unsettled}</Pill>
               </div>
             ) : null}
 
@@ -5662,7 +5662,7 @@ function TxRow({ t, cur, usr, onEdit, onDel, flip, lite, settle, unsettle }) {
                 <button onClick={(e) => { e.stopPropagation(); settle(t); }}
                   className="flex items-center gap-1.5 text-[12.5px] font-semibold px-3.5 py-2 rounded-full tap"
                   style={{ background: "var(--pos-bg)", color: "var(--pos)" }}>
-                  <CheckCircle2 className="w-3.5 h-3.5" /> {t.type === "buy" ? tr("پارەکەم دا") : tr("پارەکەم وەرگرت")}
+                  <CheckCircle2 className="w-3.5 h-3.5" /> {said.action}
                 </button>
               ) : null}
               {!pend && t.paidAt && unsettle ? (
@@ -11435,6 +11435,17 @@ function CustomerPortal({ user, c, base, data, calc, cur, usr, flash, reloadBatc
     [base],
   );
   const [uploadTxId, setUploadTxId] = useState("");
+  // «دەبێت لای ئەو بنووسرێت پارەکەت لە فڵان نوسینگەیە.» The balance above says how much is owed
+  // and has never said where it is. A failure here must leave the balance standing: knowing the
+  // office is an improvement on the figure, not a precondition for showing it.
+  const [atOffices, setAtOffices] = useState([]);
+  useEffect(() => {
+    let alive = true;
+    loadMoneyAtOffices(supabase, user.id)
+      .then((rows) => { if (alive) setAtOffices(rows); })
+      .catch(() => { if (alive) setAtOffices([]); });
+    return () => { alive = false; };
+  }, [user.id, refreshedAt]);
   const owe = Object.entries(c.owe).filter(([, v]) => v);
   const due = Object.entries(c.due).filter(([, v]) => v);
   const summary = separatedCurrencySummary(c.owe, c.due);
@@ -11489,6 +11500,14 @@ function CustomerPortal({ user, c, base, data, calc, cur, usr, flash, reloadBatc
                       {fmt(v, cur(cid).dec ?? 0)} <span className="text-[11px] font-normal" style={{ color: "var(--txt-3)" }}>{cur(cid).code}</span>
                     </div>
                   ))}
+                {atOffices.map((row) => (
+                  <div key={row.assignmentId} className="text-[11.5px] mt-1.5 flex items-center gap-1.5"
+                       style={{ color: "var(--warn)" }}>
+                    <Building2 className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                    <span>{moneyAtOfficeText(row, activeLanguage())}
+                      {" · "}<b style={num}>{fmt(row.outstanding)}</b> {row.currency}</span>
+                  </div>
+                ))}
               </Card>
               <Card className="portal-kpi-card">
                 <div className="text-[11px] mb-2" style={{ color: "var(--txt-3)" }}>{tr("قەرزی من")}</div>
