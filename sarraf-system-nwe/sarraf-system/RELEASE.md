@@ -27,7 +27,7 @@ Each link is a gate that runs in CI and fails the `verified` check if it breaks.
 | Accounting contracts | `verify:accounting` | real migrations, real PostgreSQL | **317 checks** |
 | Business flows | `verify:flows` | real migrations, real PostgreSQL | **25 flows, 152 steps** |
 | Receipt reliability | `verify:receipts` | real migrations, real PostgreSQL | **35 checks** |
-| Tenant isolation | `verify:isolation` | real migrations, real PostgreSQL | **121 checks** |
+| Tenant isolation | `verify:isolation` | real migrations, real PostgreSQL | **123 checks** |
 | Query plans at volume | `verify:scale` | seeded volume, 20,000 rows | **16 opening queries** |
 | The inspection itself | `verify:inspect` | real migrations, `auth.uid()` unset | **28 sections** |
 | Per-role interface | `verify:roles` | Chromium, dev server, 1280×900 **and 390×844** | **82 checks** |
@@ -135,6 +135,23 @@ Six defects were found afterwards by **booting the application and measuring it*
 
 `verify:roles` now runs at 390×844 as well, and checks page-level geometry on the desktop:
 **57 → 82 checks.** Each was proved by reintroducing its fault and watching the gate name it.
+
+## 2d. The manager's own screen
+
+`sarraf_manager_overview` — the administrators, the counts by role, and the last fifty changes
+across the whole installation — has answered **since 202608230001, and nothing had ever read
+it.** A command that exists on the server and cannot be reached from any screen is a feature
+that was paid for and never built; the reachability rule added to `verify:source` is what turned
+it up.
+
+It is now «سیستەم بە گشتی», the first entry under **دامەزراندن**, and it shows **no figure of
+money at all**. A manager sells and maintains the installation and belongs to no business, so
+every amount on that screen would be an amount out of somebody else's books. Two checks in
+`verify:isolation` hold it there — it may not report an amount, a total, a balance, a profit, a
+rate, a cashbox or a debt, and a business owner may not open it at all — and a test pins the
+component's service imports so the screen cannot quietly start reading more than it should.
+
+A view nobody opened is a view nobody audited. Both facts were true of this one until today.
 
 ## 3. Only the owner can do these
 
