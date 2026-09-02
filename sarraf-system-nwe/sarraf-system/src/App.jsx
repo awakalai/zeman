@@ -4020,7 +4020,7 @@ function Dashboard({ data, calc, cur, mySafe, profitIn, ownProfitIn, investorsPr
               </div>
             ))}
           </div>
-          {noRates && <button onClick={()=>go("rates")} className="mt-3 w-full rounded-xl px-3 py-2.5 text-[11px] font-semibold" style={{background:"var(--warn-bg)",color:"var(--warn)"}}><AlertTriangle className="w-3.5 h-3.5 inline me-1"/>{tr("نرخی هەموو دراوەکان دانەنراوە — کلیک بکە")}</button>}
+          {noRates && <button onClick={()=>go("rates")} className="mt-3 w-full rounded-xl px-3 py-2.5 text-[11px] font-semibold" style={{background:"var(--warn-bg)",color:"var(--warn)"}}><AlertTriangle className="w-3.5 h-3.5 inline me-1"/>{tr("نرخی هەموو دراوەکان دانەنراوە — نرخەکان دابنێ")}</button>}
         </section>
       </div>
 
@@ -5189,7 +5189,6 @@ function TxForm({ data, cur, calc, usr, avgRate, inventoryPosition, usdValueAt, 
           <ArrowLeftRight className="w-3.5 h-3.5" />
           <CurBadge c={cur(f.againstId)} size="sm" />
           <span className="font-semibold">{cur(f.againstId).code}</span>
-          <span className="ms-1" style={{ color:"var(--txt-3)" }}>هەر دوو دراوێک دەتوانرێت هەڵبژێردرێن</span>
         </div>
 
         <div className="text-center">
