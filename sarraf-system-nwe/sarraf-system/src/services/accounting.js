@@ -13,6 +13,16 @@ const upper = (value) => String(value ?? "").trim().toUpperCase();
 export const accountingCommandKey = (operation, subject = "none") =>
   `acct-${operation}:${String(subject).slice(0, 80)}:${id()}`;
 
+/**
+ * sarraf_commission_trade refuses any key that is not `commission:` followed by 8-200 characters
+ * of [A-Za-z0-9:_-]. Building it here, once, keeps that shape out of every caller and out of
+ * the server's error path — a key the server rejects is a press the owner cannot explain.
+ */
+export const commissionCommandKey = (subject) =>
+  // A default parameter only fills in for undefined, and the cash side of this trade is null.
+  `commission:${String(subject ?? "cash").replace(/[^A-Za-z0-9:_-]/g, "-").slice(0, 60)}:${id()}`
+    .slice(0, 211);
+
 const positive = (value) => {
   const n = Number(value);
   return Number.isFinite(n) && n > 0 ? n : null;
@@ -378,10 +388,49 @@ export async function firstNegativeMovement(client, currencyId, { holder = "owne
 /*
  * recordService() was here: a principal that passed through an account plus a separate fee that
  * was earned. The owner read the screen it fed and said the model was a misreading of the
- * business — «ئەو لۆجیکە هەر بسڕەوە و دووبارە درووستی بکەرەوە». The trade that replaces it is
- * مامەڵەی عمولە, which moves money between two named places at two prices; it lives with the
- * other trades, not here.
+ * business — «ئەو لۆجیکە هەر بسڕەوە و دووبارە درووستی بکەرەوە». What replaces it is the
+ * function below.
  */
+
+/**
+ * مامەڵەی عمولە — money leaves one place at one price and arrives in another at another, and
+ * the difference is what the business earned.
+ *
+ *   «١٠٠ هەزار دینار ئێف ئایبی دەفرۆشم بە ١٠١ هەزار دیناری کاش، لە بەشی کاش زیاد دەبێت و
+ *    لە بەشی ئێف ئایبی کەم دەکات.»
+ *
+ * A null account on either side means the cash. All four shapes the owner named — account to
+ * cash, cash to account, account to account, and across two currencies — are this one call.
+ * The server decides whether the source can cover it; nothing is judged here.
+ *
+ * Mirrors public.sarraf_commission_trade.
+ */
+export async function commissionTrade(client, {
+  fromAccountId = null, fromCurrencyId, fromAmount,
+  toAccountId = null, toCurrencyId, toAmount,
+  note = null, commandKey,
+}) {
+  const key = commandKey || commissionCommandKey(fromAccountId || "cash");
+  const { data, error } = await client.rpc("sarraf_commission_trade", {
+    p_from_account_id: fromAccountId,
+    p_from_cur_id: fromCurrencyId,
+    p_from_amount: fromAmount,
+    p_to_account_id: toAccountId,
+    p_to_cur_id: toCurrencyId,
+    p_to_amount: toAmount,
+    p_note: note,
+    p_command_key: key,
+  });
+  if (error) throw error;
+  const answer = data || {};
+  return {
+    transactionId: answer.transaction_id || null,
+    code: answer.code ?? null,
+    from: answer.from || null,
+    to: answer.to || null,
+    replayed: answer.replayed === true,
+  };
+}
 
 /** The places this business holds money that are not the main safe, and what is in each. */
 export async function loadCashAccounts(client) {

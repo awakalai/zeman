@@ -258,9 +258,55 @@ for (const file of tracked) {
 // Helpers that only shape or validate data are not commands and are not asked about — the rule
 // looks only at functions whose own body calls client.rpc or client.storage.
 const SERVICE_DIR = "src/services";
-const componentText = tracked
+
+// ── What counts as "a screen" ────────────────────────────────────────────────────────────────
+//
+// Every .jsx used to count, which meant a component file that nothing renders satisfied this
+// rule on its own. Proved by deleting the line that renders CommissionTrade: the gate stayed
+// green while the owner had no way to reach the command behind it — the exact failure this rule
+// exists to catch, one level further out than it was looking.
+//
+// So a screen is a component the entry point can actually reach: walk out from src/main.jsx
+// through the files each one imports, static and lazy alike, and only those count. An orphan
+// component is not a place the owner can get to, however complete it looks.
+const REACHABLE_ROOTS = ["src/main.jsx", "src/App.jsx"].filter((f) => tracked.includes(f));
+const reachableComponents = (() => {
+  const seen = new Set();
+  const queue = [...REACHABLE_ROOTS];
+  const resolve = (fromFile, spec) => {
+    if (!spec.startsWith(".")) return null;
+    const dir = fromFile.split("/").slice(0, -1).join("/");
+    const parts = `${dir}/${spec}`.split("/");
+    const out = [];
+    for (const part of parts) {
+      if (part === "." || part === "") continue;
+      if (part === "..") out.pop();
+      else out.push(part);
+    }
+    const base = out.join("/");
+    for (const candidate of [base, `${base}.jsx`, `${base}.js`, `${base}/index.jsx`, `${base}/index.js`]) {
+      if (tracked.includes(candidate)) return candidate;
+    }
+    return null;
+  };
+  while (queue.length) {
+    const file = queue.pop();
+    if (seen.has(file)) continue;
+    seen.add(file);
+    const source = textIfPresent(file);
+    if (source === null) continue;
+    for (const [, spec] of source.matchAll(/(?:from|import)\s*\(?\s*["']([^"']+)["']/g)) {
+      const next = resolve(file, spec);
+      if (next && !seen.has(next)) queue.push(next);
+    }
+  }
+  return seen;
+})();
+
+const componentText = [...reachableComponents]
   .filter((f) => f.endsWith(".jsx"))
-  .map((f) => text(f))
+  .sort()
+  .map((f) => textIfPresent(f) ?? "")
   .join("\n");
 
 // Is this service file itself imported by something the owner can open? One level, which is what

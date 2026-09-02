@@ -65,6 +65,7 @@ const CashboxPanel = lazyNamed(() => import("./components/accounting/CashboxPane
 const OfficePayments = lazyNamed(() => import("./components/accounting/OfficePayments"), "OfficePayments");
 const PartnerAccounts = lazyNamed(() => import("./components/accounting/PartnerAccounts"), "PartnerAccounts");
 const CashAccounts = lazyNamed(() => import("./components/accounting/CashAccounts"), "CashAccounts");
+const CommissionTrade = lazyNamed(() => import("./components/accounting/CommissionTrade"), "CommissionTrade");
 const ExplainBalance = lazyNamed(() => import("./components/accounting/ExplainBalance"), "ExplainBalance");
 const FaultList = lazyNamed(() => import("./components/system/FaultList"), "FaultList");
 const PartnerHoldings = lazyNamed(() => import("./components/accounting/PartnerHoldings"), "PartnerHoldings");
@@ -1236,6 +1237,9 @@ export default function App() {
   const [batches, setBatches] = useState([]);
   const [batchLoadError, setBatchLoadError] = useState("");
   const [pendingBatch, setPendingBatch] = useState(null);
+  // Which of the two forms «مامەڵەی نوێ» is showing. Buying and selling is the ordinary day, so
+  // that is what opens; a commission trade is asked for by name.
+  const [newTxKind, setNewTxKind] = useState("trade");
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => setSession(session));
@@ -3352,7 +3356,31 @@ export default function App() {
             {page === "safes" && <><Back onClick={() => setPage("dash")} t={tr("گەڕانەوە بۆ داشبۆرد")} /><Safes {...shared} lang={lang} addDeposit={addDeposit} addExpense={addExpense} addCurrency={addCurrency} /></>}
             {page === "rates" && <><Back onClick={() => setPage("dash")} t={tr("گەڕانەوە بۆ داشبۆرد")} /><Rates {...shared} saveRates={saveRates} /></>}
             {page === "profit" && <><Back onClick={() => setPage("dash")} t={tr("گەڕانەوە بۆ داشبۆرد")} /><ProfitPage {...shared} /></>}
-            {page === "newtx" && <TxForm {...shared} onSave={saveTx} batch={pendingBatch} onClearBatch={() => setPendingBatch(null)} busy={busy} />}
+            {/* «کاتێک کلیکم لەسەر مامەڵەی نوێ کرد ٣ ئۆپشن بهێنێ / مامەڵەی ئاسایی / مامەڵەی
+              * ڕاستەوخۆ / مامەڵەی عموولە». The first two are one form with a switch inside it
+              * and stay exactly as they were; the third moves money between places rather than
+              * buying or selling a currency, so it is its own form. A batch of receipts always
+              * becomes an ordinary trade, so it never has a choice to make. */}
+            {page === "newtx" && !pendingBatch && (
+              <div className="flex gap-2 mb-4">
+                {[["trade", tr("مامەڵەی کڕین و فرۆشتن")], ["commission", tr("مامەڵەی عمولە")]].map(([id, label]) => (
+                  <button key={id} onClick={() => setNewTxKind(id)}
+                    aria-pressed={newTxKind === id}
+                    className="flex-1 py-3.5 rounded-[var(--r-sm)] text-[14px] font-semibold tap"
+                    style={newTxKind === id
+                      ? { background: "var(--ac-bg)", color: "var(--ac)", border: "1px solid color-mix(in srgb, var(--ac) 34%, transparent)" }
+                      : { background: "var(--surf-2)", color: "var(--txt-3)", border: "1px solid var(--line)" }}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
+            {page === "newtx" && (pendingBatch || newTxKind === "trade") &&
+              <TxForm {...shared} onSave={saveTx} batch={pendingBatch} onClearBatch={() => setPendingBatch(null)} busy={busy} />}
+            {page === "newtx" && !pendingBatch && newTxKind === "commission" &&
+              <DeferredPanel><CommissionTrade client={supabase} lang={lang}
+                currencies={data?.currencies || []}
+                onRecorded={(answer) => flash(`${tr("مامەڵەی عمولە تۆمار کرا")} #${answer.code ?? ""}`)} /></DeferredPanel>}
             {page === "txs" && (editTx
               ? <TxForm {...shared} onSave={saveTx} editing={editTx} onCancel={() => setEditTx(null)} />
               : <TxList {...shared} onEdit={setEditTx} onDel={delTx} settle={settle} unsettle={unsettle} />)}
