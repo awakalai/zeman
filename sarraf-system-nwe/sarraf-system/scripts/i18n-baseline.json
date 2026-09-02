@@ -1,7 +1,7 @@
 {
-  "total": 913,
+  "total": 908,
   "counts": {
-    "src/App.jsx": 681,
+    "src/App.jsx": 676,
     "src/brand/brand.js": 1,
     "src/components/operations/ExportAuditCenter.jsx": 2,
     "src/components/portal/MyReceipts.jsx": 4,

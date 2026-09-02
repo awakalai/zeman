@@ -11,7 +11,7 @@ import { currencyDecimals as currencyDecimalsOf, formatMoney, formatNumber, roun
 import { errorText, errorTextOr } from "./services/userFacingError";
 import { flashIsGood } from "./services/flashTone.js";
 import { settlementChoices, settlementWords } from "./services/settlement.js";
-import { loadMoneyAtOffices, moneyAtOfficeText } from "./services/accounting.js";
+import { loadMoneyAtOffices, loadOfficeHoldings, moneyAtOfficeText, officeAdvance } from "./services/accounting.js";
 import { buildBundleForReceipts, bundleArchiveName, shareOrSaveBundle } from "./services/receiptBundleTransfer.js";
 import { reportFault } from "./services/faultReport.js";
 import { MyReceipts } from "./components/portal/MyReceipts";
@@ -45,7 +45,7 @@ import { BrandLogo } from "./brand/BrandLogo";
 import "./components/portal/portal.css";
 import {
   LayoutDashboard, Vault, ArrowLeftRight, ListOrdered, Users, Handshake, Boxes,
-  TrendingUp, Building2, UserCog, PieChart, History, Plus, Trash2, Pencil,
+  TrendingUp, Building2, Banknote, UserCog, PieChart, History, Plus, Trash2, Pencil,
   CheckCircle2, AlertTriangle, Eye, LogOut, Wallet, ChevronLeft, Coins,
   Receipt, TrendingDown, ScanLine, Scale, Upload, XCircle, SlidersHorizontal, Search, MoreHorizontal, Zap, ArrowDownLeft, ArrowUpRight, X, Share2, Database, Download, ClipboardCheck, RotateCcw, MessageCircle, Moon, Sun, WifiOff, Wifi, EyeOff, Bell, QrCode, Camera, Fingerprint, ShieldCheck, KeyRound, Inbox, ShieldAlert, FileCheck2, Send, Clock
 } from "lucide-react";
@@ -64,6 +64,9 @@ const DebtCenter = lazyNamed(() => import("./components/accounting/DebtCenter"),
 const CashboxPanel = lazyNamed(() => import("./components/accounting/CashboxPanel"), "CashboxPanel");
 const OfficePayments = lazyNamed(() => import("./components/accounting/OfficePayments"), "OfficePayments");
 const PartnerAccounts = lazyNamed(() => import("./components/accounting/PartnerAccounts"), "PartnerAccounts");
+const CashAccounts = lazyNamed(() => import("./components/accounting/CashAccounts"), "CashAccounts");
+const ExplainBalance = lazyNamed(() => import("./components/accounting/ExplainBalance"), "ExplainBalance");
+const FaultList = lazyNamed(() => import("./components/system/FaultList"), "FaultList");
 const PartnerHoldings = lazyNamed(() => import("./components/accounting/PartnerHoldings"), "PartnerHoldings");
 const ManagerCenter = lazyNamed(() => import("./components/accounting/ManagerCenter"), "ManagerCenter");
 const ManagerConsole = lazyNamed(() => import("./components/accounting/ManagerConsole"), "ManagerConsole");
@@ -194,6 +197,8 @@ const ADMIN_CENTER_PAGE_IDS = new Set([
   "office-payments",
   "partner-accounts",
   "partner-holdings",
+  "cash-accounts",
+  "explain-balance",
   "manager-center",
   "manager-console",
   "receipt-review",
@@ -785,6 +790,8 @@ function AdminCenterHub({ lang = "ku", onNavigate, data, calc, cur, batches }) {
     ["cashbox", label("قاسەی کڕیاران", "Customer cashbox", "خزنة الزبائن"), Wallet],
     ["partner-accounts", label("حسابی هاوبەشان", "Partner accounts", "حسابات الشركاء"), Handshake],
     ["office-payments", label("پارەدانی نووسینگە", "Office payments", "مدفوعات المكتب"), Building2],
+    ["cash-accounts", label("حسابەکان و عمولە", "Accounts & commission", "الحسابات والعمولة"), Banknote],
+    ["explain-balance", label("ئەم باڵانسە بۆچی ئەوەندەیە؟", "Explain a balance", "لماذا هذا الرصيد؟"), Search],
     ["approvals", label("کۆنترۆڵ و پەسەندکردن", "Controls & approvals", "التحكم والموافقات"), ShieldCheck],
     ["insights", label("ڕەوت و شیکاری", "Trends & insights", "الاتجاهات والتحليلات"), TrendingUp],
     ["integrity", label("ناوەندی یەکپارچەیی", "Integrity centre", "مركز سلامة البيانات"), ShieldAlert],
@@ -1968,7 +1975,7 @@ export default function App() {
     // Fixed before the first attempt, so a retry records the same movement once, not twice.
     const entryId = uid();
     return run(async () => {
-    if (!(Math.abs(+f.amount) > 0)) { flash("بڕ پێویستە"); return; }
+    if (!(Math.abs(+f.amount) > 0)) { flash(tr("بڕ پێویستە")); return; }
     const amount = roundMoney(data, f.dir === "in" ? Math.abs(+f.amount) : -Math.abs(+f.amount), f.curId);
     const e = { id: entryId, type: f.dir === "in" ? "deposit" : "withdraw", owner: f.owner === "self" ? "self" : "investor", investorId: f.owner === "self" ? null : f.owner, curId: f.curId, amount, partnerId: null, txId: null, note: f.note, date: now() };
     const result = await rpcStrict("sarraf_post_ledger_command", {
@@ -1978,7 +1985,7 @@ export default function App() {
       p_detail: `${fmt(Math.abs(amount))} ${cur(f.curId).code} — ${f.owner === "self" ? "هی خۆم" : usr(f.owner).name}`,
     });
     if (approvalQueued(result, f.dir === "in" ? "پارە داخڵکردن" : "پارە دەرهێنان")) return result;
-    flash("تۆمار کرا ✓");
+    flash(tr("تۆمار کرا ✓"));
     }, `cash:${entryId}`);
   };
 
@@ -2268,6 +2275,28 @@ export default function App() {
   // «هەر کاتێک ویستم حسابی نووسینگەکە بدەم و تەواو.» This is the only place the money actually
   // leaves: what the office covered has stood as a debt since it pressed, and paying it takes the
   // safe down, the office's account down to zero and the liability off the books together.
+  // «بەڵێ، پارە لە قاسەی من دەچێتە لای نووسینگە.» The owner's own answer, and the half of §5.2
+  // that had no button: sending an office money BEFORE it pays somebody on the owner's behalf.
+  // 202609010013 posts Dr acc-1300 / Cr acc-1000 and refuses an advance the safe cannot cover —
+  // that refusal is the server's to make, and it reaches the owner as written rather than being
+  // second-guessed here.
+  const officeAdvanceTo = (officeId, curId, amount) => {
+    if (!officeId || !curId) return flash(tr("نووسینگە هەڵبژێرە"), "error");
+    if (!(amount > 0)) return flash(tr("بڕێکی دروست بنووسە"), "error");
+    return run(async () => {
+      await officeAdvance(supabase, {
+        officeId,
+        currencyCode: cur(curId).code,
+        amount,
+        reason: `پارە نێردرا بۆ نووسینگە — ${usr(officeId).name || officeId}`,
+        commandKey: commandKey("office-advance"),
+      });
+      await notify(officeId, "payment", tr("پارەت بۆ نێردرا"),
+        `${fmt(amount, cur(curId).dec ?? 0)} ${cur(curId).code}`, null, null);
+      flash(tr("پارە بۆ نووسینگە نێردرا ✓"));
+    }, `office-advance:${officeId}:${curId}`);
+  };
+
   const officeSettle = (officeId, curId, amount) => {
     if (!officeId || !curId) return flash(tr("نووسینگە هەڵبژێرە"), "error");
     if (!(amount > 0)) return flash(tr("ئەم نووسینگەیە هیچ قەرزێکی لەسەر نییە"), "error");
@@ -2304,7 +2333,7 @@ export default function App() {
         p_detail: `${fmt(amt)} ${cur(f.curId).code} — ${isPayout ? usr(f.investorId).name : f.category}`,
       });
       if (approvalQueued(result, isPayout ? "پارەدانی خێری وەبەرهێنەر" : "خەرجی")) return result;
-      flash("تۆمار کرا ✓");
+      flash(tr("تۆمار کرا ✓"));
     }, `expense:${entryId}`);
   };
 
@@ -2471,7 +2500,7 @@ export default function App() {
     const moveId = uid();
     return run(async () => {
     const amt = roundMoney(data, Math.abs(+f.amount), f.curId);
-    if (!(amt > 0)) { flash("بڕ پێویستە"); return; }
+    if (!(amt > 0)) { flash(tr("بڕ پێویستە")); return; }
     if (!f.userId) { flash("کەسەکە دیاری بکە"); return; }
     const u = usr(f.userId);
     const sign = f.dir === "in" ? 1 : -1;
@@ -2504,7 +2533,7 @@ export default function App() {
     await notify(f.userId, "transfer",
       f.dir === "in" ? tr("پارە خرایە حسابەکەت") : tr("پارە لە حسابەکەت دەرهێنرا"),
       `${fmt(amt, cur(f.curId).dec ?? 0)} ${cur(f.curId).code}`);
-    flash("تۆمار کرا ✓");
+    flash(tr("تۆمار کرا ✓"));
     }, `account-move:${moveId}`);
   };
 
@@ -2516,7 +2545,7 @@ export default function App() {
     const [fromRowId, toRowId] = [uid(), uid()];
     return run(async () => {
     const amt = roundMoney(data, Math.abs(+f.amount), f.curId);
-    if (!(amt > 0)) { flash("بڕ پێویستە"); return; }
+    if (!(amt > 0)) { flash(tr("بڕ پێویستە")); return; }
     if (!f.fromId || !f.toId) { flash("هەردوو لایەن دیاری بکە"); return; }
     if (f.fromId === f.toId) { flash("ناکرێت بۆ هەمان کەس بگوازرێتەوە"); return; }
     const a = usr(f.fromId), b = usr(f.toId);
@@ -3262,6 +3291,9 @@ export default function App() {
             {page === "integrity" && <DeferredPanel><IntegrityCenter client={supabase} lang={lang} onNavigate={(path) => setPage(path.slice(2))} /></DeferredPanel>}
             {/* Two records of the same money are only safe while they agree. */}
             {page === "integrity" && <div className="mt-4"><DeferredPanel><BooksReconciliation client={supabase} lang={lang} flash={flash} /></DeferredPanel></div>}
+            {/* AppErrorBoundary has been writing these since 202608280022 and nothing ever read
+                them. A crash on a customer's phone reached the database and stopped there. */}
+            {page === "integrity" && <div className="mt-4"><DeferredPanel><FaultList client={supabase} lang={lang} /></DeferredPanel></div>}
             {page === "export-audit" && <DeferredPanel><ExportAuditCenter client={supabase} lang={lang} /></DeferredPanel>}
             {page === "debt-center" && <DeferredPanel><DebtCenter client={supabase} lang={lang}
               nameOf={(id) => usr(id).name} canAct={isAdmin} flash={flash} /></DeferredPanel>}
@@ -3282,15 +3314,25 @@ export default function App() {
               // every office, what it is owed, and the one press that pays it back.
               const offices = data.users.filter((u) => u.role === "office" && !u.deleted);
               return <div className="space-y-4">
-                <H sub={tr("ئەوەی نووسینگەکان لە پارەی خۆیانەوە داویانە و هێشتا وەریان نەگرتووەتەوە")}>
+                <H sub={tr("پارەی من لای نووسینگە، و ئەوەی ئەوان لە پارەی خۆیانەوە داویانە")}>
                   {tr("پارەدانی نووسینگە")}
                 </H>
                 {offices.length === 0
                   ? <Card><Empty t={tr("هیچ نووسینگەیەکی چالاک نییە")} /></Card>
-                  : offices.map((o) => <OfficeDebts key={o.id} data={data} calc={calc} officeId={o.id}
-                      title={o.name} officeSettle={officeSettle} readOnly={!isAdmin} />)}
+                  : offices.map((o) => (
+                      <div key={o.id} className="grid gap-4 md:grid-cols-2">
+                        <OfficeDebts data={data} calc={calc} officeId={o.id}
+                          title={o.name} officeSettle={officeSettle} readOnly={!isAdmin} />
+                        <OfficeAdvance data={data} cur={cur} officeId={o.id}
+                          officeAdvanceTo={officeAdvanceTo} readOnly={!isAdmin} />
+                      </div>
+                    ))}
               </div>;
             })()}
+            {page === "cash-accounts" && <DeferredPanel><CashAccounts client={supabase} lang={lang}
+              currencies={data?.currencies || []} /></DeferredPanel>}
+            {page === "explain-balance" && <DeferredPanel><ExplainBalance client={supabase} lang={lang}
+              currencies={data?.currencies || []} /></DeferredPanel>}
             {page === "partner-accounts" && <DeferredPanel><PartnerAccounts client={supabase} lang={lang} flash={flash}
               partners={(data?.users || []).filter((u) => u.role === "partner" && !u.deleted)} /></DeferredPanel>}
             {page === "partner-holdings" && <DeferredPanel><PartnerHoldings client={supabase} lang={lang}
@@ -8974,6 +9016,76 @@ function OfficeDebts({ data, calc, officeId, title, officeSettle, readOnly }) {
       {owed.length > 0 && (
         <div className="text-[11.5px] mt-3" style={{ color: "var(--txt-3)" }}>
           {tr("ئەم پارەیە لە قاسەی گشتی دەردەچێت کاتێک حسابەکە دەدەیتەوە")}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+/**
+ * Sending an office money before it pays, and seeing what it is already holding.
+ *
+ *   «کاتێک هەر مامەڵەیەک دەکەم، ئەگەر پارەکەی نوسینگە بیدات، ئەوە لای من لە قاسە دەڕوات و
+ *    دەچێتە ناو حسابی نوسینگە.»
+ *
+ * Two opposite facts about the same office, kept apart on purpose and never added together:
+ * money it is HOLDING for the owner (this card), and money the owner OWES it for what it paid
+ * out of its own pocket (OfficeDebts, above). An office can be in both at once, and a single
+ * "balance" that netted them would hide which is which.
+ */
+function OfficeAdvance({ data, cur, officeId, officeAdvanceTo, readOnly }) {
+  const [curId, setCurId] = useState("");
+  const [amount, setAmount] = useState("");
+  const [held, setHeld] = useState(null);
+  const [reload, setReload] = useState(0);
+
+  // A failure to read what the office holds must leave the form standing: sending money is the
+  // thing the owner came here to do, and it does not depend on this figure.
+  useEffect(() => {
+    let alive = true;
+    loadOfficeHoldings(supabase, officeId)
+      .then((rows) => { if (alive) setHeld(rows); })
+      .catch(() => { if (alive) setHeld([]); });
+    return () => { alive = false; };
+  }, [officeId, reload]);
+
+  const send = async () => {
+    const value = Number(amount);
+    const ok = await officeAdvanceTo(officeId, curId, value);
+    if (ok !== false) { setAmount(""); setReload((n) => n + 1); }
+  };
+
+  return (
+    <Card className="p-5">
+      <SecLbl>{tr("پارەی ئێستا لای ئەم نووسینگەیە")}</SecLbl>
+      {held === null ? <Empty t={tr("بارکردن...")} />
+        : held.length === 0 ? <Empty t={tr("هیچ پارەیەکی من لای ئەم نووسینگەیە نییە")} />
+        : held.map((row) => (
+          <div key={`${row.officeId}-${row.currencyId}`}
+               className="flex justify-between items-center py-2.5 border-b border-[var(--line)] last:border-0">
+            <span className="text-sm text-[var(--txt-2)]">{cur(row.currencyId).name}</span>
+            <Money v={row.holding} dec={cur(row.currencyId).dec} />
+          </div>
+        ))}
+
+      {!readOnly && (
+        <div className="mt-4 pt-4 border-t border-[var(--line)] space-y-2.5">
+          <Lbl>{tr("ناردنی پارە بۆ ئەم نووسینگەیە")}</Lbl>
+          <div className="grid grid-cols-2 gap-2.5">
+            <Sel value={curId} onChange={(e) => setCurId(e.target.value)} aria-label={tr("دراو")}>
+              <option value="">{tr("دراو")}</option>
+              {data.currencies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </Sel>
+            <Inp type="number" inputMode="decimal" value={amount} placeholder={tr("بڕ")}
+                 aria-label={tr("بڕ")} onChange={(e) => setAmount(e.target.value)} />
+          </div>
+          <Btn kind="primary" className="w-full flex items-center justify-center gap-1.5"
+               disabled={!curId || !(Number(amount) > 0)} onClick={send}>
+            <ArrowLeftRight className="w-4 h-4" /> {tr("پارە بنێرە")}
+          </Btn>
+          <div className="text-[11.5px]" style={{ color: "var(--txt-3)" }}>
+            {tr("ئەم پارەیە لە قاسەی گشتی دەردەچێت و دەچێتە حسابی نووسینگە")}
+          </div>
         </div>
       )}
     </Card>
