@@ -583,6 +583,28 @@ select count(*) as "commission wrongly in the spread account"
 
 \echo ''
 \echo ''
+\echo '════════ ١٢. دەرکردنی کۆمەڵی فیش — کێ چی برد ════════'
+\echo '   هەر ڕیزێک لێرە واتە کۆمەڵێک فیش لە سیستەمەکە دەرچووە'
+\echo ''
+
+-- Handing somebody a hundred receipt images is the largest single disclosure this system makes,
+-- and it leaves through a share sheet the system cannot follow. 202609020001 writes one audit row
+-- per release. This is where the owner reads them.
+select count(*) as "releases",
+       coalesce(max(a.date)::text, '—') as "most recent"
+  from public.audit a
+ where a.action = 'دەرکردنی کۆمەڵی فیش';
+
+\echo ''
+
+select u.name as "who", a.detail as "what", a.date as "when"
+  from public.audit a
+  left join public.app_users u on u.id = a.user_id
+ where a.action = 'دەرکردنی کۆمەڵی فیش'
+ order by a.date desc
+ limit 20;
+
+\echo ''
 \echo '════════ ١٣. تێکەڵبوونی بازرگانییەکان — کوڕ و باوک یەک بازرگانی بن ════════'
 \echo '   پێویستە: هەموویان سفر. ئەمە پرسیاری «بازرگانی هەیە؟» نییە — پرسیاری «بازرگانییە دروستەکەیە؟»یە'
 \echo ''
@@ -642,28 +664,6 @@ select 'receipt_batches → its customer',
  order by 2 desc, 1;
 
 \echo ''
-\echo ''
-\echo '════════ ١٢. دەرکردنی کۆمەڵی فیش — کێ چی برد ════════'
-\echo '   هەر ڕیزێک لێرە واتە کۆمەڵێک فیش لە سیستەمەکە دەرچووە'
-\echo ''
-
--- Handing somebody a hundred receipt images is the largest single disclosure this system makes,
--- and it leaves through a share sheet the system cannot follow. 202609020001 writes one audit row
--- per release. This is where the owner reads them.
-select count(*) as "releases",
-       coalesce(max(a.date)::text, '—') as "most recent"
-  from public.audit a
- where a.action = 'دەرکردنی کۆمەڵی فیش';
-
-\echo ''
-
-select u.name as "who", a.detail as "what", a.date as "when"
-  from public.audit a
-  left join public.app_users u on u.id = a.user_id
- where a.action = 'دەرکردنی کۆمەڵی فیش'
- order by a.date desc
- limit 20;
-
 \echo ''
 \echo '════════ تەواو ════════'
 \echo ''
