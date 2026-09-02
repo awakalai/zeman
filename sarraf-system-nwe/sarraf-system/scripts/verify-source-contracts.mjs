@@ -346,6 +346,46 @@ for (const file of tracked.filter((f) => f.startsWith(SERVICE_DIR) && f.endsWith
   }
 }
 
+// ── a rule nothing can match is not a style, it is a leftover ────────────────────────────
+//
+//   «شتی زیادە لابدە»
+//
+// zeman.css carried fifty-eight lines of rules for classes that appear nowhere in the markup:
+// a whole audit-table style, a report toolbar, a search toolbar, a filter row, a detail grid —
+// three blocks still labelled "Phase 9", "Phase 8", "Phase 7" — plus mobile overrides for
+// .max-w-7xl through .max-w-4xl, .gap-6 and .py-6, which nothing has used in a long time.
+//
+// Dead CSS is worse than merely wasteful. It is read as if it were true: somebody deciding how
+// this application looks reads .sarraf-brand-mark hard-coding the retired green and concludes
+// that is the brand mark, when in fact no element has ever carried that class.
+//
+// Alive means: the class name appears literally in the markup, OR a component builds a class
+// name from a prefix at runtime (`tone-${tone}`, `is-${state}`) that this class could be the
+// end of. The second half matters — without it the rule would demand the deletion of exactly
+// the styles that are working.
+{
+  const markup = tracked
+    .filter((file) => /^(?:src\/.*\.(?:js|jsx)|index\.html)$/.test(file))
+    .map(text).join("\n");
+  // Prefixes a component completes at runtime. A class starting with one of these cannot be
+  // proved dead by searching for its full name, so it is left alone.
+  const built = [...markup.matchAll(/`?([a-z][a-z0-9-]*-)\$\{/g)].map((m) => m[1]);
+  const dead = [];
+  for (const file of tracked.filter((f) => /^src\/.*\.css$/.test(f) && !f.endsWith("tailwind.css"))) {
+    const names = new Set([...text(file).matchAll(/\.([a-zA-Z][a-zA-Z0-9_-]+)/g)].map((m) => m[1]));
+    for (const name of names) {
+      if (markup.includes(name)) continue;
+      if (built.some((prefix) => name.startsWith(prefix))) continue;
+      dead.push(`${file}  .${name}`);
+    }
+  }
+  if (dead.length) {
+    fail(`${dead.length} CSS class(es) are styled and worn by nothing. A rule nothing can match `
+      + `is read as if it described the application, and it does not — delete it:\n  `
+      + dead.slice(0, 15).join("\n  "));
+  }
+}
+
 // ── one ellipsis, not two spellings of it ────────────────────────────────────────────────
 //
 //   «تەنانەت نووسینەکانی ڕووکاریش ڕێک بکەوەو شتی زیادە لابدە»
