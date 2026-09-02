@@ -52,3 +52,31 @@ test("the tools drawer does not come back", () => {
   assert.doesNotMatch(app, /today-tools/);
   assert.doesNotMatch(app, /\{tools\.map\(/);
 });
+
+
+// ── the way back belongs to the route, not to the page ──────────────────────
+//
+// «گەڕانەوە بۆ ناوەندی بەڕێوەبردن» was rendered for every page in ADMIN_CENTER_PAGE_IDS.
+// That was right when those pages had no entry of their own. Twenty of the twenty-one are in
+// the six sections now, so somebody opening «پشکنین» from the sidebar was offered a way back
+// to a place they had never been.
+//
+// The admin centre still leads to seven of them, and for a person who arrived that way the
+// link is exactly right — so it depends on the route, and the route has to be remembered.
+// The browser gate walks the sidebar half; this pins the mechanism, which that gate cannot
+// reach because the hub shows a line only when something is waiting.
+test("the way back is offered only to somebody who came that way", () => {
+  assert.match(app, /cameFromHub && ADMIN_CENTER_PAGE_IDS\.has\(page\)/,
+    "the admin-centre link is still shown by page identity rather than by route");
+  assert.match(app, /onNavigate=\{\(id\) => \{ setCameFromHub\(true\); setPage\(id\); \}\}/,
+    "the admin centre does not record that it was the way in");
+});
+
+// One door, because a fourth call site is easy to add and easy to forget.
+test("every navigation entry opens a page through one helper", () => {
+  assert.match(app, /const openPage = \(id\) => \{ setCameFromHub\(false\);/,
+    "there is no single place that decides what opening a page means");
+  const direct = [...app.matchAll(/onClick=\{\(\) => \{ setPage\(id\)/g)].length;
+  assert.equal(direct, 0,
+    "a navigation entry still calls setPage directly, so it cannot clear the way-back link");
+});

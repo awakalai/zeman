@@ -1180,6 +1180,17 @@ export default function App() {
       setPage("manager-console");
     }
   }, [profile?.role, profile?.adminLevel, page]);
+  // Where the person actually came from, rather than where the code assumes they did.
+  //
+  // The «گەڕانەوە» link was shown on every page in ADMIN_CENTER_PAGE_IDS, which was right when
+  // those pages had no entry of their own. Twenty of the twenty-one have one now — they are in
+  // the six sections — so somebody who opened «پشکنین» from the sidebar was offered a way back
+  // to a place they had never been. A back link that guesses is worse than no back link.
+  //
+  // The admin centre still leads to seven of them, and for a person who arrived that way the
+  // link is exactly right. So it is set when the admin centre navigates, and cleared by every
+  // other route into a page.
+  const [cameFromHub, setCameFromHub] = useState(false);
   const [viewAs, setViewAs] = useState(null);
   const [detailId, setDetailId] = useState(null);
   const [editTx, setEditTx] = useState(null);
@@ -3076,6 +3087,12 @@ export default function App() {
   // above its declaration throws at render rather than at build.
   const sheetHasActive = SHEET_GROUPS.some((g) => g.items.some(([id]) => isNavActive(id)));
 
+  // One door for every navigation entry — sidebar, phone bar, phone sheet. Written once
+  // because the thing it has to remember is easy to forget at a fourth call site: opening a
+  // page from the navigation means you did NOT come from the admin centre, so the «گەڕانەوە»
+  // link must not be offered.
+  const openPage = (id) => { setCameFromHub(false); setPage(id); setDetailId(null); setEditTx(null); setMore(false); };
+
 
   const shared = { data, calc, cur, usr, mySafe, profitAll, profitIn, ownProfitIn, ownProfitAll,
     investorsProfitIn, invShare, invUnpaid, autoRate, avgRate, inventoryPosition, usdValueAt, usdToCurrencyAt,
@@ -3293,7 +3310,7 @@ export default function App() {
                     {group.items.map(([id, t, Ic]) => {
                       const on = isNavActive(id);
                       return (
-                        <button key={id} onClick={() => { setPage(id); setDetailId(null); setEditTx(null); }}
+                        <button key={id} onClick={() => openPage(id)}
                           style={on ? { color: "#07130D" } : { color: "#A9B0B8" }}
                           className={`nav-item ${on ? "nav-active" : ""} flex w-full items-center gap-3 px-3.5 py-2.5 rounded-xl text-[12.5px] tap relative ${on ? "font-semibold" : "font-medium"}`}>
                           <Ic className="w-[17px] h-[17px]" style={{ color: on ? "#07130D" : "#8F98A3" }} />
@@ -3315,7 +3332,10 @@ export default function App() {
             )}
           </nav>
           <main id="zeman-main-content" tabIndex={-1} className="sarraf-main sarraf-desktop-content flex-1 px-4 pt-5 pb-28 md:px-8 md:pt-7 md:pb-10 max-w-[1600px] w-full mx-auto">
-            {page === "dash" && <Dashboard {...shared} batches={batches} go={setPage} />}
+            {/* Through openPage for the same reason the navigation does: a dashboard card is a
+              * fresh choice, not a step deeper into the admin centre.
+              */}
+            {page === "dash" && <Dashboard {...shared} batches={batches} go={openPage} />}
             {page === "safes" && <><Back onClick={() => setPage("dash")} t={tr("گەڕانەوە بۆ داشبۆرد")} /><Safes {...shared} addDeposit={addDeposit} addExpense={addExpense} addCurrency={addCurrency} /></>}
             {page === "rates" && <><Back onClick={() => setPage("dash")} t={tr("گەڕانەوە بۆ داشبۆرد")} /><Rates {...shared} saveRates={saveRates} /></>}
             {page === "profit" && <><Back onClick={() => setPage("dash")} t={tr("گەڕانەوە بۆ داشبۆرد")} /><ProfitPage {...shared} /></>}
@@ -3329,7 +3349,8 @@ export default function App() {
             {page === "report" && <Report {...shared} />}
             {/* The admin centre is one business's world. A manager belongs to no business, so
                 for them it is not a page they should not open — it is a page with no meaning. */}
-            {page === "admin-center" && !isSystemManager && <AdminCenterHub lang={lang} onNavigate={setPage}
+            {page === "admin-center" && !isSystemManager && <AdminCenterHub lang={lang}
+              onNavigate={(id) => { setCameFromHub(true); setPage(id); }}
               data={data} calc={calc} cur={cur} batches={batches} />}
 
             {/* The way back, and the door the manager fell through. Integrity, the change log
@@ -3337,7 +3358,7 @@ export default function App() {
                 the admin centre, so this link appeared for them too and led straight into the
                 exchange's hub — every screen belonging to a business they are not part of. It
                 now returns each rank to where they came from. */}
-            {ADMIN_CENTER_PAGE_IDS.has(page) && page !== "admin-center" && (
+            {cameFromHub && ADMIN_CENTER_PAGE_IDS.has(page) && page !== "admin-center" && (
               <Back onClick={() => setPage(isSystemManager ? "manager-console" : "admin-center")}
                     t={isSystemManager
                       ? navSectionLabel("گەڕانەوە بۆ سەرخێڵەکان", "Back to Businesses", "العودة إلى الأعمال")
@@ -3425,7 +3446,7 @@ export default function App() {
               {BAR_NAV.map(([id, t, Ic]) => {
                 const on = isNavActive(id);
                 return (
-                  <button key={id} onClick={() => { setPage(id); setDetailId(null); setEditTx(null); setMore(false); }}
+                  <button key={id} onClick={() => openPage(id)}
                     className="flex-1 flex flex-col items-center gap-1 py-2 rounded-full tap"
                     style={on ? { background: "var(--surf-3)" } : {}}>
                     <Ic className="w-[19px] h-[19px]" style={{ color: on ? "var(--ac)" : "var(--txt-3)" }} />
@@ -3471,7 +3492,7 @@ export default function App() {
                     <div key={group.label} className="mb-2">
                       <div className="sidebar-section-title px-2 pt-2 pb-1">{group.label}</div>
                       {group.items.map(([id, t, Ic]) => (
-                        <button key={id} onClick={() => { setPage(id); setDetailId(null); setEditTx(null); setMore(false); }}
+                        <button key={id} onClick={() => openPage(id)}
                           className={`w-full flex items-center gap-3 px-4 py-3 rounded-[var(--r-sm)] text-sm mb-1 ${isNavActive(id) ? "bg-[var(--ac)] text-[var(--ac-ink)] font-semibold" : "text-[var(--txt)] hover:bg-[var(--line)]"}`}>
                           <Ic className="w-5 h-5" /> {t}
                         </button>

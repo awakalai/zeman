@@ -476,6 +476,37 @@ try {
         underSidebar.join(" · "));
     }
 
+    // A back link that guesses is worse than no back link.
+    //
+    // «گەڕانەوە بۆ ناوەندی بەڕێوەبردن» was shown on every page in ADMIN_CENTER_PAGE_IDS. That
+    // was right when those pages had no entry of their own; twenty of the twenty-one have one
+    // now, so somebody opening «پشکنین» from the sidebar was offered a way back to a place
+    // they had never been. The admin centre still leads to seven of them, and for a person who
+    // arrived that way the link is exactly right — so it must depend on the route taken, and
+    // both routes are walked here.
+    if (role === "admin" && !expectGate) {
+      const BACK = "گەڕانەوە بۆ ناوەندی بەڕێوەبردن";
+      const openFromSidebar = async (label) => {
+        try { await page.getByText(label, { exact: true }).first().click({ timeout: 4000 }); }
+        catch { return null; }
+        await page.waitForTimeout(900);
+        return page.innerText("body").catch(() => "");
+      };
+      const viaSidebar = await openFromSidebar("پشکنین");
+      if (viaSidebar === null) {
+        record(false, `${label}: «پشکنین» opens from the navigation`);
+      } else {
+        record(!viaSidebar.includes(BACK),
+          `${label}: no way "back" to a place they never came from`,
+          viaSidebar.includes(BACK) ? "the admin-centre link was offered after a sidebar visit" : "");
+      }
+      // The other direction — that the link IS there for somebody who came through the hub —
+      // cannot be walked here. The admin centre shows a line only when something is waiting,
+      // which is its whole design, so against an empty fixture it offers no route into these
+      // pages at all. That half is pinned in test/adminCenterNavigation.test.js instead, on
+      // the source, where it needs no data.
+    }
+
     // Critical accessibility contract in the shipped DOM: every visible interactive control
     // has a programmatic name, IDs are unique, and keyboard focus can enter the interface.
     const accessibility = await page.evaluate(() => {
