@@ -259,6 +259,24 @@ for (const file of tracked) {
 // looks only at functions whose own body calls client.rpc or client.storage.
 const SERVICE_DIR = "src/services";
 
+// ── a service importing a sibling names the file ────────────────────────────────────────────
+//
+// Vite resolves "./userFacingError" to userFacingError.js. Node does not, and Node is what runs
+// the unit tests, so an extensionless sibling import inside a service breaks every test that
+// reaches it — with ERR_MODULE_NOT_FOUND, which looks nothing like the thing that is wrong.
+// It cost a green run that was not green. Components may keep the short form: nothing loads a
+// .jsx file outside the bundler.
+for (const file of tracked.filter((f) => f.startsWith(SERVICE_DIR) && f.endsWith(".js"))) {
+  const source = textIfPresent(file);
+  if (source === null) continue;
+  for (const [, spec] of source.matchAll(/from\s+["'](\.[^"']*)["']/g)) {
+    if (!/\.(js|json|css)$/.test(spec)) {
+      fail(`${file}: imports "${spec}" without a file extension. Node cannot resolve that, so `
+        + `every unit test reaching this module fails with ERR_MODULE_NOT_FOUND. Write "${spec}.js".`);
+    }
+  }
+}
+
 // ── What counts as "a screen" ────────────────────────────────────────────────────────────────
 //
 // Every .jsx used to count, which meant a component file that nothing renders satisfied this
