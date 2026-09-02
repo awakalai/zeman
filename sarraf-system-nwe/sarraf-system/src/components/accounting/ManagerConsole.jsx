@@ -30,7 +30,7 @@ const COPY = {
       attention: "چی پێویستی بە تۆیە", tenants: "سەرخێڵەکان",
       accounts: "ئەکاونتەکان", health: "تەندروستی", support: "پشتگیری",
     },
-    refresh: "نوێکردنەوە", loading: "بارکردن...", failed: "بار نەبوو", working: "جێبەجێکردن...",
+    refresh: "نوێکردنەوە", loading: "بارکردن…", failed: "بار نەبوو", working: "جێبەجێکردن…",
     notManager: "ئەم بەشە تەنها بۆ ماناجەرە",
     name: "ناو", id: "ناسنامە", accounts: "ئەکاونت", admins: "ئەدمین",
     transactions: "مامەڵە", receipts: "فیش", lastActivity: "دوایین کار", state: "دۆخ",

@@ -155,49 +155,73 @@ textarea {
 @media (max-width:640px){
   .sarraf-detail-grid{grid-template-columns:1fr;gap:10px}
 }
+/* ══════════════════ ONE PALETTE ══════════════════
+ *
+ * There were two. This block was written first, and a second :root labelled
+ * "PROFESSIONAL UI FOUNDATION — PHASE 1" was laid on top of it further down the file,
+ * redefining TWENTY-THREE of these tokens with different values — a different green
+ * (#19C878 against #00D978), a different paper, a different radius scale, different
+ * shadows. Every colour decided here for those twenty-three was dead on arrival, and
+ * anybody reading this block to find out what the application looks like was reading
+ * the wrong half of the answer.
+ *
+ * The two are merged here, keeping the values that actually render — so nothing changes
+ * on screen — and there is now one place where a colour is decided. That is the whole
+ * point: a palette nobody can find is a palette nobody can keep.
+ */
 :root, [data-theme="light"] {
-  --bg:        #F3F5F8;
-  --bg-2:      #E9EDF2;
+  /* paper and ink */
+  --bg:        #F5F7F6;
+  --bg-2:      #EDF1EF;
   --surf:      #FFFFFF;
-  --surf-2:    #F8FAFB;
-  --surf-3:    #F1F4F6;
+  --surf-2:    #F8FAF9;
+  --surf-3:    #F0F4F2;
   --line:      rgba(15,23,42,.075);
-  --line-2:    rgba(15,23,42,.13);
-  --txt:       #171A1F;
-  --txt-2:     #5F6875;
-  --txt-3:     #8A929D;
-  --pos:       #00D978;
-  --pos-bg:    rgba(0,217,120,.10);
+  --line-2:    rgba(15,23,42,.14);
+  --txt:       #111714;
+  --txt-2:     #5D6762;
+  --txt-3:     #8B948F;
+
+  /* what money is doing: gained, lost, waiting */
+  --pos:       #19C878;
+  --pos-bg:    rgba(25,200,120,.10);
   --neg:       #E45B68;
   --neg-bg:    rgba(228,91,104,.10);
   --warn:      #D99118;
   --warn-bg:   rgba(217,145,24,.10);
-  --ac:        #00D978;
-  --ac-2:      #00B967;
-  --ac-gl:     0,217,120;
+
+  /* the one accent */
+  --ac:        #19C878;
+  --ac-2:      #0FAE67;
+  --ac-gl:     25,200,120;
   --ac-ink:    #07130D;
+
+  /* glass, used only where something floats over content */
   --glass:     rgba(255,255,255,.82);
   --glass-2:   rgba(255,255,255,.96);
   --blur:      saturate(150%) blur(18px);
-  --r-sm: 12px; --r: 18px; --r-lg: 24px; --r-xl: 30px;
-  --sh-1: 0 1px 2px rgba(15,23,42,.03), 0 4px 18px rgba(15,23,42,.035);
-  --sh-2: 0 8px 24px rgba(15,23,42,.07);
-  --sh-3: 0 18px 50px rgba(15,23,42,.13);
+
+  /* one radius scale */
+  --r-sm: 12px; --r: 16px; --r-lg: 22px; --r-xl: 28px;
+
+  /* one shadow scale: resting, raised, floating */
+  --sh-1: 0 1px 2px rgba(15,23,42,.025), 0 5px 18px rgba(15,23,42,.035);
+  --sh-2: 0 10px 30px rgba(15,23,42,.075);
+  --sh-3: 0 22px 60px rgba(15,23,42,.14);
   --ring: inset 0 1px 0 rgba(255,255,255,.8);
 }
 
 [data-theme="dark"] {
-  --bg: #0D1014; --bg-2:#11151A; --surf:#171B21; --surf-2:#1D2229; --surf-3:#232932;
-  --line:rgba(255,255,255,.08); --line-2:rgba(255,255,255,.14); --txt:#F4F7FA; --txt-2:#AAB3BE; --txt-3:#788390;
-  --pos:#00D978; --pos-bg:rgba(0,217,120,.12); --neg:#FF7482; --neg-bg:rgba(255,116,130,.12); --warn:#FFC45C; --warn-bg:rgba(255,196,92,.12);
-  --ac:#00D978; --ac-2:#00B967; --ac-gl:0,217,120; --ac-ink:#07130D;
+  --bg:#0E1210; --bg-2:#121814; --surf:#171D19; --surf-2:#1C241F; --surf-3:#222C26;
+  --line:rgba(255,255,255,.075); --line-2:rgba(255,255,255,.14); --txt:#F4F7F5; --txt-2:#AAB5AF; --txt-3:#7D8A83;
+  --pos:#25D181; --pos-bg:rgba(37,209,129,.12); --neg:#FF7482; --neg-bg:rgba(255,116,130,.12); --warn:#FFC45C; --warn-bg:rgba(255,196,92,.12);
+  --ac:#25D181; --ac-2:#17B971; --ac-gl:37,209,129; --ac-ink:#07130D;
   --glass:rgba(255,255,255,.055); --glass-2:rgba(255,255,255,.08); --blur:saturate(160%) blur(18px);
   --sh-1:0 1px 2px rgba(0,0,0,.25),0 4px 18px rgba(0,0,0,.18); --sh-2:0 8px 24px rgba(0,0,0,.25); --sh-3:0 18px 50px rgba(0,0,0,.38); --ring:inset 0 1px 0 rgba(255,255,255,.05);
 }
 
-[data-role="admin"],[data-role="customer"],[data-role="partner"],[data-role="investor"],[data-role="office"] {
-  --ac:#00D978; --ac-2:#00B967; --ac-gl:0,217,120; --ac-ink:#07130D;
-}
+/* Every rank shares the accent. A per-role colour was tried and is not a good idea here:
+ * an owner switching to «بینین وەک» must see the customer's screen, not a recoloured one. */
 
 * { box-sizing:border-box; }
 html { background:var(--bg); }
@@ -227,7 +251,7 @@ html[lang="en"] body, html[lang="en"] input, html[lang="en"] select, html[lang="
 /* reference-style shell */
 .sarraf-shell { min-height:100vh; background:var(--bg); }
 .sarraf-sidebar { background:#0B0D0F; color:#A9B0B8; box-shadow:10px 0 35px rgba(0,0,0,.08); }
-.sarraf-sidebar .nav-active { background:#00D978; color:#07130D !important; box-shadow:0 8px 20px rgba(0,217,120,.18); }
+.sarraf-sidebar .nav-active { background:var(--ac); color:var(--ac-ink) !important; box-shadow:0 8px 20px rgba(var(--ac-gl),.18); }
 .sarraf-sidebar .nav-item:hover { background:rgba(255,255,255,.07); color:#fff !important; }
 .sarraf-main { min-width:0; }
 .sarraf-topbar { background:rgba(255,255,255,.88); backdrop-filter:saturate(150%) blur(18px); -webkit-backdrop-filter:saturate(150%) blur(18px); }
@@ -235,7 +259,7 @@ html[lang="en"] body, html[lang="en"] input, html[lang="en"] select, html[lang="
 
 /* fintech primitives */
 .fin-card { background:var(--surf); border:1px solid var(--line); border-radius:20px; box-shadow:0 2px 12px rgba(15,23,42,.035); }
-.fin-green { background:linear-gradient(145deg,#00E77F 0%,#00D978 52%,#00C96E 100%); color:#06140D; border-color:transparent; box-shadow:0 14px 34px rgba(0,217,120,.20); }
+.fin-green { background:linear-gradient(145deg,color-mix(in srgb,var(--ac) 88%,#fff) 0%,var(--ac) 52%,var(--ac-2) 100%); color:var(--ac-ink); border-color:transparent; box-shadow:0 14px 34px rgba(var(--ac-gl),.20); }
 .fin-green .muted { color:rgba(4,25,15,.62); }
 .fin-green .white-muted { color:rgba(255,255,255,.82); }
 .fin-input { background:var(--surf); border:1px solid var(--line); }
@@ -252,35 +276,7 @@ input,select,textarea{color-scheme:light} [data-theme="dark"] input,[data-theme=
 @media(min-width:768px){
   .sarraf-desktop-content{padding-left:260px}
 }
-/* ══════════════════ PROFESSIONAL UI FOUNDATION — PHASE 1 ══════════════════ */
-:root,[data-theme="light"]{
-  --bg:#F5F7F6;
-  --bg-2:#EDF1EF;
-  --surf:#FFFFFF;
-  --surf-2:#F8FAF9;
-  --surf-3:#F0F4F2;
-  --line:rgba(15,23,42,.075);
-  --line-2:rgba(15,23,42,.14);
-  --txt:#111714;
-  --txt-2:#5D6762;
-  --txt-3:#8B948F;
-  --pos:#19C878;
-  --pos-bg:rgba(25,200,120,.10);
-  --ac:#19C878;
-  --ac-2:#0FAE67;
-  --ac-gl:25,200,120;
-  --ac-ink:#07130D;
-  --r-sm:12px;--r:16px;--r-lg:22px;--r-xl:28px;
-  --sh-1:0 1px 2px rgba(15,23,42,.025),0 5px 18px rgba(15,23,42,.035);
-  --sh-2:0 10px 30px rgba(15,23,42,.075);
-  --sh-3:0 22px 60px rgba(15,23,42,.14);
-}
-[data-theme="dark"]{
-  --bg:#0E1210;--bg-2:#121814;--surf:#171D19;--surf-2:#1C241F;--surf-3:#222C26;
-  --txt:#F4F7F5;--txt-2:#AAB5AF;--txt-3:#7D8A83;
-  --line:rgba(255,255,255,.075);--line-2:rgba(255,255,255,.14);
-  --ac:#25D181;--ac-2:#17B971;--ac-gl:37,209,129;
-}
+/* The second palette that used to sit here is merged into the one above. */
 body{
   background:
     radial-gradient(900px 420px at 82% -120px,rgba(var(--ac-gl),.065),transparent 64%),

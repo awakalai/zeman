@@ -44,6 +44,33 @@ test("the manager's navigation carries the installation and its health", () => {
   }
 });
 
+// sarraf_manager_overview has returned the administrators, the counts by role and the last fifty
+// changes across the whole installation since 202608230001, and until now no screen asked it. A
+// route that exists on the server and nowhere in the interface is a feature that was never built,
+// so this pins the three pieces that make it openable: nav entry, allowed page, rendered route.
+test("the manager can open the installation at a glance", () => {
+  assert.ok(managerNav.includes('"manager-overview"'),
+    "the overview is not in the manager's navigation");
+  assert.match(source, /"manager-overview",/, "manager-overview is not an allowed page");
+  assert.match(source, /page === "manager-overview" && <DeferredPanel><ManagerOverview/,
+    "manager-overview has no route");
+});
+
+// No cashbox, no profit, no total. The manager belongs to no business, so any figure on this
+// screen would be a figure out of somebody else's books.
+test("the installation overview shows no business's money", () => {
+  const overview = readFileSync(
+    new URL("../src/components/accounting/ManagerOverview.jsx", import.meta.url), "utf8");
+  // What it may read, rather than a list of words it may not contain: the imports are the whole
+  // of what a component can reach, so pinning them says more than any search for "profit" — and
+  // says it about the code rather than about the prose explaining the code.
+  const services = [...overview.matchAll(/from "\.\.\/\.\.\/services\/([A-Za-z]+)/g)]
+    .map((m) => m[1]).sort();
+  assert.deepEqual(services, ["adminRanks", "managerConsole", "userFacingError"],
+    "the overview reaches a service that can return one business's money");
+  assert.match(overview, /loadManagerOverview/, "the overview does not read the server's view");
+});
+
 test("the manager lands on the businesses, not on an exchange's dashboard", () => {
   assert.match(source, /adminLevel === "manager" && page === "dash"[\s\S]{0,120}setPage\("manager-console"\)/,
     "the manager still lands on the trading dashboard");
@@ -98,10 +125,12 @@ test("the manager's own screens are not listed inside a business's admin centre"
 test("the screen opens on the receipts, because that is most of the day", () => {
   const receipts = hub.indexOf('id="today-receipts"');
   const rates = hub.indexOf('id="today-rates"');
-  const tools = hub.indexOf('id="today-tools"');
   assert.ok(receipts > 0, "the receipts section is gone");
   assert.ok(rates > receipts, "the rates are shown above the receipts");
-  assert.ok(tools > rates, "the tools are shown above the work");
+  // The tools section that used to sit below these is gone: sixteen buttons at the foot of one
+  // page is a drawer, not a section, and each of those screens now has a named place in the
+  // navigation. This screen is what its title says — the work waiting today.
+  assert.ok(!hub.includes('id="today-tools"'), "the tools drawer is back");
 });
 
 // A screen that prints four zeroes every morning is a screen that teaches you not to read it.
@@ -119,22 +148,29 @@ test("the counts are read, not stored", () => {
   assert.match(hub, /unpricedCurrencies\(data\?\.currencies \|\| \[\]\)/, "the rates check is not the one the rest of the app uses");
 });
 
+// The guarantee this has always protected is that none of these screens becomes unreachable. It
+// used to be satisfied by the tools drawer listing them; now it is satisfied by the six sections
+// naming them. So it reads the whole file rather than the hub — and it earned its keep the moment
+// the drawer was deleted, when action-inbox was left reachable from nowhere at all.
 test("every screen the admin centre used to offer is still one press away", () => {
   for (const id of ["action-inbox", "approvals", "close", "receipt-review", "receipt-forwarding",
                     "partner-holdings", "debt-center", "cashbox", "partner-accounts",
                     "office-payments", "insights", "integrity", "audit", "export-audit", "backup"]) {
-    assert.ok(hub.includes(`"${id}"`), `${id} disappeared from the admin centre`);
+    const listed = new RegExp(`\\["${id}"`).test(source);
+    const pressed = new RegExp(`go\\("${id}"\\)`).test(source);
+    assert.ok(listed || pressed, `${id} is reachable from nowhere`);
   }
 });
 
 // Two screens called "پشکنینی فیش" meant opening the wrong one and concluding the right one was
 // broken. Names inside one navigation must be distinct.
 test("no two entries share a name", () => {
-  // Only the entries themselves — `["id", label(…), Icon]`. A name repeated in the prose of a
-  // tile that points at the same screen is the screen being called what it is called, twice,
-  // which is the opposite of the problem: two different destinations wearing one name.
-  const entries = [...hub.matchAll(/\["([a-z-]+)", label\("[^"]+", "([^"]+)"/g)];
-  assert.ok(entries.length >= 10, `expected the tools to be listed, found ${entries.length}`);
+  // The entries themselves, wherever they are declared — the navigation now, the tools drawer
+  // before. A name repeated in the prose of a tile that points at the same screen is the screen
+  // being called what it is called twice, which is the opposite of the problem: two different
+  // destinations wearing one name.
+  const entries = [...source.matchAll(/\["([a-z-]+)", (?:label|navSectionLabel)\("[^"]+", "([^"]+)"/g)];
+  assert.ok(entries.length >= 10, `expected the navigation to be listed, found ${entries.length}`);
   const seen = new Map();
   for (const [, id, name] of entries) {
     assert.ok(!seen.has(name) || seen.get(name) === id,

@@ -387,12 +387,12 @@ export function mayBeReplaced(receipt) {
 /** Plain-language status for an uploader; never internal OCR detail or a false loss. */
 export function intakeStatusText(state) {
   return {
-    created: "ئامادەکردن...",
-    uploading: "ناردنی وێنە...",
+    created: "ئامادەکردن…",
+    uploading: "ناردنی وێنە…",
     stored_retryable: "وێنە پارێزراوە؛ خوێندنەوە دواتر دووبارە دەکرێتەوە",
     uploaded: "وێنە گەیشت ✓",
     ocr_pending: "وێنە گەیشت؛ خوێندنەوە چاوەڕوانە",
-    ocr_processing: "دەخوێندرێتەوە...",
+    ocr_processing: "دەخوێندرێتەوە…",
     ocr_failed_retryable: "وێنە گەیشت؛ خوێندنەوە دووبارە هەوڵ دەدرێتەوە",
     parsed: "خوێندرایەوە",
     needs_manual_review: "لە پشکنینی ئەدمین",

@@ -37,7 +37,23 @@ test("the design tokens and both themes survived the move", () => {
     assert.ok(css.includes(token), `a design token was lost in the move: ${token}`);
   }
   assert.ok(/\[data-theme="dark"\]/.test(css), "the dark theme was lost in the move");
-  assert.ok(/#0D1014/.test(css), "the dark background was lost in the move");
+  // Structure, not one hex. This used to pin #0D1014 — a value from the FIRST of two :root
+  // blocks, which the second was silently overriding, so the test was guarding a colour nobody
+  // had ever seen on screen. A palette is allowed to change; what must not vanish is the dark
+  // theme having its own paper.
+  const dark = css.slice(css.indexOf('[data-theme="dark"]'));
+  assert.match(dark.slice(0, 600), /--bg\s*:\s*#[0-9A-Fa-f]{6}/,
+    "the dark theme no longer sets its own background");
+});
+
+// One palette, and only one. Two :root blocks meant twenty-three tokens decided twice and the
+// first answer thrown away — a product that feels unconsidered for a reason invisible in every
+// screenshot. verify:source enforces this too; here it is cheap enough to ask on every run.
+test("the palette is declared once", () => {
+  const css = sheet();
+  assert.equal((css.match(/^:root/gm) || []).length, 1, "a second palette overrides the first");
+  assert.equal((css.match(/^\[data-theme="dark"\]\s*\{/gm) || []).length, 1,
+    "a second dark palette overrides the first");
 });
 
 test("the eight places that rendered it still can, and render nothing", () => {

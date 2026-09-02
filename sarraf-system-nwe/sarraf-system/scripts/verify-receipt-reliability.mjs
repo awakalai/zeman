@@ -212,6 +212,79 @@ try {
     if (reachable !== "true") throw new Error(`a receipt that failed to upload cannot be closed off (${reachable})`);
   });
 
+  // A failed upload is the owner's own fear, stated plainly:
+  //
+  //   «فیشێک لە کاتی ئەپڵۆدکردن ئیرۆر بدات، پێویست ناکات بچێتە سیستەمەوە، بەڵکو جارێکی دیکە
+  //    ئەپڵۆدی بکاتەوە، چوونکە گەر بچێتە سیستەمەوە بە دووبارە حساب دەکرێت.»
+  //
+  // The state existed and one line of this file asked whether it could be closed off. Nothing
+  // asked the question that decides whether money is counted twice: can a receipt whose image
+  // never arrived be counted, converted, submitted or forwarded? Each is asked here separately,
+  // because "it is in a failed state" is a claim about a column and these are claims about money.
+  const uploadFailed = (id, batchId) => {
+    psql(`insert into public.receipt_documents(id,flow,state,batch_id,uploader_id,customer_id,
+            storage_path,mime_type,tenant_id)
+          values ('${id}','customer_sells_to_zeman','created','${batchId}','rl-cus','rl-cus',
+                  'ingest/${batchId}/${id}.jpg','image/jpeg','t-sarkhel')
+          on conflict (id) do nothing`);
+    // Through the real path: the state machine refuses created → upload_failed_retryable
+    // directly, which is itself correct — a receipt that never began uploading cannot have
+    // failed to upload.
+    psql(`update public.receipt_documents set state='uploading' where id='${id}'`);
+    psql(`update public.receipt_documents set state='upload_failed_retryable',
+            rule_code='upload_failed', rule_reason='وێنەکە نەگەیشت' where id='${id}'`);
+  };
+
+  check("a receipt whose upload failed is not counted as money", () => {
+    batch("rb-uf");
+    uploadFailed("rd-uf-1", "rb-uf");
+    // It must not appear as an intake item at all — that is the table conversion sums.
+    const counted = num(`select count(*) from public.receipt_intake_items where id='rd-uf-1'`);
+    if (counted !== 0) throw new Error(`a failed upload became a countable intake item`);
+  });
+
+  check("a receipt whose upload failed cannot be submitted", () => {
+    batch("rb-uf2");
+    uploadFailed("rd-uf-2", "rb-uf2");
+    be("admin");
+    if (!refused(`select public.sarraf_receipt_submit('["rd-uf-2"]'::jsonb,'receipt-submit:upload-failed-guard')`,
+      `public.receipt_documents where id='rd-uf-2' and state='submitted'`)) {
+      throw new Error("a receipt whose image never arrived was submitted");
+    }
+  });
+
+  check("a receipt whose upload failed cannot be forwarded", () => {
+    batch("rb-uf3");
+    uploadFailed("rd-uf-3", "rb-uf3");
+    be("admin");
+    if (!refused(`select public.sarraf_receipt_forward('["rd-uf-3"]'::jsonb,'هەوڵی ناردن',
+        'receipt-forward:upload-failed-guard-three')`,
+      `public.receipt_forwardings where document_id='rd-uf-3'`)) {
+      throw new Error("a receipt whose image never arrived was forwarded to somebody");
+    }
+  });
+
+  // And the reason it failed is kept, because «هۆکاری ڕەتکردنەوەی فیش هەبێت» applies to a
+  // machine's refusal as much as to a person's.
+  check("a failed upload says why, so the person knows to send it again", () => {
+    batch("rb-uf4");
+    uploadFailed("rd-uf-4", "rb-uf4");
+    const why = one(`select coalesce(rule_reason,'') from public.receipt_documents where id='rd-uf-4'`);
+    if (!why) throw new Error("a failed upload gave the person nothing to act on");
+  });
+
+  // A rejected receipt must carry its reason — the schema says so, and this proves the schema is
+  // the thing saying it rather than a convention somebody could forget.
+  check("a receipt cannot be rejected without a reason", () => {
+    batch("rb-noreason");
+    document("rd-noreason", "rb-noreason", { state: "created" });
+    if (!refused(`update public.receipt_documents set state='rejected',
+                    rule_code=null, rule_reason=null where id='rd-noreason'`,
+      `public.receipt_documents where id='rd-noreason' and state='rejected'`)) {
+      throw new Error("a receipt was rejected with no reason recorded");
+    }
+  });
+
   // ══ DOUBLED ═════════════════════════════════════════════════════════════════
   //
   // One payment counted twice.

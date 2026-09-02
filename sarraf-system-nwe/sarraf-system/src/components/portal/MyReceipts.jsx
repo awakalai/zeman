@@ -94,7 +94,7 @@ export function MyReceipts({ receipts, loading, error, onReload, onReplace, onBu
     }
   };
 
-  if (loading && !receipts) return <Card><StatePanel type="loading" title={tr("بارکردن...")} compact /></Card>;
+  if (loading && !receipts) return <Card><StatePanel type="loading" title={tr("بارکردن…")} compact /></Card>;
 
   return (
     <div className="space-y-3">
@@ -135,7 +135,7 @@ export function MyReceipts({ receipts, loading, error, onReload, onReplace, onBu
 
           {packing && (
             <div className="text-[11.5px] text-[var(--txt-3)]" aria-live="polite">
-              {tr("ئامادەکردن...")} {packing.done}/{packing.total}
+              {tr("ئامادەکردن…")} {packing.done}/{packing.total}
             </div>
           )}
 
@@ -143,7 +143,7 @@ export function MyReceipts({ receipts, loading, error, onReload, onReplace, onBu
             <button type="button" disabled={!!packing || picked.size === 0} onClick={() => run("share")}
               className="rounded-[var(--r-sm)] py-2.5 text-[12px] font-bold tap disabled:opacity-60"
               style={{ background: "var(--accent)", color: "var(--on-accent)" }}>
-              {packing ? tr("دەنێردرێت...") : tr("ناردن")}
+              {packing ? tr("دەنێردرێت…") : tr("ناردن")}
             </button>
             <button type="button" disabled={!!packing || picked.size === 0} onClick={() => run("save")}
               className="rounded-[var(--r-sm)] py-2.5 text-[12px] font-bold tap disabled:opacity-60"
@@ -223,7 +223,7 @@ export function MyReceipts({ receipts, loading, error, onReload, onReplace, onBu
                   disabled={busy === r.id}
                   className="w-full rounded-[var(--r-sm)] py-2.5 text-[12px] font-bold tap disabled:opacity-60"
                   style={{ background: "var(--accent)", color: "var(--on-accent)" }}>
-                  {busy === r.id ? tr("دەنێردرێت...") : tr("بارکردنەوەی فیشی نوێ")}
+                  {busy === r.id ? tr("دەنێردرێت…") : tr("بارکردنەوەی فیشی نوێ")}
                 </button>
               </>
             )}

@@ -47,7 +47,7 @@ import {
   LayoutDashboard, Vault, ArrowLeftRight, ListOrdered, Users, Handshake, Boxes,
   TrendingUp, Building2, Banknote, UserCog, PieChart, History, Plus, Trash2, Pencil,
   CheckCircle2, AlertTriangle, Eye, LogOut, Wallet, ChevronLeft, Coins,
-  Receipt, TrendingDown, ScanLine, Scale, Upload, XCircle, SlidersHorizontal, Search, MoreHorizontal, Zap, ArrowDownLeft, ArrowUpRight, X, Share2, Database, Download, ClipboardCheck, RotateCcw, MessageCircle, Moon, Sun, WifiOff, Wifi, EyeOff, Bell, QrCode, Camera, Fingerprint, ShieldCheck, KeyRound, Inbox, ShieldAlert, FileCheck2, Send, Clock
+  Receipt, TrendingDown, ScanLine, Scale, Upload, XCircle, SlidersHorizontal, Search, MoreHorizontal, Zap, ArrowDownLeft, ArrowUpRight, X, Share2, Database, Download, ClipboardCheck, RotateCcw, MessageCircle, Moon, Sun, WifiOff, Wifi, EyeOff, Bell, QrCode, Camera, Fingerprint, ShieldCheck, KeyRound, Inbox, ShieldAlert, FileCheck2, Send, Clock, Gauge
 } from "lucide-react";
 
 const lazyNamed = (loader, name) => React.lazy(() => loader().then((module) => ({ default: module[name] })));
@@ -70,6 +70,7 @@ const FaultList = lazyNamed(() => import("./components/system/FaultList"), "Faul
 const PartnerHoldings = lazyNamed(() => import("./components/accounting/PartnerHoldings"), "PartnerHoldings");
 const ManagerCenter = lazyNamed(() => import("./components/accounting/ManagerCenter"), "ManagerCenter");
 const ManagerConsole = lazyNamed(() => import("./components/accounting/ManagerConsole"), "ManagerConsole");
+const ManagerOverview = lazyNamed(() => import("./components/accounting/ManagerOverview"), "ManagerOverview");
 const ReceiptReviewWorkspace = lazyNamed(() => import("./components/receipts/ReceiptReviewWorkspace"), "ReceiptReviewWorkspace");
 const ReceiptForwardingCenter = lazyNamed(() => import("./components/receipts/ReceiptForwardingCenter"), "ReceiptForwardingCenter");
 const ForwardedReceipts = lazyNamed(() => import("./components/receipts/ForwardedReceipts"), "ForwardedReceipts");
@@ -201,6 +202,7 @@ const ADMIN_CENTER_PAGE_IDS = new Set([
   "explain-balance",
   "manager-center",
   "manager-console",
+  "manager-overview",
   "receipt-review",
   "receipt-forwarding",
   "backup",
@@ -496,7 +498,7 @@ function Scanner({ onFound, onClose }) {
         <div className="flex gap-2">
           <input value={manual} onChange={(e) => setManual(e.target.value)} dir="ltr"
             onKeyDown={(e) => e.key === "Enter" && manual && onFound(manual)}
-            placeholder={tr("یان کۆدەکە بنووسە...")}
+            placeholder={tr("یان کۆدەکە بنووسە…")}
             className="flex-1 px-4 py-3 text-[14px] outline-none rounded-[var(--r-sm)]"
             style={{ background: "rgba(255,255,255,.1)", border: "1px solid rgba(255,255,255,.16)", color: "#fff" }} />
           <Btn onClick={() => manual && onFound(manual)} disabled={!manual}>{tr("بردن")}</Btn>
@@ -640,7 +642,7 @@ const StatePanel = ({ type = "empty", title, detail, compact = false, onRetry })
         <Ic className={`w-4 h-4 ${isLoading ? "animate-spin" : ""}`} />
       </span>
       <div className="min-w-0">
-        <div className="state-panel-title">{title || (isLoading ? tr("بارکردن...") : isError ? tr("هەڵەیەک ڕوویدا") : tr("هیچ داتایەک نییە"))}</div>
+        <div className="state-panel-title">{title || (isLoading ? tr("بارکردن…") : isError ? tr("هەڵەیەک ڕوویدا") : tr("هیچ داتایەک نییە"))}</div>
         {detail && <div className="state-panel-detail">{detail}</div>}
         {isError && onRetry && (
           <button onClick={onRetry} className="state-panel-retry tap">
@@ -778,28 +780,6 @@ function AdminCenterHub({ lang = "ku", onNavigate, data, calc, cur, batches }) {
 
   const attention = waiting.length + unpriced.length + approvals + unpaid + officesOwed.length;
 
-  // Everything the centre used to list. Still all here, still one press away — but small, and
-  // below the work, because a tool you reach for twice a month should not be the size of the
-  // thing you do forty times a day.
-  const tools = [
-    ["action-inbox", label("ئینباکسی کارەکان", "Action inbox", "صندوق الإجراءات"), Inbox],
-    ["receipt-review", label("پشکنینی وردی فیش", "Receipt review", "مراجعة الإيصالات"), ClipboardCheck],
-    ["receipt-forwarding", label("ناردنی فیش", "Receipt forwarding", "إرسال الإيصالات"), Send],
-    ["partner-holdings", label("ئەوەی لای هاوبەش دانراوە", "Placed with partners", "المودع لدى الشركاء"), Boxes],
-    ["debt-center", label("قەرز و قاسە", "Debt & cashbox", "الديون والخزنة"), Scale],
-    ["cashbox", label("قاسەی کڕیاران", "Customer cashbox", "خزنة الزبائن"), Wallet],
-    ["partner-accounts", label("حسابی هاوبەشان", "Partner accounts", "حسابات الشركاء"), Handshake],
-    ["office-payments", label("پارەدانی نووسینگە", "Office payments", "مدفوعات المكتب"), Building2],
-    ["cash-accounts", label("حسابەکان و عمولە", "Accounts & commission", "الحسابات والعمولة"), Banknote],
-    ["explain-balance", label("ئەم باڵانسە بۆچی ئەوەندەیە؟", "Explain a balance", "لماذا هذا الرصيد؟"), Search],
-    ["approvals", label("کۆنترۆڵ و پەسەندکردن", "Controls & approvals", "التحكم والموافقات"), ShieldCheck],
-    ["insights", label("ڕەوت و شیکاری", "Trends & insights", "الاتجاهات والتحليلات"), TrendingUp],
-    ["integrity", label("ناوەندی یەکپارچەیی", "Integrity centre", "مركز سلامة البيانات"), ShieldAlert],
-    ["audit", label("تۆماری گۆڕانکاری", "Change log", "سجل التغييرات"), History],
-    ["export-audit", label("هەناردە و وردبینی", "Export & audit", "التصدير والتدقيق"), FileCheck2],
-    ["backup", label("پاراستنی داتا", "Data protection", "حماية البيانات"), Database],
-  ];
-
   return (
     <div className="space-y-6">
       <div className="dashboard-page-head flex items-end justify-between gap-4">
@@ -893,20 +873,13 @@ function AdminCenterHub({ lang = "ku", onNavigate, data, calc, cur, batches }) {
           action={label("بیبەستەوە", "Close", "أقفل")} onClick={go("close")} />
       </section>
 
-      <section aria-labelledby="today-tools">
-        <h2 id="today-tools" className="text-[12px] font-semibold mb-3" style={{ color: "var(--txt-2)" }}>
-          {label("ئامرازەکان", "Tools", "الأدوات")}
-        </h2>
-        <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-2">
-          {tools.map(([id, title, Icon]) => (
-            <button key={id} type="button" onClick={go(id)}
-              className="card tap hov px-3 py-3 text-start flex items-center gap-2.5 min-h-[48px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ac)]">
-              <Icon className="w-4 h-4 shrink-0" style={{ color: "var(--txt-3)" }} aria-hidden="true" />
-              <span className="text-[12px] font-semibold truncate" style={{ color: "var(--txt-2)" }}>{title}</span>
-            </button>
-          ))}
-        </div>
-      </section>
+      {/*
+        * The sixteen-tool grid that used to sit here is gone, and nothing went with it.
+        * Every one of those screens now has a named place in the navigation — «فیش», «پارە»,
+        * «ڕاپۆرت» — because a grid of sixteen buttons at the foot of a page is not a section,
+        * it is a drawer, and a drawer is where things go when nobody has decided what they are.
+        * This page is now what its title says: the work waiting today.
+        */}
     </div>
   );
 }
@@ -2908,13 +2881,13 @@ export default function App() {
   };
 
   /* ───────── ڕەندەر ───────── */
-  if (session === undefined) return <><Styles /><Splash t={tr("بارکردنی سیستەم...")} /></>;
+  if (session === undefined) return <><Styles /><Splash t={tr("بارکردنی سیستەم…")} /></>;
   if (!session) return <><Styles /><Login /></>;
-  if (accessState === "checking") return <><Styles /><Splash t={tr("پشکنینی پاراستنی ئەکاونت...")} signOut={signOut} /></>;
+  if (accessState === "checking") return <><Styles /><Splash t={tr("پشکنینی پاراستنی ئەکاونت…")} signOut={signOut} /></>;
   if (accessState === "mfa") return <><Styles /><MfaGate profile={profile} onReady={() => setAccessEpoch((x) => x + 1)} onSignOut={signOut} /></>;
   if (accessState === "error") return <><Styles /><Splash t={accessError || tr("هەڵە لە پشکنینی پاراستن")} signOut={signOut} /></>;
   if (accessState === "missing" || !profile) return <><Styles /><Splash t={tr("ئەکاونتەکەت بە سیستەمەکە نەبەستراوە — پەیوەندی بە ئەدمینەوە بکە.")} signOut={signOut} /></>;
-  if (!data || !calc) return <><Styles /><Splash t={tr("بارکردنی داتا...")} signOut={signOut} /></>;
+  if (!data || !calc) return <><Styles /><Splash t={tr("بارکردنی داتا…")} signOut={signOut} /></>;
 
   const isAdmin = profile.role === "admin";
   // A manager outranks the business owner, so everything gated on isOwner admits them too.
@@ -2977,6 +2950,10 @@ export default function App() {
     {
       label: navSectionLabel("دامەزراندن", "Installation", "التثبيت"),
       items: [
+        // The installation at a glance. sarraf_manager_overview has answered this since
+        // 202608230001 and no screen had ever asked it — the manager had a console listing
+        // businesses and no way to see the whole of what they maintain.
+        ["manager-overview", navSectionLabel("سیستەم بە گشتی", "System at a glance", "النظام في لمحة"), Gauge],
         ["manager-console", navSectionLabel("سەرخێڵەکان", "Businesses", "الأعمال"), Building2],
         ["manager-center", navSectionLabel("ئەکاونت و پلەکان", "Accounts & ranks", "الحسابات والرتب"), KeyRound],
       ],
@@ -2991,41 +2968,95 @@ export default function App() {
     },
   ];
 
+  // ── the sections, and why there are six of them ──────────────────────────────────────────
+  //
+  //   «دەمەوێت بەشەکان زۆر بە ڕوونی جیا بکەیتەوە نەک ئاوا هەمووی لە یەک شوێن بێت.»
+  //
+  // There were four groups holding seven entries, and SIXTEEN more screens listed at the foot of
+  // one of them. So two thirds of the application was reachable only by opening «کاری ئەمڕۆ» and
+  // scrolling past the work to a grid of tools — which is not a section, it is a drawer, and a
+  // drawer is where things go when nobody has decided what they are.
+  //
+  // These six are the decision. Each is a question a person in this business actually has, and
+  // every screen belongs to exactly one of them:
+  //
+  //   ئەمڕۆ      what needs doing right now
+  //   مامەڵە     buying and selling
+  //   فیش        everything about receipts, in one place instead of three
+  //   پارە       where the money is and who owes whom
+  //   خەڵک       the people it is done with
+  //   ڕاپۆرت     what happened, and whether the books are sound
+  //
+  // Nothing was removed. What changed is that a screen is now found by asking what it is for
+  // rather than by remembering where it was put.
   const NAV_GROUPS = isSystemManager ? MANAGER_NAV_GROUPS : [
     {
-      label: navSectionLabel("سەرەکی", "Overview", "نظرة عامة"),
+      label: navSectionLabel("ئەمڕۆ", "Today", "اليوم"),
       items: [
         ["dash", tr("داشبۆرد"), LayoutDashboard],
+        ["admin-center", navSectionLabel("کاری ئەمڕۆ", "Today's work", "عمل اليوم"), Inbox],
+        // Deleting the tools drawer took the action inbox's only route with it — nav:0 press:0 —
+        // and the navigation test caught it before this was pushed anywhere real. It belongs
+        // here: it is the list of what is waiting, which is what «ئەمڕۆ» is for.
+        ["action-inbox", navSectionLabel("ئینباکسی کارەکان", "Action inbox", "صندوق الإجراءات"), ClipboardCheck],
+        ["approvals", navSectionLabel("پەسەندکردن", "Approvals", "الموافقات"), ShieldCheck],
       ],
     },
     {
-      label: navSectionLabel("بازرگانی", "Trading", "التداول"),
+      label: navSectionLabel("مامەڵە", "Trading", "التداول"),
       items: [
         ["newtx", tr("مامەڵەی نوێ"), ArrowLeftRight],
         ["txs", tr("مامەڵەکان"), ListOrdered],
-        // Not "پشکنینی فیش": the admin centre already has a screen by that name, and two
-        // different things with one name is a person opening the wrong one and concluding the
-        // right one is broken. This is the working list of batches — where a batch becomes a
-        // transaction. The other is the per-receipt examination.
-        ["receipts", tr("فیشەکان"), ScanLine],
       ],
     },
     {
-      label: navSectionLabel("بەڕێوەبردن", "Management", "الإدارة"),
+      // All receipt work together. It was in three places — the batch list under Trading, the
+      // per-receipt examination and the forwarding both buried in the tools drawer — and they
+      // are three steps of one job.
+      label: navSectionLabel("فیش", "Receipts", "الإيصالات"),
+      items: [
+        ["receipts", navSectionLabel("کۆمەڵەکان", "Batches", "الدفعات"), ScanLine],
+        ["receipt-review", navSectionLabel("پشکنین", "Review", "المراجعة"), ClipboardCheck],
+        ["receipt-forwarding", navSectionLabel("ناردن", "Forwarding", "الإرسال"), Send],
+      ],
+    },
+    {
+      label: navSectionLabel("پارە", "Money", "المال"),
+      items: [
+        ["debt-center", navSectionLabel("قەرز و قاسە", "Debt & cashbox", "الديون والخزنة"), Scale],
+        ["cash-accounts", navSectionLabel("حساب و عمولە", "Accounts & fees", "الحسابات والعمولة"), Banknote],
+        ["office-payments", navSectionLabel("نووسینگە", "Offices", "المكاتب"), Building2],
+        ["partner-holdings", navSectionLabel("لای هاوبەشان", "With partners", "لدى الشركاء"), Boxes],
+        ["explain-balance", navSectionLabel("شیکردنەوەی باڵانس", "Explain a balance", "تفسير الرصيد"), Search],
+      ],
+    },
+    {
+      label: navSectionLabel("خەڵک", "People", "الأشخاص"),
       items: [
         ["people", tr("بەکارهێنەران"), Users],
-        ["report", tr("ڕاپۆرت"), PieChart],
+        ["cashbox", navSectionLabel("قاسەی کڕیاران", "Customer cashbox", "خزنة الزبائن"), Wallet],
+        ["partner-accounts", navSectionLabel("حسابی هاوبەشان", "Partner accounts", "حسابات الشركاء"), Handshake],
       ],
     },
     {
-      label: navSectionLabel("کارەکان", "Work", "الأعمال"),
+      label: navSectionLabel("ڕاپۆرت", "Reports", "التقارير"),
       items: [
-        ["admin-center", navSectionLabel("کاری ئەمڕۆ", "Today's work", "عمل اليوم"), Inbox],
+        ["report", tr("ڕاپۆرت"), PieChart],
+        ["insights", navSectionLabel("ڕەوت و شیکاری", "Trends", "الاتجاهات"), TrendingUp],
+        ["integrity", navSectionLabel("یەکپارچەیی", "Integrity", "السلامة"), ShieldAlert],
+        ["audit", navSectionLabel("تۆماری گۆڕانکاری", "Change log", "سجل التغييرات"), History],
+        ["export-audit", navSectionLabel("هەناردە", "Export", "التصدير"), FileCheck2],
+        ["backup", navSectionLabel("پاراستنی داتا", "Data protection", "حماية البيانات"), Database],
       ],
     },
   ];
   const NAV = NAV_GROUPS.flatMap((g) => g.items);
-  const isNavActive = (id) => id === "admin-center" ? ADMIN_CENTER_PAGE_IDS.has(page) : page === id;
+  // Exactly one entry lights up. It used to be that «کاری ئەمڕۆ» claimed every page in
+  // ADMIN_CENTER_PAGE_IDS, which was right while those pages had no entry of their own and is
+  // wrong now that they do — two lit entries tell a person they are in two places at once.
+  const isNavActive = (id) => id === "admin-center"
+    ? (page === "admin-center" || page === "action-inbox" || page === "close")
+    : page === id;
 
 
   const shared = { data, calc, cur, usr, mySafe, profitAll, profitIn, ownProfitIn, ownProfitAll,
@@ -3042,7 +3073,7 @@ export default function App() {
         <div className="sticky top-[57px] z-30 px-3 py-2 text-center text-[12px] font-semibold flex items-center justify-center gap-2"
           style={{ background: "color-mix(in srgb, var(--warn) 92%, black)", color: "#fff" }}>
           <WifiOff className="w-3.5 h-3.5" />
-          {online ? "پەیوەندی گەڕایەوە — نوێکردنەوە..." : "ئینتەرنێت نییە — داتای هەڵگیراو پیشان دەدرێت"}
+          {online ? "پەیوەندی گەڕایەوە — نوێکردنەوە…" : "ئینتەرنێت نییە — داتای هەڵگیراو پیشان دەدرێت"}
           {stale && <span className="opacity-75" style={num}>({new Date(stale).toLocaleTimeString("en-GB")})</span>}
         </div>
       )}
@@ -3343,6 +3374,8 @@ export default function App() {
               request={adminUserRequest} onDone={loadAll} /></DeferredPanel>}
             {page === "manager-console" && <DeferredPanel><ManagerConsole client={supabase}
               lang={lang} isManager={isSystemManager} flash={flash} /></DeferredPanel>}
+            {page === "manager-overview" && <DeferredPanel><ManagerOverview client={supabase}
+              lang={lang} /></DeferredPanel>}
             {page === "cashbox" && <DeferredPanel><CashboxPanel client={supabase} lang={lang} flash={flash}
               customers={(data?.users || []).filter((u) => u.role === "customer" && !u.deleted)}
               rateFor={(code) => { const c = (data?.currencies || []).find((x) => x.code === code);
@@ -3426,7 +3459,7 @@ function ViewAsPicker({ users, onPick, compact }) {
   return (
     <div>
       <Inp value={q} onChange={(e) => setQ(e.target.value)} aria-label={tr("گەڕان بە ناو، ژمارە، یان ڕۆڵ")}
-        placeholder={tr("گەڕان بە ناو، ژمارە، یان ڕۆڵ...")}
+        placeholder={tr("گەڕان بە ناو، ژمارە، یان ڕۆڵ…")}
         className={compact ? "text-xs py-2" : ""} />
       <div className={`mt-1.5 space-y-1 overflow-y-auto ${compact ? "max-h-44" : "max-h-64"}`}>
         {list.length === 0 ? <div className="text-xs text-[var(--txt-3)] py-2 text-center">{tr("هیچ نەدۆزرایەوە")}</div> :
@@ -3579,7 +3612,7 @@ function MfaGate({ profile, onReady, onSignOut }) {
           </p>
 
           {mode === "loading" && (
-            <div className="py-8"><StatePanel type="loading" title="ئامادەکردنی پاراستن..." compact /></div>
+            <div className="py-8"><StatePanel type="loading" title="ئامادەکردنی پاراستن…" compact /></div>
           )}
 
           {mode === "enroll" && qr && (
@@ -3606,7 +3639,7 @@ function MfaGate({ profile, onReady, onSignOut }) {
                   style={{ background: "var(--surf-2)", border: "1px solid var(--line)", color: "var(--txt)", ...num }} />
               </div>
               <Btn className="w-full mt-3" disabled={busy || code.length !== 6} onClick={verify}>
-                {busy ? "پشکنین..." : "پشتڕاستکردنەوە"}
+                {busy ? "پشکنین…" : "پشتڕاستکردنەوە"}
               </Btn>
             </div>
           )}
@@ -3748,7 +3781,7 @@ function Login() {
           )}
 
           <Btn onClick={() => go()} disabled={busy} className="w-full !py-3.5 !text-[15px] mt-1">
-            {busy ? "..." : tr("چوونە ژوورەوە")}
+            {busy ? tr("جێبەجێکردن…") : tr("چوونە ژوورەوە")}
           </Btn>
 
           {bio && (
@@ -4187,7 +4220,7 @@ function MarketWatch({ compact = false }) {
           className="shrink-0 px-3 py-2 rounded-xl text-[10.5px] font-semibold tap flex items-center justify-center gap-1.5"
           style={{ background:"var(--surf-2)", border:"1px solid var(--line)", color:"var(--txt-2)" }}>
           <RotateCcw className={`w-3.5 h-3.5 ${busy ? "animate-spin" : ""}`} />
-          {busy ? "..." : tr("نوێکردنەوە")}
+          {busy ? tr("جێبەجێکردن…") : tr("نوێکردنەوە")}
         </button>
       </div>
 
@@ -4199,7 +4232,7 @@ function MarketWatch({ compact = false }) {
 
       {!market && !err && (
         <div className="mt-3">
-          <StatePanel type="loading" title="نرخی جیهانی بار دەکرێت..." detail="سیستەمی مامەڵە و نرخی ناوخۆ بەردەوام کار دەکات." compact />
+          <StatePanel type="loading" title="نرخی جیهانی بار دەکرێت…" detail="سیستەمی مامەڵە و نرخی ناوخۆ بەردەوام کار دەکات." compact />
         </div>
       )}
 
@@ -4239,7 +4272,7 @@ function MarketWatch({ compact = false }) {
             <div className="relative mt-3">
               <Search className="absolute start-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5" style={{ color:"var(--txt-3)" }} />
               <input value={search} onChange={(e) => setSearch(e.target.value)}
-                placeholder="گەڕان بە USD, EUR, CNY..."
+                placeholder="گەڕان بە USD, EUR, CNY…"
                 className="w-full ps-9 pe-3 py-2.5 rounded-xl outline-none text-[11px]"
                 style={{ background:"var(--surf-2)", border:"1px solid var(--line)", color:"var(--txt)" }} />
             </div>
@@ -4418,7 +4451,7 @@ function Rates({ data, saveRates }) {
               className="px-3 py-2 rounded-xl text-[11px] font-semibold tap flex items-center gap-1.5"
               style={{ background:"var(--surf-2)", border:"1px solid var(--line)", color:"var(--txt-2)" }}>
               <RotateCcw className={`w-3.5 h-3.5 ${marketBusy ? "animate-spin" : ""}`} />
-              {marketBusy ? "..." : "نوێکردنەوە"}
+              {marketBusy ? tr("جێبەجێکردن…") : tr("نوێکردنەوە")}
             </button>
           </div>
         </div>
@@ -4449,7 +4482,7 @@ function Rates({ data, saveRates }) {
               <div className="relative flex-1">
                 <Search className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4" style={{ color:"var(--txt-3)" }} />
                 <input value={marketSearch} onChange={(e) => setMarketSearch(e.target.value)}
-                  placeholder="گەڕان بە USD, EUR, CNY..."
+                  placeholder="گەڕان بە USD, EUR, CNY…"
                   className="w-full ps-9 pe-3 py-2.5 rounded-xl outline-none text-[12px]"
                   style={{ background:"var(--surf-2)", border:"1px solid var(--line)", color:"var(--txt)" }} />
               </div>
@@ -4487,7 +4520,7 @@ function Rates({ data, saveRates }) {
 
         {!market && !marketErr && (
           <div className="py-8 text-center text-[12px]" style={{ color:"var(--txt-3)" }}>
-            {marketBusy ? "نرخی بازاڕ بار دەکرێت..." : "نرخی بازاڕ هێشتا بار نەکراوە"}
+            {marketBusy ? "نرخی بازاڕ بار دەکرێت…" : "نرخی بازاڕ هێشتا بار نەکراوە"}
           </div>
         )}
       </Card>
@@ -4959,11 +4992,11 @@ function TxForm({ data, cur, calc, usr, avgRate, inventoryPosition, usdValueAt, 
         </Card>
         <Card className="p-5">
           <Lbl>{tr("تێبینی")}</Lbl>
-          <Inp value={f.note} onChange={(ev) => setF({ ...f, note: ev.target.value })} placeholder="تێبینییەکی ڕوون و audit-friendly..." />
+          <Inp value={f.note} onChange={(ev) => setF({ ...f, note: ev.target.value })} placeholder="تێبینییەکی ڕوون و audit-friendly…" />
         </Card>
         <div className="flex gap-2 sticky bottom-24 md:bottom-4">
           <Btn kind="primary" onClick={submit} disabled={sending || busy} className="flex-1 !py-4 !text-[15px]">
-            {sending || busy ? "..." : "پاشەکەوتکردنی تێبینی"}
+            {sending || busy ? tr("جێبەجێکردن…") : tr("پاشەکەوتکردنی تێبینی")}
           </Btn>
           <Btn kind="ghost" onClick={onCancel} className="!py-4">{tr("پاشگەزبوونەوە")}</Btn>
         </div>
@@ -5173,7 +5206,7 @@ function TxForm({ data, cur, calc, usr, avgRate, inventoryPosition, usdValueAt, 
                 <option value="">{tr("— ناوێکی ئازاد —")}</option>
                 {customers.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
               </Sel>
-              {!f.fromId && <Inp className="mt-2" value={f.fromName} onChange={(ev) => setF({ ...f, fromName: ev.target.value })} placeholder={tr("ناوی فرۆشیار...")} />}
+              {!f.fromId && <Inp className="mt-2" value={f.fromName} onChange={(ev) => setF({ ...f, fromName: ev.target.value })} placeholder={tr("ناوی فرۆشیار…")} />}
             </div>
             <div>
               <Lbl>{tr("بە کێ دەیفرۆشم؟")}</Lbl>
@@ -5181,7 +5214,7 @@ function TxForm({ data, cur, calc, usr, avgRate, inventoryPosition, usdValueAt, 
                 <option value="">{tr("— ناوێکی ئازاد —")}</option>
                 {customers.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
               </Sel>
-              {!f.toId && <Inp className="mt-2" value={f.toName} onChange={(ev) => setF({ ...f, toName: ev.target.value })} placeholder={tr("ناوی کڕیار...")} />}
+              {!f.toId && <Inp className="mt-2" value={f.toName} onChange={(ev) => setF({ ...f, toName: ev.target.value })} placeholder={tr("ناوی کڕیار…")} />}
             </div>
           </div>
         </Card>
@@ -5322,7 +5355,7 @@ function TxForm({ data, cur, calc, usr, avgRate, inventoryPosition, usdValueAt, 
               <div>
                 <Lbl>{tr("نووسینگەی بەرپرسی پارەدان")}</Lbl>
                 <Sel value={f.officeId} onChange={(ev) => setF({ ...f, officeId: ev.target.value })}>
-                  <option value="">{tr("هەڵبژێرە...")}</option>
+                  <option value="">{tr("هەڵبژێرە…")}</option>
                   {offices.map((office) => <option key={office.id} value={office.id}>{office.name}</option>)}
                 </Sel>
                 {!offices.length && (
@@ -5355,10 +5388,10 @@ function TxForm({ data, cur, calc, usr, avgRate, inventoryPosition, usdValueAt, 
                 </Sel>
                 {f.cpMode === "acc"
                   ? <Sel value={f.cpId} onChange={(ev) => setF({ ...f, cpId: ev.target.value })}>
-                      <option value="">{tr("هەڵبژێرە...")}</option>
+                      <option value="">{tr("هەڵبژێرە…")}</option>
                       {customers.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
                     </Sel>
-                  : <Inp value={f.cpName} onChange={(ev) => setF({ ...f, cpName: ev.target.value })} placeholder={tr("ناو...")} />}
+                  : <Inp value={f.cpName} onChange={(ev) => setF({ ...f, cpName: ev.target.value })} placeholder={tr("ناو…")} />}
               </div>
             )}
           </>
@@ -5393,7 +5426,7 @@ function TxForm({ data, cur, calc, usr, avgRate, inventoryPosition, usdValueAt, 
       <div className="flex gap-2 sticky bottom-24 md:bottom-4">
         <Btn kind={f.direct ? "gold" : f.type === "buy" ? "primary" : "danger"}
           onClick={submit} disabled={sending || busy || needsCustodian || inventoryRefuses} className="flex-1 !py-4 !text-[15px]">
-          {sending || busy ? "..." : e ? tr("پاشەکەوتی ئیدیت")
+          {sending || busy ? tr("جێبەجێکردن…") : e ? tr("پاشەکەوتی ئیدیت")
             : f.direct ? tr("تۆمارکردنی مامەڵەی ڕاستەوخۆ")
             : f.type === "buy" ? tr("تۆمارکردنی کڕین") : tr("تۆمارکردنی فرۆشتن")}
         </Btn>
@@ -5440,7 +5473,7 @@ function TxFilterBar({ data, f, setF, count, total }) {
       <div className="flex gap-2 items-center">
         <div className="flex-1 relative">
           <Search className="w-4 h-4 absolute start-4 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: "var(--txt-3)" }} />
-          <input value={f.q} onChange={(e) => setF({ ...f, q: e.target.value })} placeholder={tr("گەڕان...")}
+          <input value={f.q} onChange={(e) => setF({ ...f, q: e.target.value })} placeholder={tr("گەڕان…")}
             className="w-full ps-11 pe-4 py-3 text-[14px] outline-none" style={fieldSty}
             onFocus={onFoc} onBlur={onBlr} />
         </div>
@@ -5599,7 +5632,7 @@ function TxList({ data, cur, usr, onEdit, onDel, settle, unsettle, loadTxHistory
         <div className="flex justify-center">
           {serverMeta.hasMore ? (
             <Btn kind="ghost" onClick={() => fetchPage(false)} disabled={loading}>
-              {loading ? "..." : "زیاتر باربکە"}
+              {loading ? tr("بارکردن…") : tr("زیاتر باربکە")}
             </Btn>
           ) : rows.length > 0 ? (
             <span className="text-[10.5px]" style={{ color: "var(--txt-3)" }}>کۆتایی مێژوو</span>
@@ -6622,7 +6655,7 @@ function ReceiptUploader({ customerId, customerName, partnerId, uploaderId, dire
       ...xs,
       ...tasks.map(({ id, file }) => ({
         id, status: "processing", counted: false, reviewRequired: false,
-        fileName: file.name, note: "ئامادەکردنی وێنە...",
+        fileName: file.name, note: "ئامادەکردنی وێنە…",
       })),
     ]);
 
@@ -6642,13 +6675,13 @@ function ReceiptUploader({ customerId, customerName, partnerId, uploaderId, dire
       }
 
       try {
-          patchRow(id, { note: "ئامادەکردنی وێنە...", status: "processing" });
+          patchRow(id, { note: "ئامادەکردنی وێنە…", status: "processing" });
           const img = await prepImage(file);
-          patchRow(id, { url: img.url, blob: img.blob, hash: img.hash, ocrImage: img.b64, mediaType: img.mediaType, note: "پاراستنی بەڵگە..." });
+          patchRow(id, { url: img.url, blob: img.blob, hash: img.hash, ocrImage: img.b64, mediaType: img.mediaType, note: "پاراستنی بەڵگە…" });
 
           // Store the evidence BEFORE reading it. Past this point an OCR failure degrades the
           // reading but can no longer lose the receipt.
-          patchRow(id, { note: "ناردنی وێنە...", status: "processing" });
+          patchRow(id, { note: "ناردنی وێنە…", status: "processing" });
           const intake = await durableIntake({ id, img, patchRow });
           // Preserve the durable identity before interpreting or retrying OCR. Even an exact
           // duplicate remains an immutable, discoverable document; only the server may decide
@@ -6748,7 +6781,7 @@ function ReceiptUploader({ customerId, customerName, partnerId, uploaderId, dire
   const retryRow = async (id) => {
     const r = rowsRef.current.find((x) => x.id === id);
     if (!r?.documentId) return flash("ناسنامەی فیشە پارێزراوەکە بەردەست نییە");
-    patchRow(id, { status: "processing", counted: false, reviewRequired: false, note: "دووبارە دەخوێندرێتەوە..." });
+    patchRow(id, { status: "processing", counted: false, reviewRequired: false, note: "دووبارە دەخوێندرێتەوە…" });
     try {
       const serverResult = await requestStoredReceiptOcr(supabase, r.documentId);
       const d = serverResult.extraction;
@@ -7318,7 +7351,7 @@ function ReceiptUploader({ customerId, customerName, partnerId, uploaderId, dire
               <div className="relative">
                 <Search className="w-4 h-4 absolute top-1/2 -translate-y-1/2 start-3 text-[var(--txt-3)] pointer-events-none" />
                 <input value={reviewSearch} onChange={(e) => setReviewSearch(e.target.value)}
-                  placeholder="گەڕان بە بڕ، دراو، ژمارە، وەرگر..."
+                  placeholder="گەڕان بە بڕ، دراو، ژمارە، وەرگر…"
                   className="w-full ps-9 pe-3 py-2.5 rounded-xl text-[12px] outline-none"
                   style={{ background: "var(--surf-2)", border: "1px solid var(--line)", color: "var(--txt)" }} />
               </div>
@@ -7594,7 +7627,7 @@ function ReceiptUploader({ customerId, customerName, partnerId, uploaderId, dire
               || (review.length > 0 && mayEditExtraction(staffReview))
               || (!good.length && !review.length && !bad.length)}>
             {sending
-              ? "ناردن..."
+              ? "ناردن…"
               : review.length && mayEditExtraction(staffReview)
                 ? `${review.length} فیش پێویستی بە پشکنین هەیە`
                 : retrying.length
@@ -7748,14 +7781,14 @@ function ReceiptsHub({ data, usr, batches, batchLoadError, reloadBatches, flash,
             <div>
               <Lbl>{tr("کڕیار")}</Lbl>
               <Sel value={addFor} onChange={(e) => { setAddFor(e.target.value); setAddTxId(""); }}>
-                <option value="">{tr("هەڵبژێرە...")}</option>
+                <option value="">{tr("هەڵبژێرە…")}</option>
                 {customers.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
               </Sel>
             </div>
             <div>
               <Lbl>{tr("مامەڵەی دیاریکراو")}</Lbl>
               <Sel value={addTxId} onChange={(event) => setAddTxId(event.target.value)} disabled={!addFor}>
-                <option value="">{tr("هەڵبژێرە...")}</option>
+                <option value="">{tr("هەڵبژێرە…")}</option>
                 {addTransactions.map((tx) => (
                   <option key={tx.id} value={tx.id}>
                     {tx.id} · {tx.type === "buy" ? tr("کڕیار فرۆشتوویەتی") : tr("کڕیار کڕیویەتی")}
@@ -8174,7 +8207,7 @@ function LocationReceipts({ partnerId, data, title, flash, showValuation = true 
 
   useEffect(() => { loadLocationReceipts(); }, [partnerId]);
 
-  if (recs === null) return <Card><StatePanel type="loading" title={tr("بارکردن...")} compact /></Card>;
+  if (recs === null) return <Card><StatePanel type="loading" title={tr("بارکردن…")} compact /></Card>;
   if (recErr) return <Card><StatePanel type="error" title="نەتوانرا فیشەکان وەربگیرێن" detail={recErr} onRetry={loadLocationReceipts} compact /></Card>;
 
   const t = new Date(), iso = (d) => d.toISOString().slice(0, 10);
@@ -8275,7 +8308,7 @@ function BatchDetail({ id, back, usr, data, profile, onMakeTx, flash, reloadBatc
   };
   useEffect(() => { load(); }, [id]);
 
-  if (!b || !recs) return <Card><Empty t={tr("بارکردن...")} /></Card>;
+  if (!b || !recs) return <Card><Empty t={tr("بارکردن…")} /></Card>;
   const good = recs.filter((r) => r.counted !== false && r.status !== "dup" && r.status !== "error");
   const persistedItems = intakeItems.length ? intakeItems : recs.map((receipt) => ({
     ...receipt,
@@ -8534,7 +8567,7 @@ function BatchDetail({ id, back, usr, data, profile, onMakeTx, flash, reloadBatc
                       <div className="text-[10px] text-[var(--txt-3)] mt-1" style={num}>{candidate.tx_date ? new Date(candidate.tx_date).toLocaleString("en-GB") : "—"}</div>
                     </div>
                     <Btn onClick={() => confirmMatch(candidate)} disabled={!!matchBusy || !!decisionBusy || belowPolicy || (reasonRequired && matchReason.trim().length < 8)}>
-                      {matchBusy === candidate.tx_id ? "بەستنەوە..." : belowPolicy ? "ژێر سنووری یاسا" : "پەسەندکردن و بەستنەوە"}
+                      {matchBusy === candidate.tx_id ? "بەستنەوە…" : belowPolicy ? "ژێر سنووری یاسا" : "پەسەندکردن و بەستنەوە"}
                     </Btn>
                   </div>
                   <div className="flex gap-1.5 flex-wrap mt-3">
@@ -8554,10 +8587,10 @@ function BatchDetail({ id, back, usr, data, profile, onMakeTx, flash, reloadBatc
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-3 pt-3 border-t border-[var(--line)]">
             <Btn kind="danger" onClick={() => decideWithoutMatch("reject")} disabled={!!matchBusy || !!decisionBusy || receiptPolicy?.allow_reject === false || matchReason.trim().length < 8}>
-              {decisionBusy === "reject" ? "ڕەتکردنەوە..." : "ڕەتکردنەوەی کۆمەڵە"}
+              {decisionBusy === "reject" ? "ڕەتکردنەوە…" : "ڕەتکردنەوەی کۆمەڵە"}
             </Btn>
             <Btn kind="ghost" onClick={() => decideWithoutMatch("correction")} disabled={!!matchBusy || !!decisionBusy || receiptPolicy?.allow_correction === false || matchReason.trim().length < 8}>
-              {decisionBusy === "correction" ? "گەڕاندنەوە..." : "گەڕاندنەوە بۆ ڕاستکردنەوە"}
+              {decisionBusy === "correction" ? "گەڕاندنەوە…" : "گەڕاندنەوە بۆ ڕاستکردنەوە"}
             </Btn>
           </div>
         </Card>
@@ -8650,7 +8683,7 @@ function BatchDetail({ id, back, usr, data, profile, onMakeTx, flash, reloadBatc
                 <Inp value={allocationReason} onChange={(event) => setAllocationReason(event.target.value)}
                   placeholder={tr("بۆ نموونە: پارەکە لای ئەم هاوبەشە دانرا")} />
               </div>
-              <Btn className="w-full" onClick={saveSplit} disabled={saving}>{saving ? "..." : "پاشەکەوتکردنی دابەشکردن"}</Btn>
+              <Btn className="w-full" onClick={saveSplit} disabled={saving}>{saving ? tr("جێبەجێکردن…") : tr("پاشەکەوتکردنی دابەشکردن")}</Btn>
             </div>
           )}
         </Card>
@@ -8719,7 +8752,7 @@ function BatchDetail({ id, back, usr, data, profile, onMakeTx, flash, reloadBatc
               <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto] gap-2.5">
                 <Inp value={finalizationReason} onChange={(e) => setFinalizationReason(e.target.value)} placeholder="یاسا و پەیوەندیی نێوان مامەڵە و فیشەکان پشتڕاست کرایەوە" />
                 <Btn onClick={finalizeDecision} disabled={finalizationBusy || profile?.role !== "admin" || (b.decision_by === profile?.id && profile?.adminLevel !== "owner") || finalizationReason.trim().length < (b.decision_by === profile?.id && profile?.adminLevel === "owner" ? 12 : 8)}>
-                  {finalizationBusy ? "پشکنینی کۆتایی..." : "پشکنینی کۆتایی بڕیار"}
+                  {finalizationBusy ? "پشکنینی کۆتایی…" : "پشکنینی کۆتایی بڕیار"}
                 </Btn>
               </div>
             </div>
@@ -8810,7 +8843,7 @@ function ReceiptArchive({ customerId, data, flash, simple = false }) {
   }, [customerId, simple]);
 
   if (simple) {
-    if (portalSummary === null) return <Card><StatePanel type="loading" title={tr("بارکردن...")} compact /></Card>;
+    if (portalSummary === null) return <Card><StatePanel type="loading" title={tr("بارکردن…")} compact /></Card>;
     // A customer who has sent nothing has no summary to read, and the server says so as a
     // refusal. Drawn as a red failure it reads as "the system is broken" to somebody whose
     // only fault is being new — which is the first thing they see, before they have sent
@@ -8829,7 +8862,7 @@ function ReceiptArchive({ customerId, data, flash, simple = false }) {
   }
 
 
-  if (!recs) return <Card><Empty t={tr("بارکردن...")} /></Card>;
+  if (!recs) return <Card><Empty t={tr("بارکردن…")} /></Card>;
   const list = simple ? recs : recs.filter((r) => {
     const d = (r.tx_date || r.created_at || "").slice(0, 10);
     if (from && d < from) return false;
@@ -8842,7 +8875,7 @@ function ReceiptArchive({ customerId, data, flash, simple = false }) {
     <div className="space-y-3">
       {!simple && <Card className="p-4 space-y-2.5">
         <div className="flex gap-2">
-          <Inp value={q} onChange={(e) => setQ(e.target.value)} placeholder={tr("گەڕان بە ناو، ژمارەی مامەڵە، بڕ...")} className="flex-1" />
+          <Inp value={q} onChange={(e) => setQ(e.target.value)} placeholder={tr("گەڕان بە ناو، ژمارەی مامەڵە، بڕ…")} className="flex-1" />
           <button onClick={() => setScan(true)}
             className="w-[50px] shrink-0 rounded-[var(--r-sm)] flex items-center justify-center tap"
             style={{ background: "var(--surf-2)", border: "1px solid var(--line)", color: "var(--txt-2)" }}>
@@ -9058,7 +9091,7 @@ function OfficeAdvance({ data, cur, officeId, officeAdvanceTo, readOnly }) {
   return (
     <Card className="p-5">
       <SecLbl>{tr("پارەی ئێستا لای ئەم نووسینگەیە")}</SecLbl>
-      {held === null ? <Empty t={tr("بارکردن...")} />
+      {held === null ? <Empty t={tr("بارکردن…")} />
         : held.length === 0 ? <Empty t={tr("هیچ پارەیەکی من لای ئەم نووسینگەیە نییە")} />
         : held.map((row) => (
           <div key={`${row.officeId}-${row.currencyId}`}
@@ -9179,7 +9212,7 @@ function AccountMoney({ data, cur, usr, accountMove, accountTransfer, flash }) {
             <div>
               <Lbl>{tr("کەس")}</Lbl>
               <Sel value={mv.userId} onChange={(e) => setMv({ ...mv, userId: e.target.value })}>
-                <option value="">{tr("هەڵبژێرە...")}</option>
+                <option value="">{tr("هەڵبژێرە…")}</option>
                 {all.map((u) => <option key={u.id} value={u.id}>{roleLbl(u)}</option>)}
               </Sel>
             </div>
@@ -9206,14 +9239,14 @@ function AccountMoney({ data, cur, usr, accountMove, accountTransfer, flash }) {
             <div>
               <Lbl>{tr("لە حسابی")}</Lbl>
               <Sel value={xfer.fromId} onChange={(e) => setXfer({ ...xfer, fromId: e.target.value })}>
-                <option value="">{tr("هەڵبژێرە...")}</option>
+                <option value="">{tr("هەڵبژێرە…")}</option>
                 {all.map((u) => <option key={u.id} value={u.id}>{roleLbl(u)}</option>)}
               </Sel>
             </div>
             <div>
               <Lbl>{tr("بۆ حسابی")}</Lbl>
               <Sel value={xfer.toId} onChange={(e) => setXfer({ ...xfer, toId: e.target.value })}>
-                <option value="">{tr("هەڵبژێرە...")}</option>
+                <option value="">{tr("هەڵبژێرە…")}</option>
                 {all.filter((u) => u.id !== xfer.fromId).map((u) => <option key={u.id} value={u.id}>{roleLbl(u)}</option>)}
               </Sel>
             </div>
@@ -9347,7 +9380,7 @@ function AccountSafe({ userId, data, calc, cur, usr, accountMove, accountTransfe
       {tab === "transfer" && !readOnly && (
         <Card className="p-5">
           <SecLbl>{tr("گواستنەوە بۆ حسابێکی تر")}</SecLbl>
-          <Inp value={q} onChange={(e) => setQ(e.target.value)} placeholder={tr("گەڕان بە ناو یان ژمارە...")} className="mb-2" />
+          <Inp value={q} onChange={(e) => setQ(e.target.value)} placeholder={tr("گەڕان بە ناو یان ژمارە…")} className="mb-2" />
           <div className="max-h-40 overflow-y-auto mb-3 space-y-1">
             {all.filter((x) => !q || (x.name || "").includes(q) || (x.phone || "").includes(q)).map((x) => (
               <button key={x.id} onClick={() => setXfer({ ...xfer, toId: x.id })}
@@ -9396,7 +9429,7 @@ function Customers({ data, calc, cur, usr, detailId, setDetailId, onSave, settle
   const list = customers.filter((u) => !q || (u.name || "").includes(q) || (u.phone || "").includes(q));
   return (
     <div className="space-y-3">
-      <Inp value={q} onChange={(e) => setQ(e.target.value)} placeholder={tr("گەڕان بە ناو یان ژمارە...")} />
+      <Inp value={q} onChange={(e) => setQ(e.target.value)} placeholder={tr("گەڕان بە ناو یان ژمارە…")} />
       {list.length === 0 ? <Card><Empty t={tr("هیچ کڕیارێک نەدۆزرایەوە")} /></Card> :
         list.map((u) => {
           const cnt = data.txs.filter((t) => !t.deleted && t.cpId === u.id).length;
@@ -9777,7 +9810,7 @@ function Office({ data, cur, usr, officePay, officeSettle, calc, accountMove, ac
       {tab === "hist" && (
         <>
           <Card className="p-4 space-y-2.5">
-            <Inp value={q} onChange={(e) => setQ(e.target.value)} placeholder={tr("گەڕان بە ناو یان کۆد...")} />
+            <Inp value={q} onChange={(e) => setQ(e.target.value)} placeholder={tr("گەڕان بە ناو یان کۆد…")} />
             <div className="grid grid-cols-2 gap-2.5">
               <div><Lbl>{tr("لە بەرواری")}</Lbl><Inp type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></div>
               <div><Lbl>{tr("بۆ بەرواری")}</Lbl><Inp type="date" value={to} onChange={(e) => setTo(e.target.value)} /></div>
@@ -10337,7 +10370,7 @@ function Backup({ data, calc, cur, downloadBackup, flash, sumUsd, mySafe, owners
                   }
                 }}
               >
-                {maintBusy ? "..." : frozen ? "کردنەوەی تۆمارکردنی دارایی" : "چالاککردنی ڕاگرتنی فریاکەوتن"}
+                {maintBusy ? tr("جێبەجێکردن…") : frozen ? tr("کردنەوەی تۆمارکردنی دارایی") : tr("چالاککردنی ڕاگرتنی فریاکەوتن")}
               </Btn>
               <span className="text-[11px] self-center text-[var(--txt-3)]">
                 تەنها خاوەنی سیستەم · MFA/AAL2
@@ -10367,7 +10400,7 @@ function Backup({ data, calc, cur, downloadBackup, flash, sumUsd, mySafe, owners
 
         <div className="mt-3 flex items-center gap-2 flex-wrap">
           <Btn kind="ghost" onClick={runServerRecon} disabled={busy}>
-            {busy ? "..." : "پشکنینی یەکسانکردنەوە لە سێرڤەر"}
+            {busy ? tr("جێبەجێکردن…") : tr("پشکنینی یەکسانکردنەوە لە سێرڤەر")}
           </Btn>
           {recon && (
             <Pill tone={recon.ok ? "green" : "red"}>
@@ -10438,7 +10471,7 @@ function Backup({ data, calc, cur, downloadBackup, flash, sumUsd, mySafe, owners
             disabled={busy}
           >
             <Download className="w-4 h-4" />
-            {busy ? "..." : "دابەزاندنی off-site JSON export"}
+            {busy ? tr("جێبەجێکردن…") : tr("دابەزاندنی off-site JSON export")}
           </Btn>
         ) : (
           <div className="text-xs text-[var(--txt-3)]">
@@ -10467,7 +10500,7 @@ function Backup({ data, calc, cur, downloadBackup, flash, sumUsd, mySafe, owners
               setRehearsal({ state: "done", result: { verdict: "unreadable", drift: [] }, name: file.name });
             } finally { e.target.value = ""; }
           }} />
-        {rehearsal?.state === "working" && <div className="text-xs text-[var(--txt-3)] mt-3">{tr("پشکنین...")}</div>}
+        {rehearsal?.state === "working" && <div className="text-xs text-[var(--txt-3)] mt-3">{tr("پشکنین…")}</div>}
         {rehearsal?.state === "done" && (
           <div className={`text-xs mt-3 p-3 rounded-[var(--r-sm)] border ${
             rehearsal.result.verdict === "ok"
@@ -10528,7 +10561,7 @@ function WorldRates({ data, cur }) {
         {tr("نرخی جیهانی بۆ بەراورد؛ نرخی مامەڵە لە نرخی ناوخۆی سیستەمەوە وەردەگیرێت.")}
       </div>
 
-      {rates === null ? <Empty t={tr("بارکردن...")} /> :
+      {rates === null ? <Empty t={tr("بارکردن…")} /> :
         Object.keys(rates).length === 0 ? (
           <div className="text-sm rounded-[var(--r-sm)] p-3"
             style={{ background: "color-mix(in srgb, var(--warn) 11%, transparent)", color: "var(--warn)" }}>
@@ -10889,7 +10922,7 @@ function Insights({ data, calc, cur, usr, profitIn, ownProfitIn, sumUsd, ratesRe
           </div>
           <Card className="p-5">
             <SecLbl>مێژووی نرخی {cur(activeCur).name} — ١ دۆلار بە چەند</SecLbl>
-            {hist === null ? <StatePanel type="loading" title={tr("بارکردن...")} compact /> :
+            {hist === null ? <StatePanel type="loading" title={tr("بارکردن…")} compact /> :
               histErr ? <StatePanel type="error" title={histErr} detail="پەیوەندی Supabase بپشکنە و دووبارە هەوڵ بدەرەوە." onRetry={loadRateHistory} compact /> :
               rateSeries.length === 0 ? (
                 <StatePanel title={tr("هێشتا مێژوویەک نییە — هەر جارێک نرخ بگۆڕیت، لێرە تۆمار دەبێت")} compact />
@@ -11151,7 +11184,7 @@ function ApprovalCenter({
             </div>
           </div>
           <Btn kind="ghost" disabled={busy || reconBusy} onClick={runRecon}>
-            {reconBusy ? "پشکنین..." : "پشکنینی یەکسانی"}
+            {reconBusy ? "پشکنین…" : "پشکنینی یەکسانی"}
           </Btn>
         </div>
         {recon && (
@@ -11400,7 +11433,7 @@ function DayClose({ data, calc, cur, usr, closeDay, sumUsd }) {
                   </span>
                 </div>
                 <div className="flex items-center gap-2">
-                  <Inp type="number" dir="ltr" placeholder={tr("ژماردنی ڕاستەقینە...")}
+                  <Inp type="number" dir="ltr" placeholder={tr("ژماردنی ڕاستەقینە…")}
                     value={counts[l.cur] ?? ""} onChange={(e) => setCounts({ ...counts, [l.cur]: e.target.value })}
                     className={`flex-1 ${l.counted !== null && l.diff !== 0 ? "border-[var(--ac)] bg-[color-mix(in_srgb,var(--warn)_11%,transparent)]" : l.counted !== null ? "border-[var(--pos)] bg-[color-mix(in_srgb,var(--pos)_10%,transparent)]" : ""}`} />
                   <div className="w-28 text-left shrink-0">
@@ -11442,7 +11475,7 @@ function DayClose({ data, calc, cur, usr, closeDay, sumUsd }) {
           <Card className="p-5">
             <div>
               <Lbl>{diffs.length ? tr("هۆکاری جیاوازی — پێویستە") : tr("تێبینی (ئارەزوومەندانە)")}</Lbl>
-              <Inp value={note} onChange={(e) => setNote(e.target.value)} placeholder={tr("نموونە: خەرجی تۆمار نەکراو...")} />
+              <Inp value={note} onChange={(e) => setNote(e.target.value)} placeholder={tr("نموونە: خەرجی تۆمار نەکراو…")} />
               {/* A difference with no explanation is refused by the database too; this says so
                   before the operator gets there. */}
               {diffs.length > 0 && !verdict.ok && (
@@ -11492,7 +11525,7 @@ function DayClose({ data, calc, cur, usr, closeDay, sumUsd }) {
       )}
 
       <SecLbl>{tr("مێژووی بەستنەکان")}</SecLbl>
-      {hist === null ? <Card><Empty t={tr("بارکردن...")} /></Card> :
+      {hist === null ? <Card><Empty t={tr("بارکردن…")} /></Card> :
         hist.length === 0 ? (
           <Card className="p-4">
             <div className="text-sm text-[var(--warn)] bg-[color-mix(in_srgb,var(--warn)_11%,transparent)] border border-[color-mix(in_srgb,var(--warn)_26%,transparent)] rounded-[var(--r-sm)] p-3">

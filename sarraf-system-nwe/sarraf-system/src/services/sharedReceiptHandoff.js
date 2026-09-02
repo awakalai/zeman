@@ -95,7 +95,7 @@ export async function releaseSharedReceiptHandoff(id, lease, { indexedDb } = {})
 }
 
 export function sharedReceiptMessage(status, rejected = 0) {
-  if (status === "loading") return "وێنە هاوبەشکراوەکان ئامادە دەکرێن...";
+  if (status === "loading") return "وێنە هاوبەشکراوەکان ئامادە دەکرێن…";
   if (status === "ready") return rejected ? `وێنەکان هاتن؛ ${rejected} فایل ڕەتکرایەوە. پێداچوونەوە و پشتڕاستکردنەوە پێویستە.` : "وێنەکان هاتن. پێداچوونەوە و پشتڕاستکردنەوە پێویستە.";
   if (status === "expired") return "ماوەی وێنە هاوبەشکراوەکان تەواو بوو؛ تکایە دووبارە هاوبەشیان بکە.";
   if (status === "forbidden") return "ئەم وێنانە بۆ ئەکاونتێکی تر ئامادە کرابوون.";

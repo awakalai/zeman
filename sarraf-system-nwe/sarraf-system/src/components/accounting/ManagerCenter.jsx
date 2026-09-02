@@ -25,7 +25,7 @@ const COPY = {
     ranks: "پلەکان", people: "بەکارهێنەران",
     rank: "پلە", name: "ناو", account: "ئەکاونت", change: "گۆڕین",
     password: "وشەی نهێنیی نوێ", reset: "دانانی وشەی نهێنی",
-    working: "جێبەجێکردن...", refresh: "نوێکردنەوە",
+    working: "جێبەجێکردن…", refresh: "نوێکردنەوە",
     failed: "نەتوانرا بکرێت", done: "کرا ✓",
     pick: "کەسێک هەڵبژێرە",
     notManager: "ئەم بەشە تەنها بۆ ماناجەرە",

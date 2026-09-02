@@ -84,8 +84,19 @@ const USERS = {
 const ROLE_EXPECTATIONS = {
   admin: {
     // The admin owns the whole system; these are the surfaces that must exist for them.
-    present: ["کاری ئەمڕۆ", "مامەڵە"],
-    absent: [],
+    //
+    // The six section headings are listed here on purpose. «دەمەوێت بەشەکان زۆر بە ڕوونی جیا
+    // بکەیتەوە نەک ئاوا هەمووی لە یەک شوێن بێت» — and before this the application had four
+    // groups holding seven entries with SIXTEEN more screens listed at the foot of one of them.
+    // Naming the sections here means the structure cannot quietly collapse back into a drawer.
+    present: [
+      "ئەمڕۆ", "مامەڵە", "فیش", "پارە", "خەڵک", "ڕاپۆرت",
+      "کاری ئەمڕۆ", "کۆمەڵەکان", "پشکنین", "ناردن",
+      "قەرز و قاسە", "حساب و عمولە", "شیکردنەوەی باڵانس",
+    ],
+    // The tools drawer is gone, and it must stay gone: a grid of sixteen buttons at the foot of
+    // one page is what the owner meant by «جەنجاڵ».
+    absent: ["ئامرازەکان"],
   },
   customer: {
     present: ["فیش"],

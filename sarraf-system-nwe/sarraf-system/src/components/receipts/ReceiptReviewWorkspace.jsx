@@ -14,7 +14,7 @@ import { errorText } from "../../services/userFacingError";
 const COPY = {
   ku: {
     title: "شوێنی پشکنینی فیش", subtitle: "وێنەی ڕەسەن و ئەوەی OCR خوێندوویەتی، تەنیشت یەک",
-    queue: "ڕیزی چاوەڕوان", empty: "هیچ فیشێک چاوەڕوانی پشکنین نییە", loading: "بارکردن...",
+    queue: "ڕیزی چاوەڕوان", empty: "هیچ فیشێک چاوەڕوانی پشکنین نییە", loading: "بارکردن…",
     refresh: "نوێکردنەوە", prev: "پێشوو", next: "دواتر",
     original: "خوێندنەوەی ڕەسەن", current: "دوایین وەشان", version: "وەشان",
     equation: "پشکنینی ژمارەکان", reconciles: "ژمارەکان یەک دەگرنەوە", mismatch: "ژمارەکان یەک ناگرنەوە",
@@ -27,7 +27,7 @@ const COPY = {
     reject: "ڕەتکردنەوە", review: "بۆ پشکنینی دەستی",
     rejectReason: "هۆکاری ڕەتکردنەوە (لانیکەم ٨ پیت)",
     correct: "ڕاستکردنەوە", correctReason: "هۆکاری ڕاستکردنەوە (لانیکەم ٨ پیت)",
-    save: "پاشەکەوت", cancel: "پاشگەزبوونەوە", working: "جێبەجێکردن...",
+    save: "پاشەکەوت", cancel: "پاشگەزبوونەوە", working: "جێبەجێکردن…",
     history: "مێژووی قۆناغەکان", changes: "گۆڕانکارییەکان", before: "پێشتر", after: "ئێستا",
     totals: "کۆی کۆمەڵە", accepted: "پەسەندکراو", pending: "چاوەڕوان", rejected: "ڕەتکراو", duplicate: "دووبارە",
     noImage: "وێنە بەردەست نییە", zoomOut: "بچووککردنەوە", zoomIn: "گەورەکردن", reset: "گەڕاندنەوە",
