@@ -213,12 +213,22 @@ try {
     if (MFA_REQUIRED.has(role)) runs.push({ role, aal: "aal1", expectGate: true });
     runs.push({ role, aal: MFA_REQUIRED.has(role) ? "aal2" : "aal1", expectGate: false });
   }
+  // ── and once on a phone ──────────────────────────────────────────────────────────────────
+  //
+  // Every check above runs at 1280×900, and this business runs on phones. The six sections
+  // «دەمەوێت بەشەکان زۆر بە ڕوونی جیا بکەیتەوە» were built into the sidebar, which a phone
+  // does not have: the phone flattened the same groups into one list and hid everything past
+  // the fourth entry behind «زیاتر» — twenty screens in a single unlabelled scroll. That is
+  // the drawer this overhaul deleted, still standing on the device that matters most, and no
+  // gate could see it because no gate had ever been narrow.
+  runs.push({ role: "admin", aal: "aal2", expectGate: false, phone: true });
 
-  for (const { role, aal, expectGate } of runs) {
+  for (const { role, aal, expectGate, phone } of runs) {
     const expect = ROLE_EXPECTATIONS[role];
     const me = USERS[role];
-    const label = expectGate ? `${role} without a second factor` : role;
-    const ctx = await browser.newContext({ locale: "ckb", viewport: { width: 1280, height: 900 } });
+    const label = phone ? `${role} on a phone` : expectGate ? `${role} without a second factor` : role;
+    const ctx = await browser.newContext({ locale: "ckb",
+      viewport: phone ? { width: 390, height: 844 } : { width: 1280, height: 900 } });
     const page = await ctx.newPage();
     const crashes = [];
     page.on("pageerror", (e) => crashes.push(String(e)));
@@ -336,6 +346,88 @@ try {
       signedIn ? "" : `sign-in did not complete — the checks below would pass for the wrong reason: ${body.slice(0, 120)}`);
     if (!signedIn) { await ctx.close(); continue; }
 
+    if (phone) {
+      // Nothing may be wider than the phone. A number that scrolls sideways is a number a
+      // person reads half of.
+      const wide = await page.evaluate(() =>
+        document.documentElement.scrollWidth - window.innerWidth);
+      record(wide <= 1, `${label}: the page is not wider than the screen`,
+        wide > 1 ? `${wide}px of horizontal overflow` : "");
+
+      // The product's own name, whole. Five action buttons in one header had left it 39
+      // pixels for a word that needs 55, so ZEMAN rendered as «…AN» on every phone.
+      const brandCut = await page.evaluate(() => {
+        for (const el of document.querySelectorAll("div,span")) {
+          if (el.children.length === 0 && (el.textContent || "").trim() === "ZEMAN") {
+            return el.scrollWidth > el.clientWidth + 1;
+          }
+        }
+        return null;
+      });
+      record(brandCut === false, `${label}: the brand name is not cut off`,
+        brandCut === null ? "no element carries the brand name" : "the name does not fit its box");
+
+      // The six sections, on the phone, with their headings — the whole point of this run.
+      //
+      // Read as HEADINGS, not as text anywhere on the page. The first version of this searched
+      // the body for each word and four of the five passed with the headings deleted, because
+      // «مامەڵە», «فیش», «پارە» and «ڕاپۆرت» are also the names of screens in the list. Only
+      // «خەڵک» failed. A check that four fifths of it cannot fail is measuring almost nothing.
+      let headings = [];
+      try {
+        await page.getByText("زیاتر", { exact: true }).first().click({ timeout: 5000 });
+        await page.waitForTimeout(700);
+        headings = await page.evaluate(() => [...document.querySelectorAll(".sidebar-section-title")]
+          .filter((el) => el.getBoundingClientRect().width > 0)
+          .map((el) => el.textContent.trim()));
+      } catch (error) {
+        record(false, `${label}: «زیاتر» opens`, String(error?.message || error).slice(0, 120));
+      }
+      for (const heading of ["مامەڵە", "فیش", "پارە", "خەڵک", "ڕاپۆرت"]) {
+        record(headings.includes(heading),
+          `${label}: «${heading}» is a named section, not a line in a list`,
+          headings.length ? `the sheet's headings are: ${headings.join(" · ")}` : "the sheet has no headings at all");
+      }
+      // And the sheet must be a panel you can shut: with every section, the settings row and
+      // the "view as" picker stacked, it grew past the height of the phone and pushed its own
+      // close button off the top of the screen.
+      const closeVisible = await page.evaluate(() => {
+        const b = [...document.querySelectorAll("button")]
+          .find((x) => /داخستنی/.test(x.getAttribute("aria-label") || ""));
+        if (!b) return null;
+        const r = b.getBoundingClientRect();
+        return r.top >= 0 && r.bottom <= window.innerHeight;
+      });
+      record(closeVisible === true, `${label}: the sheet can be closed without scrolling to find the button`,
+        closeVisible === null ? "the sheet has no close button" : "the close button is off screen");
+
+      // The same accessible-names contract the desktop runs, because the phone has controls
+      // the desktop does not. It found one immediately: the floating «مامەڵەی نوێ» button,
+      // the largest control in the mobile application, announced as "button" and nothing
+      // more. It is md:hidden, so ten desktop passes could never have seen it.
+      await page.keyboard.press("Escape");
+      await page.waitForTimeout(400);
+      const nameless = await page.evaluate(() => [...document.querySelectorAll("button,a[href],input,select,textarea")]
+        .filter((el) => {
+          const style = getComputedStyle(el);
+          const box = el.getBoundingClientRect();
+          return style.display !== "none" && style.visibility !== "hidden"
+            && box.width > 0 && box.height > 0 && el.getAttribute("type") !== "hidden";
+        })
+        .filter((el) => ![el.getAttribute("aria-label"), el.getAttribute("title"), el.textContent,
+          [...(el.labels || [])].map((l) => l.textContent || "").join(" ")]
+          .some((v) => String(v || "").trim()))
+        .map((el) => `${el.tagName.toLowerCase()}@${Math.round(el.getBoundingClientRect().x)},${Math.round(el.getBoundingClientRect().y)}`)
+        .slice(0, 8));
+      record(nameless.length === 0, `${label}: visible controls have accessible names`,
+        nameless.join(", "));
+
+      const phoneCrashes = crashes.filter((e) => !/supabaseUrl|Failed to load resource|net::ERR/i.test(e));
+      record(phoneCrashes.length === 0, `${label}: no uncaught error`, phoneCrashes.slice(0, 2).join(" | "));
+      await ctx.close();
+      continue;
+    }
+
     for (const needle of expect.absent) {
       record(!body.includes(needle),
         `${label}: cannot reach «${needle}»`,
@@ -345,6 +437,43 @@ try {
       record(body.includes(needle),
         `${label}: can reach «${needle}»`,
         body.includes(needle) ? "" : "the surface this role is entitled to was missing");
+    }
+
+    // No page-level band may start underneath the sidebar.
+    //
+    // The sidebar is `fixed left-0` and 236px wide, so anything laid out full-width is drawn
+    // behind it. That is what had happened to the market ticker: market-pulse.css offset it
+    // with `margin-inline-start`, which in a right-to-left interface is the RIGHT edge — so
+    // it was pushed away from the side that has nothing on it and left running under the
+    // navigation. The first rate scrolled under the sidebar on every desktop.
+    //
+    // Measured on the BANDS, not on every leaf. The first version of this walked every text
+    // node, and the marquee's track is deliberately wider than its own `overflow:hidden` box
+    // — so it reported items that are clipped and invisible, and went on reporting them after
+    // the bug was fixed. A check that cannot go quiet is not a check.
+    const underSidebar = await page.evaluate(() => {
+      const bar = document.querySelector(".sarraf-sidebar");
+      if (!bar) return null;
+      const edge = bar.getBoundingClientRect().right;
+      if (edge < 10) return [];
+      const bands = [".market-ticker", "main", ".sarraf-topbar > div"];
+      const wrong = [];
+      for (const selector of bands) {
+        for (const el of document.querySelectorAll(selector)) {
+          const r = el.getBoundingClientRect();
+          if (r.width < 50) continue;
+          // Where the CONTENT starts, not where the box does. <main> spans the full width and
+          // steps aside with padding-left:260px, which is a correct way to clear a fixed
+          // sidebar; measuring its border box would call that a fault.
+          const inner = r.left + parseFloat(getComputedStyle(el).paddingLeft || 0);
+          if (inner < edge - 4) wrong.push(`${selector} content starts at ${Math.round(inner)}px, sidebar ends at ${Math.round(edge)}px`);
+        }
+      }
+      return wrong;
+    });
+    if (underSidebar !== null) {
+      record(underSidebar.length === 0, `${label}: nothing is drawn underneath the sidebar`,
+        underSidebar.join(" · "));
     }
 
     // Critical accessibility contract in the shipped DOM: every visible interactive control

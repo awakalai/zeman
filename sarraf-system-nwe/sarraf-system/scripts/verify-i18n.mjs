@@ -188,7 +188,12 @@ for (const file of files.sort()) {
       continue;
     }
     if (!SCRIPT.test(line)) continue;
-    if (line.startsWith("//") || line.startsWith("*") || line.startsWith("/*")) continue;
+    // `{/*` opens a JSX comment exactly as `/*` opens a block comment, and everything after
+    // it on that line is prose. It was missing from this list, so a comment explaining a
+    // Kurdish label was counted as a Kurdish label — the gate reporting on the writing about
+    // the code rather than on the code.
+    if (line.startsWith("//") || line.startsWith("*")
+        || line.startsWith("/*") || line.startsWith("{/*")) continue;
     if (LOCALISED.test(line)) continue;
     n += 1;
   }

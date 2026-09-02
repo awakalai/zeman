@@ -17,6 +17,11 @@
 @keyframes market-ticker-ltr{from{transform:translate3d(-50%,0,0)}to{transform:translate3d(0,0,0)}}
 @keyframes market-light-pulse{0%,100%{opacity:.68;transform:scale(.88)}50%{opacity:1;transform:scale(1.12)}}
 @keyframes market-sheen{0%,72%,100%{transform:translateX(-115%)}86%{transform:translateX(115%)}}
-@media(min-width:768px){.market-ticker{margin-inline-start:236px}}
+/* The sidebar is `fixed left-0`: a physical side. This asked for margin-inline-start,
+   which in a right-to-left interface is the RIGHT edge — so the ticker was pushed away
+   from the side that has nothing on it and left running underneath the navigation. The
+   first rate scrolled under the sidebar on every desktop and could be read half-way
+   through. Physical rule for a physically-placed sidebar. */
+@media(min-width:768px){.market-ticker{margin-left:236px;margin-inline-start:unset}}
 @media(max-width:520px){.market-ticker{grid-template-columns:30px minmax(0,1fr) 32px;min-height:43px}.market-ticker-group{gap:12px;padding-inline-end:12px}.market-ticker-item{gap:7px;padding-inline:8px 6px}.market-ticker-symbol{min-width:36px;font-size:10px}.market-ticker-item strong{font-size:10.5px}}
 @media(prefers-reduced-motion:reduce){.market-ticker::after,.market-ticker-track,.market-light.is-active{animation:none!important}.market-ticker-viewport{overflow-x:auto;mask-image:none;-webkit-mask-image:none}.market-ticker-group[aria-hidden="true"]{display:none}.market-ticker-track{transform:none!important}.market-light.is-active{transform:none}}
