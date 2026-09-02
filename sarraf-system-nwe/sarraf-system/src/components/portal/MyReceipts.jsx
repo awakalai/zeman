@@ -1,5 +1,6 @@
 import React from "react";
 import { receiptOutcome, mayBeReplaced } from "../../services/receiptIntake";
+import { MAX_BUNDLE_RECEIPTS } from "../../services/receiptBundle.js";
 
 /**
  * «هەر بەکارهێنەرێک مێژوو و وردەکاری فیشەکانی خۆی ببینێت»
@@ -30,11 +31,50 @@ const when = (iso) => {
   return Number.isNaN(d.getTime()) ? "—" : d.toLocaleString("en-GB");
 };
 
-export function MyReceipts({ receipts, loading, error, onReload, onReplace, ui }) {
+export function MyReceipts({ receipts, loading, error, onReload, onReplace, onBundle, ui }) {
   const { Card, Pill, Empty, StatePanel, tr } = ui;
   const [busy, setBusy] = React.useState(null);
   const [failed, setFailed] = React.useState("");
   const inputs = React.useRef({});
+
+  // §11: «تا ١٠٠ دانە بەیەکەوە فۆرۆرد بکرێت و بنێررێت بۆ واتس ئەپ.»
+  //
+  // The selection is a Set of ids and nothing more. Which of them may actually leave is not this
+  // component's question and must not be — the server re-checks every id and returns only what
+  // the subject is entitled to, so what is reported below is what came back, never what was
+  // ticked. `outcome` therefore says three separate numbers rather than one: what is in the
+  // package, what the server declined, and what would not download.
+  const [picked, setPicked] = React.useState(() => new Set());
+  const [packing, setPacking] = React.useState(null);
+  const [outcome, setOutcome] = React.useState(null);
+  const all = receipts || [];
+  const toggle = (id) => setPicked((was) => {
+    const next = new Set(was);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+  // A hundred is the server's limit as well, so stopping here means a person is told before they
+  // press rather than refused after.
+  const canPick = picked.size < MAX_BUNDLE_RECEIPTS;
+
+  const run = async (mode) => {
+    if (!onBundle || picked.size === 0) return;
+    setFailed(""); setOutcome(null); setPacking({ done: 0, total: picked.size });
+    try {
+      const result = await onBundle([...picked], {
+        mode,
+        onProgress: (p) => setPacking(p),
+      });
+      setOutcome(result);
+      // Only a completed hand-off clears the selection. A cancelled share sheet leaves the
+      // choice standing, because the person has not finished with it.
+      if (result?.delivery !== "cancelled") setPicked(new Set());
+    } catch (e) {
+      setFailed(e?.message || tr("پاکێجەکە ئامادە نەبوو"));
+    } finally {
+      setPacking(null);
+    }
+  };
 
   const pick = (id) => inputs.current[id]?.click();
 
@@ -72,18 +112,90 @@ export function MyReceipts({ receipts, loading, error, onReload, onReplace, ui }
         </div>
       </Card>
 
+      {onBundle && all.length > 0 && (
+        <Card className="p-3 space-y-2.5">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div className="text-[12px] font-semibold">
+              {picked.size} {tr("فیش هەڵبژێردراوە")}
+              <span className="text-[11px] font-normal text-[var(--txt-3)]"> · {tr("بەکۆمەڵ")}</span>
+            </div>
+            <div className="flex gap-2">
+              <button type="button" disabled={!!packing}
+                onClick={() => setPicked(new Set(all.slice(0, MAX_BUNDLE_RECEIPTS).map((r) => r.id)))}
+                className="text-[11px] underline text-[var(--txt-2)] tap disabled:opacity-60">
+                {tr("هەڵبژاردنی هەموو")}
+              </button>
+              <button type="button" disabled={!!packing || picked.size === 0}
+                onClick={() => { setPicked(new Set()); setOutcome(null); }}
+                className="text-[11px] underline text-[var(--txt-2)] tap disabled:opacity-60">
+                {tr("پاککردنەوەی هەڵبژاردن")}
+              </button>
+            </div>
+          </div>
+
+          {packing && (
+            <div className="text-[11.5px] text-[var(--txt-3)]" aria-live="polite">
+              {tr("ئامادەکردن...")} {packing.done}/{packing.total}
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 gap-2">
+            <button type="button" disabled={!!packing || picked.size === 0} onClick={() => run("share")}
+              className="rounded-[var(--r-sm)] py-2.5 text-[12px] font-bold tap disabled:opacity-60"
+              style={{ background: "var(--accent)", color: "var(--on-accent)" }}>
+              {packing ? tr("دەنێردرێت...") : tr("ناردن")}
+            </button>
+            <button type="button" disabled={!!packing || picked.size === 0} onClick={() => run("save")}
+              className="rounded-[var(--r-sm)] py-2.5 text-[12px] font-bold tap disabled:opacity-60"
+              style={{ background: "var(--surf-2)", color: "var(--txt)", border: "1px solid var(--line)" }}>
+              {tr("هەڵگرتن")}
+            </button>
+          </div>
+
+          {/* What actually happened, in three numbers rather than one. A package that quietly
+              contained fewer receipts than were ticked would be the worst outcome here. */}
+          {outcome && (
+            <div className="text-[11.5px] space-y-1" role="status">
+              <div style={{ color: "var(--pos)" }}>
+                {outcome.included} {tr("فیش لە پاکێجەکەدا")}
+                {outcome.delivery === "cancelled" ? ` · ${tr("ناردنەکە هەڵوەشێندرایەوە")}`
+                  : outcome.delivery === "saved" ? ` · ${tr("هەڵگیرا")}` : ""}
+              </div>
+              {outcome.skipped > 0 && (
+                <div style={{ color: "var(--warn)" }}>{outcome.skipped} {tr("دەرنەچوون")}</div>
+              )}
+              {outcome.unreadable?.length > 0 && (
+                <div style={{ color: "var(--warn)" }}>
+                  {outcome.unreadable.length} {tr("نەخوێندرانەوە")}
+                </div>
+              )}
+            </div>
+          )}
+        </Card>
+      )}
+
       {error && <Card className="p-3 text-[12px]" style={{ color: "var(--neg)" }}>{error}</Card>}
       {failed && <Card className="p-3 text-[12px]" style={{ color: "var(--neg)" }}>{failed}</Card>}
 
       {!receipts?.length && <Card><Empty t={tr("هێشتا هیچ فیشێکت نەناردووە")} /></Card>}
 
       {(receipts || []).map((r) => {
-        const outcome = OUTCOME[receiptOutcome(r)] || OUTCOME.pending;
+        // Named `state`, not `outcome`: the bundle result above owns that word now, and two
+        // different things called `outcome` in one component is how a wrong one gets rendered.
+        const state = OUTCOME[receiptOutcome(r)] || OUTCOME.pending;
         return (
           <Card key={r.id} className="p-4 space-y-2">
             <div className="flex items-center justify-between gap-3">
-              <div className="text-[12px] font-mono tracking-wide">{r.trackingCode || r.id}</div>
-              <Pill tone={outcome.tone}>{tr(outcome.label)}</Pill>
+              <div className="flex items-center gap-2.5 min-w-0">
+                {onBundle && (
+                  <input type="checkbox" checked={picked.has(r.id)}
+                         disabled={!!packing || (!picked.has(r.id) && !canPick)}
+                         onChange={() => toggle(r.id)}
+                         aria-label={`${tr("هەڵبژاردنی هەموو")} — ${r.trackingCode || r.id}`} />
+                )}
+                <div className="text-[12px] font-mono tracking-wide truncate">{r.trackingCode || r.id}</div>
+              </div>
+              <Pill tone={state.tone}>{tr(state.label)}</Pill>
             </div>
             <div className="text-[11px] text-[var(--txt-3)]">{when(r.receivedAt)}</div>
 
