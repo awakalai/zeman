@@ -6,6 +6,10 @@ import path from "node:path";
 const root = path.resolve(import.meta.dirname, "..");
 const fail = (message) => { throw new Error(message); };
 const text = (file) => readFileSync(path.join(root, file), "utf8");
+// A file git still tracks but that is no longer on disk — a deletion not yet staged — used to
+// crash this gate with ENOENT, and a crash reads like a result. It is not one: skip it and let
+// the checks below report on what is actually there.
+const textIfPresent = (file) => { try { return text(file); } catch { return null; } };
 
 // Include staged/tracked and not-yet-added source so a local gate cannot miss the exact new API
 // or migration that is about to enter the commit.
@@ -14,7 +18,8 @@ const tracked = execFileSync("git", ["ls-files", "--cached", "--others", "--excl
   .filter((file) => !file.startsWith("dist/") && !file.includes("package-lock.json"));
 
 for (const file of tracked) {
-  const source = text(file);
+  const source = textIfPresent(file);
+  if (source === null) continue;
   if (/^(<{7}|={7}|>{7})(?: |$)/m.test(source)) fail(`merge-conflict marker in ${file}`);
   if (/\beval\s*\(|\bnew\s+Function\s*\(/.test(source)) fail(`runtime code generation in ${file}`);
 }

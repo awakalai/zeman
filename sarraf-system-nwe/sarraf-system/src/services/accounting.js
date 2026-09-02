@@ -375,48 +375,13 @@ export async function firstNegativeMovement(client, currencyId, { holder = "owne
   };
 }
 
-/**
- * A service the business performs for a fee — not a currency trade (§3).
- *
- * The owner's example: one million leaves the FIB account, one million arrives in the safe, and
- * three thousand is charged for doing it. FIB is an example; any account a business holds money
- * in behaves this way. Mirrors public.sarraf_service_transaction.
- *
- * Principal and commission are kept apart all the way through — there is deliberately no
- * combined total, because they are not the same kind of money.
+/*
+ * recordService() was here: a principal that passed through an account plus a separate fee that
+ * was earned. The owner read the screen it fed and said the model was a misreading of the
+ * business — «ئەو لۆجیکە هەر بسڕەوە و دووبارە درووستی بکەرەوە». The trade that replaces it is
+ * مامەڵەی عمولە, which moves money between two named places at two prices; it lives with the
+ * other trades, not here.
  */
-export async function recordService(client, {
-  id, accountId, direction = "into_safe", amount, commission = 0,
-  commissionCollected = true, customerId = null, description = "", commandKey,
-}) {
-  const { data, error } = await client.rpc("sarraf_service_transaction", {
-    p_id: id,
-    p_cash_account_id: accountId,
-    p_direction: direction,
-    p_amount: amount,
-    p_commission: commission,
-    p_commission_collected: commissionCollected,
-    p_customer_id: customerId,
-    p_description: description,
-    p_command_key: commandKey,
-  });
-  if (error) throw error;
-  const answer = data || {};
-  return {
-    id: answer.id,
-    accountId: answer.account,
-    accountName: answer.account_name,
-    direction: answer.direction,
-    currency: answer.currency,
-    principal: Number(answer.principal ?? 0),
-    commission: Number(answer.commission ?? 0),
-    commissionCollected: answer.commission_collected === true,
-    commissionReceivable: Number(answer.commission_receivable ?? 0),
-    entryId: answer.entry_id || null,
-    commissionEntryId: answer.commission_entry_id || null,
-    replayed: answer.replayed === true,
-  };
-}
 
 /** The places this business holds money that are not the main safe, and what is in each. */
 export async function loadCashAccounts(client) {

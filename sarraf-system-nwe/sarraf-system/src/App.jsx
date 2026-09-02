@@ -198,7 +198,6 @@ const ADMIN_CENTER_PAGE_IDS = new Set([
   "office-payments",
   "partner-accounts",
   "partner-holdings",
-  "cash-accounts",
   "explain-balance",
   "manager-center",
   "manager-console",
@@ -1528,7 +1527,7 @@ export default function App() {
     return () => { cancelled = true; };
   }, [session?.access_token, accessEpoch]);
 
-  const LR = (e) => ({ id: e.id, type: e.type, owner: e.owner || null, investor_id: e.investorId || null, cur_id: e.curId, amount: e.amount, partner_id: e.partnerId || null, tx_id: e.txId || null, note: e.note || null, date: e.date });
+  const LR = (e) => ({ id: e.id, type: e.type, owner: e.owner || null, investor_id: e.investorId || null, cur_id: e.curId, amount: e.amount, partner_id: e.partnerId || null, cash_account_id: e.cashAccountId || null, tx_id: e.txId || null, note: e.note || null, date: e.date });
   const TR = (transaction) => {
     const t = normalizeTransactionBusinessFlow(transaction);
     return { id: t.id, code: t.code || null, type: t.type, direct: !!t.direct,
@@ -1974,12 +1973,14 @@ export default function App() {
     return run(async () => {
     if (!(Math.abs(+f.amount) > 0)) { flash(tr("بڕ پێویستە")); return; }
     const amount = roundMoney(data, f.dir === "in" ? Math.abs(+f.amount) : -Math.abs(+f.amount), f.curId);
-    const e = { id: entryId, type: f.dir === "in" ? "deposit" : "withdraw", owner: f.owner === "self" ? "self" : "investor", investorId: f.owner === "self" ? null : f.owner, curId: f.curId, amount, partnerId: null, txId: null, note: f.note, date: now() };
+    // «هەمیشە هەڵبژێرە: کاش یان حسابێک» — no place named means the cash, which is what every
+    // movement recorded before today meant, so old rows and new rows say the same thing.
+    const e = { id: entryId, type: f.dir === "in" ? "deposit" : "withdraw", owner: f.owner === "self" ? "self" : "investor", investorId: f.owner === "self" ? null : f.owner, curId: f.curId, amount, partnerId: null, cashAccountId: f.place || null, txId: null, note: f.note, date: now() };
     const result = await rpcStrict("sarraf_post_ledger_command", {
       p_ledger: [LR(e)],
       p_command_key: commandKey("cash"),
       p_action: f.dir === "in" ? "پارە داخڵکردن" : "پارە دەرهێنان",
-      p_detail: `${fmt(Math.abs(amount))} ${cur(f.curId).code} — ${f.owner === "self" ? "هی خۆم" : usr(f.owner).name}`,
+      p_detail: `${fmt(Math.abs(amount))} ${cur(f.curId).code} — ${f.owner === "self" ? "هی خۆم" : usr(f.owner).name}${f.placeName ? " · " + f.placeName : ""}`,
     });
     if (approvalQueued(result, f.dir === "in" ? "پارە داخڵکردن" : "پارە دەرهێنان")) return result;
     flash(tr("تۆمار کرا ✓"));
@@ -2320,7 +2321,7 @@ export default function App() {
       const e = {
         id: entryId, type: isPayout ? "investor_payout" : "expense",
         owner: null, investorId: isPayout ? f.investorId : null,
-        curId: f.curId, amount: -amt, partnerId: null, txId: null,
+        curId: f.curId, amount: -amt, partnerId: null, cashAccountId: f.place || null, txId: null,
         note: `${f.category}${f.note ? " — " + f.note : ""}`, date: now(),
       };
       const result = await rpcStrict("sarraf_post_ledger_command", {
@@ -3048,7 +3049,6 @@ export default function App() {
       label: navSectionLabel("پارە", "Money", "المال"),
       items: [
         ["debt-center", navSectionLabel("قەرز و قاسە", "Debt & cashbox", "الديون والخزنة"), Scale],
-        ["cash-accounts", navSectionLabel("حساب و عمولە", "Accounts & fees", "الحسابات والعمولة"), Banknote],
         ["office-payments", navSectionLabel("نووسینگە", "Offices", "المكاتب"), Building2],
         ["partner-holdings", navSectionLabel("لای هاوبەشان", "With partners", "لدى الشركاء"), Boxes],
         ["explain-balance", navSectionLabel("شیکردنەوەی باڵانس", "Explain a balance", "تفسير الرصيد"), Search],
@@ -3349,7 +3349,7 @@ export default function App() {
               * fresh choice, not a step deeper into the admin centre.
               */}
             {page === "dash" && <Dashboard {...shared} batches={batches} go={openPage} />}
-            {page === "safes" && <><Back onClick={() => setPage("dash")} t={tr("گەڕانەوە بۆ داشبۆرد")} /><Safes {...shared} addDeposit={addDeposit} addExpense={addExpense} addCurrency={addCurrency} /></>}
+            {page === "safes" && <><Back onClick={() => setPage("dash")} t={tr("گەڕانەوە بۆ داشبۆرد")} /><Safes {...shared} lang={lang} addDeposit={addDeposit} addExpense={addExpense} addCurrency={addCurrency} /></>}
             {page === "rates" && <><Back onClick={() => setPage("dash")} t={tr("گەڕانەوە بۆ داشبۆرد")} /><Rates {...shared} saveRates={saveRates} /></>}
             {page === "profit" && <><Back onClick={() => setPage("dash")} t={tr("گەڕانەوە بۆ داشبۆرد")} /><ProfitPage {...shared} /></>}
             {page === "newtx" && <TxForm {...shared} onSave={saveTx} batch={pendingBatch} onClearBatch={() => setPendingBatch(null)} busy={busy} />}
@@ -3419,8 +3419,6 @@ export default function App() {
                     ))}
               </div>;
             })()}
-            {page === "cash-accounts" && <DeferredPanel><CashAccounts client={supabase} lang={lang}
-              currencies={data?.currencies || []} /></DeferredPanel>}
             {page === "explain-balance" && <DeferredPanel><ExplainBalance client={supabase} lang={lang}
               currencies={data?.currencies || []} /></DeferredPanel>}
             {page === "partner-accounts" && <DeferredPanel><PartnerAccounts client={supabase} lang={lang} flash={flash}
@@ -4703,10 +4701,22 @@ function ProfitPage({ data, cur, profitIn, investorsProfitIn, invShare }) {
 }
 
 /* ══════════════════ قاسە و خەرجی ══════════════════ */
-function Safes({ data, calc, cur, usr, mySafe, invUnpaid, owners, ratesReady, addDeposit, addExpense, addCurrency, isOwner }) {
+function Safes({ data, calc, cur, usr, mySafe, invUnpaid, owners, ratesReady, addDeposit, addExpense, addCurrency, isOwner, lang }) {
   const [openCur, setOpenCur] = useState(null);
-  const [f, setF] = useState({ dir: "in", owner: "self", curId: data.currencies[0]?.id, amount: "", note: "" });
-  const [xf, setXf] = useState({ category: "کرێی شوێن", investorId: "", curId: data.currencies[0]?.id, amount: "", note: "" });
+  // «هەمیشە هەڵبژێرە: کاش یان حسابێک» — an empty place means the cash, which is what every
+  // movement recorded before today meant, so nothing that already exists changes meaning.
+  const [f, setF] = useState({ dir: "in", owner: "self", curId: data.currencies[0]?.id, amount: "", note: "", place: "" });
+  // Handed up by the accounts panel below, so the entry form can offer the same places the
+  // panel lists without a second request. useCallback keeps the panel's effect from looping.
+  const [accounts, setAccounts] = useState([]);
+  const takeAccounts = useCallback((rows) => setAccounts(rows), []);
+  const placesFor = (curId) => accounts.filter((a) => a.active && a.currencyId === curId);
+  // Choosing dinars after picking a dollar account would send money to a place that cannot
+  // hold it; the server refuses that, and the form should never ask for it in the first place.
+  const placeStillValid = placesFor(f.curId).some((a) => a.id === f.place);
+  const place = placeStillValid ? f.place : "";
+  const [xf, setXf] = useState({ category: "کرێی شوێن", investorId: "", curId: data.currencies[0]?.id, amount: "", note: "", place: "" });
+  const xPlace = placesFor(xf.curId).some((a) => a.id === xf.place) ? xf.place : "";
   const [nc, setNc] = useState({ code: "", name: "", symbol: "", dec: 2 });
   const investors = data.users.filter((u) => u.role === "investor" && !u.deleted);
   // The value stored against an expense is the Kurdish word, in every language: it is written
@@ -4719,6 +4729,41 @@ function Safes({ data, calc, cur, usr, mySafe, invUnpaid, owners, ratesReady, ad
   return (
     <div className="space-y-4">
       <H>{tr("قاسە، پارە و خەرجی")}</H>
+
+      {/* «قاسەی گشتی وەک ئێستا بێت هەر بەس بەشێکی تری بۆ زیادببێت (پارەی کاش)(پارەی ناو حسابەکانت)»
+        * — the total is unchanged; underneath it now says where the money is. */}
+      <Card className="p-5">
+        <SecLbl>{tr("پارەکەت لە کوێیە")}</SecLbl>
+        <div className="grid sm:grid-cols-2 gap-3 mt-3">
+          {data.currencies.map((c) => {
+            const inAccounts = accounts
+              .filter((a) => a.currencyId === c.id)
+              .reduce((sum, a) => sum + (Number(a.balance) || 0), 0);
+            const inCash = (calc.phys[c.id] || 0) - inAccounts;
+            if (!inCash && !inAccounts) return null;
+            return (
+              <div key={c.id} className="rounded-[var(--r-sm)] border border-[var(--line)] p-3">
+                <div className="flex items-center gap-2 mb-2">
+                  <CurBadge c={c} size="sm" /><span className="text-sm font-semibold">{c.name}</span>
+                </div>
+                <div className="flex justify-between py-1.5 text-sm">
+                  <span className="text-[var(--txt-2)]">{tr("پارەی کاش")}</span>
+                  <Money v={inCash} dec={c.dec ?? 0} />
+                </div>
+                <div className="flex justify-between py-1.5 text-sm border-t border-[var(--line)]">
+                  <span className="text-[var(--txt-2)]">{tr("پارەی ناو حسابەکان")}</span>
+                  <Money v={inAccounts} dec={c.dec ?? 0} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        {accounts.length === 0 && (
+          <div className="text-[11px] text-[var(--txt-3)] mt-3">
+            {tr("هێشتا هیچ حسابێک نەکراوەتەوە، بۆیە هەموو پارەکە کاشە")}
+          </div>
+        )}
+      </Card>
 
       <div className="grid md:grid-cols-2 gap-4">
         <Card className="p-5">
@@ -4766,8 +4811,12 @@ function Safes({ data, calc, cur, usr, mySafe, invUnpaid, owners, ratesReady, ad
           <div><Lbl>{tr("جۆر")}</Lbl><Sel value={f.dir} onChange={(e) => setF({ ...f, dir: e.target.value })}><option value="in">{tr("داخڵکردن")}</option><option value="out">{tr("دەرهێنان")}</option></Sel></div>
           <div><Lbl>{tr("خاوەنی پارە")}</Lbl><Sel value={f.owner} onChange={(e) => setF({ ...f, owner: e.target.value })}><option value="self">{tr("هی خۆم")}</option>{investors.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</Sel></div>
           <div><Lbl>{tr("دراو")}</Lbl><Sel value={f.curId} onChange={(e) => setF({ ...f, curId: e.target.value })}>{data.currencies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</Sel></div>
+          <div><Lbl>{tr("شوێن")}</Lbl><Sel value={place} onChange={(e) => setF({ ...f, place: e.target.value })}>
+            <option value="">{tr("کاش")}</option>
+            {placesFor(f.curId).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+          </Sel></div>
           <div><Lbl>{tr("بڕ")}</Lbl><Inp type="number" value={f.amount} onChange={(e) => setF({ ...f, amount: e.target.value })} placeholder="0" /></div>
-          <div className="flex items-end"><Btn className="w-full" onClick={() => { if (+f.amount > 0) { addDeposit(f); setF({ ...f, amount: "" }); } }}>{tr("تۆمارکردن")}</Btn></div>
+          <div className="flex items-end"><Btn className="w-full" onClick={() => { if (+f.amount > 0) { addDeposit({ ...f, place, placeName: placesFor(f.curId).find((a) => a.id === place)?.name || "" }); setF({ ...f, amount: "" }); } }}>{tr("تۆمارکردن")}</Btn></div>
         </div>
       </Card>
 
@@ -4779,9 +4828,13 @@ function Safes({ data, calc, cur, usr, mySafe, invUnpaid, owners, ratesReady, ad
             <div><Lbl>{tr("وەبەرهێنەر")}</Lbl><Sel value={xf.investorId} onChange={(e) => setXf({ ...xf, investorId: e.target.value })}><option value="">—</option>{investors.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</Sel></div>
           )}
           <div><Lbl>{tr("دراو")}</Lbl><Sel value={xf.curId} onChange={(e) => setXf({ ...xf, curId: e.target.value })}>{data.currencies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</Sel></div>
+          <div><Lbl>{tr("لە کوێوە")}</Lbl><Sel value={xPlace} onChange={(e) => setXf({ ...xf, place: e.target.value })}>
+            <option value="">{tr("کاش")}</option>
+            {placesFor(xf.curId).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+          </Sel></div>
           <div><Lbl>{tr("بڕ")}</Lbl><Inp type="number" value={xf.amount} onChange={(e) => setXf({ ...xf, amount: e.target.value })} placeholder="0" /></div>
           {!isPayout && <div><Lbl>{tr("تێبینی")}</Lbl><Inp value={xf.note} onChange={(e) => setXf({ ...xf, note: e.target.value })} /></div>}
-          <div className="flex items-end"><Btn kind="danger" className="w-full" onClick={() => { if (+xf.amount > 0) { addExpense(xf); setXf({ ...xf, amount: "", note: "" }); } }}>{tr("تۆمارکردن")}</Btn></div>
+          <div className="flex items-end"><Btn kind="danger" className="w-full" onClick={() => { if (+xf.amount > 0) { addExpense({ ...xf, place: xPlace }); setXf({ ...xf, amount: "", note: "" }); } }}>{tr("تۆمارکردن")}</Btn></div>
         </div>
         {isPayout && xf.investorId && (
           <div className="mt-3 bg-[color-mix(in_srgb,var(--warn)_11%,transparent)] border border-[color-mix(in_srgb,var(--warn)_26%,transparent)] rounded-[var(--r-sm)] p-3 text-sm flex items-center justify-between flex-wrap gap-2">
@@ -4789,6 +4842,14 @@ function Safes({ data, calc, cur, usr, mySafe, invUnpaid, owners, ratesReady, ad
             <button onClick={() => setXf({ ...xf, amount: String(Math.max(0, Math.round(unpaid * 100) / 100)) })} className="text-xs font-semibold text-[var(--pos)]">دانانی ئەم بڕە ←</button>
           </div>
         )}
+      </Card>
+
+      {/* «حسابەکان لەناو قاسەدا» — the owner's own answer to where these belong. */}
+      <Card className="p-5">
+        <DeferredPanel>
+          <CashAccounts client={supabase} lang={lang} currencies={data.currencies}
+            onAccounts={takeAccounts} />
+        </DeferredPanel>
       </Card>
 
 {isOwner && (
