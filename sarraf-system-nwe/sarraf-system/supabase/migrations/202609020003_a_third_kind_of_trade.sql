@@ -385,4 +385,11 @@ comment on function public.sarraf_commission_trade(text,text,numeric,text,text,n
 revoke all on function public.sarraf_commission_trade(text,text,numeric,text,text,numeric,text,text) from public, anon;
 grant execute on function public.sarraf_commission_trade(text,text,numeric,text,text,numeric,text,text) to authenticated;
 
+-- Every definer function in this system runs as sarraf_definer, a role that policies still
+-- apply to, rather than as the superuser that ignores them. verify:isolation refuses any
+-- other owner, and it caught this one.
+grant create on schema public to sarraf_definer;
+alter function public.sarraf_commission_trade(text,text,numeric,text,text,numeric,text,text) owner to sarraf_definer;
+revoke create on schema public from sarraf_definer;
+
 commit;
