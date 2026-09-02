@@ -13,9 +13,9 @@ const COPY = {
     customer: "کڕیار", currency: "دراو", amount: "بڕ", rate: "نرخی ئەمڕۆ (١ دۆلار = ؟)",
     reason: "هۆکار", deposit: "دانان", withdraw: "دەرهێنان", settle: "تسویەی قەرز لە قاسە",
     available: "بەردەست", statement: "جوڵەکان", empty: "هیچ جوڵەیەک نییە",
-    pick: "کڕیارێک هەڵبژێرە", refresh: "نوێکردنەوە", working: "جێبەجێکردن...",
+    pick: "کڕیارێک هەڵبژێرە", refresh: "نوێکردنەوە", working: "جێبەجێکردن…",
     preview: "پێشبینینی تسویە", noDebt: "هیچ قەرزێکی کراوە نییە بەم دراوە",
-    willSettle: "ئەم بڕە دەچێتە سەر ئەم قەرزانە:", loading: "بارکردن...",
+    willSettle: "ئەم بڕە دەچێتە سەر ئەم قەرزانە:", loading: "بارکردن…",
     rateNeeded: "نرخی ئەمڕۆ پێویستە بۆ هەڵسەنگاندن بە دۆلار",
     kinds: {
       deposit: "دانان", withdrawal: "دەرهێنان", transaction_reserve: "تەرخانکردن",

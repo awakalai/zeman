@@ -346,6 +346,41 @@ for (const file of tracked.filter((f) => f.startsWith(SERVICE_DIR) && f.endsWith
   }
 }
 
+// ── one ellipsis, not two spellings of it ────────────────────────────────────────────────
+//
+//   «تەنانەت نووسینەکانی ڕووکاریش ڕێک بکەوەو شتی زیادە لابدە»
+//
+// The same label, on the same screen, was spelled two ways: the Kurdish said «بارکردن...» with
+// three full stops and the English and Arabic beside it said "Loading…" with the character. A
+// hundred and thirty-nine strings did that. Nobody would file it as a bug, and it is exactly
+// what makes an interface feel like it was assembled rather than designed — three dots are
+// wider, they break across a line, and they sit at a different height from the neighbour that
+// means the same thing.
+//
+// So: one character, U+2026, everywhere an interface string trails off.
+{
+  const offenders = [];
+  for (const file of tracked.filter((f) => /^src\/.*\.(?:js|jsx)$/.test(f))) {
+    const source = text(file);
+    for (const [index, line] of source.split("\n").entries()) {
+      // Prose about the code is not the code. A comment may write "..." freely.
+      if (/^\s*(?:\/\/|\*|\/\*)/.test(line)) continue;
+      for (const [, body] of line.matchAll(/"([^"\\\n]*?)\.\.\."/g)) {
+        // An interface string is one carrying Arabic-script letters, or the bare three dots
+        // once used as a button's whole label while it was working.
+        if (/[؀-ۿ]/.test(body) || body === "") {
+          offenders.push(`${file}:${index + 1}  "${body}..."`);
+        }
+      }
+    }
+  }
+  if (offenders.length) {
+    fail(`${offenders.length} interface string(s) trail off with three full stops instead of the `
+      + `ellipsis character …, so the same label is spelled two ways in two languages:\n  `
+      + offenders.slice(0, 12).join("\n  "));
+  }
+}
+
 const workflow = text("../../.github/workflows/verify.yml");
 for (const required of ["npm ci", "npm test", "npm run build", "npm run verify:accounting", "npm run verify:roles", "npm audit --audit-level=high"]) {
   if (!workflow.includes(required)) fail(`CI is missing required gate: ${required}`);

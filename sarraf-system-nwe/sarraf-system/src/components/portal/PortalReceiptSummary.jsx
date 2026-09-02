@@ -258,7 +258,7 @@ export function PortalReceiptSummary({ summary, data, ui, loadSummary }) {
                       // The uploader is shown the native figures only; §4 keeps the valuation
                       // for the operator's own screen until the transaction has been made.
                       ? <CanonicalBatchSummary summary={batchSummary} ui={ui} showUsd={false} />
-                      : <div className="text-[12px]" style={{ color: "var(--txt-3)" }}>{tr("بارکردن...")}</div>}
+                      : <div className="text-[12px]" style={{ color: "var(--txt-3)" }}>{tr("بارکردن…")}</div>}
                 </div>
               )}
             </div>

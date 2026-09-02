@@ -22,8 +22,8 @@ import { errorText } from "../../services/userFacingError";
 const COPY = {
   ku: {
     title: "پارەدانی نووسینگە", subtitle: "پارەی ئەم کەسانە بدە، دواتر «پارەم دا» لێبدە",
-    empty: "هیچ پارەدانێکی چاوەڕوان نییە ✓", refresh: "نوێکردنەوە", loading: "بارکردن...",
-    waiting: "چاوەڕوانی پارەدان", paidList: "دراوەکان", pay: "پارەم دا", working: "دەنێردرێت...",
+    empty: "هیچ پارەدانێکی چاوەڕوان نییە ✓", refresh: "نوێکردنەوە", loading: "بارکردن…",
+    waiting: "چاوەڕوانی پارەدان", paidList: "دراوەکان", pay: "پارەم دا", working: "دەنێردرێت…",
     owed: "قەرزی ZEMAN بۆ من", owedNone: "هیچ قەرزێک نەماوە ✓",
     day: "ئەمڕۆ", week: "ئەم هەفتەیە", month: "ئەم مانگە",
     failed: "زانیاریی ئەرکەکانی نووسینگە بار نەبوو",
