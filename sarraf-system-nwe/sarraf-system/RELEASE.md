@@ -7,9 +7,10 @@ The claim this document supports is narrow and deliberate: **the software is rea
 installation is not, until the items in "Only the owner can do these" are done.** Nothing here
 rests on a successful build or on unit tests alone.
 
-**Last brought up to date: 2 September 2026**, against `main` at `912b0be` with every migration
-through `202609020002` applied. Live evidence comes from two GitHub Actions runs against the
-production database that day: migrate run **58** and inspect run **`33593609457`**.
+**Last brought up to date: 2 September 2026**, against `main` at `1a1dfef` with every migration
+through `202609020002` applied. Live evidence comes from three GitHub Actions runs against the
+production database that day: migrate run **58**, and inspect runs **`33593609457`** and
+**`33619163513`** — the second taken after section 13 was added.
 
 ---
 
@@ -153,23 +154,6 @@ component's service imports so the screen cannot quietly start reading more than
 
 A view nobody opened is a view nobody audited. Both facts were true of this one until today.
 
-## 2f. Not "does it name a business?" but "does it name the right one?"
-
-Section 3 of `INSPECT.sql` counts rows whose `tenant_id` is null, and section 4 says whether any
-are still being made. Neither can see the more dangerous shape: a row carrying the **wrong**
-tenant. It satisfies every not-null constraint, passes both existing sections, and puts one
-business's money inside another's books.
-
-Section 13 asks that question of seven parent-child relationships — ledger against its
-transaction, journal entries against their transaction and their batch, receipts against their
-batch, and transactions and batches against the people they name. **All seven read zero on the
-live database.**
-
-It is asserted in `verify:inspect` as well as printed, because a number a person has to notice
-is a number nobody notices on the morning it first stops being zero. Proved by planting one
-ledger row whose transaction belongs to another business: `1 row(s) sit in a different business
-than their parent`.
-
 ## 2e. Every command on the server, accounted for
 
 216 functions are declared across the 112 migrations. Each one was traced to something that
@@ -192,6 +176,35 @@ weight. The fourth is a decision for the owner: `sarraf_rate_limit_sweep` exists
 rate-limit rows and nothing calls it, so **that table grows without bound**. It is small and
 slow-growing, and the choice is between scheduling the sweep and deleting the function — not
 between doing nothing and doing nothing.
+
+## 2f. Not "does it name a business?" but "does it name the right one?"
+
+Section 3 of `INSPECT.sql` counts rows whose `tenant_id` is null, and section 4 says whether any
+are still being made. Neither can see the more dangerous shape: a row carrying the **wrong**
+tenant. It satisfies every not-null constraint, passes both existing sections, and puts one
+business's money inside another's books.
+
+Section 13 asks that question of seven parent-child relationships — ledger against its
+transaction, journal entries against their transaction and their batch, receipts against their
+batch, and transactions and batches against the people they name.
+
+**All seven read zero on the live database** (inspect run `33619163513`, 2 September 10:23 UTC):
+
+```
+| child → parent                    | disagree |
+| journal_entries → receipt_batches |        0 |
+| journal_entries → txs             |        0 |
+| ledger → txs                      |        0 |
+| receipt_batches → its customer    |        0 |
+| receipts → receipt_batches        |        0 |
+| txs → its counterparty            |        0 |
+| txs → its partner                 |        0 |
+```
+
+It is asserted in `verify:inspect` as well as printed, because a number a person has to notice
+is a number nobody notices on the morning it first stops being zero. Proved by planting one
+ledger row whose transaction belongs to another business: `1 row(s) sit in a different business
+than their parent`.
 
 ## 3. Only the owner can do these
 
