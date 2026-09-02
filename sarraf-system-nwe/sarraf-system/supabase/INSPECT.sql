@@ -488,5 +488,122 @@ select
   (select count(*) from public.receipt_batches) as "batches";
 
 \echo ''
+\echo ''
+\echo '════════ ١٠. پارەکە لەکوێیە — قاسە، هاوبەش، نووسینگە، حساب ════════'
+\echo '   پێویستە: کۆی هەموویان = کۆی گشتی. جیاوازییەک واتە دراوێک ون بووە'
+\echo ''
+
+-- Until this week the operational ledger could say only "a partner has it" or nothing, and
+-- "nothing" was read as the owner's own safe. Money an office was holding and money sitting in a
+-- bank account were both counted as cash in the safe, because there was no column that could say
+-- otherwise. 202609010011 added cash_account_id, 202609010012 added office_id, and 202609010014
+-- made the cashbox a balance rather than a residual.
+--
+-- Which creates exactly one new way to be wrong: a row could name two holders at once, or the
+-- four buckets could stop adding up to the total. That is what this section measures. The
+-- reconciliation is the point — the four columns are only trustworthy if they partition the
+-- ledger, and a partition either sums to the whole or it does not.
+select c.code as "currency",
+       round(sum(l.amount) filter (
+         where l.partner_id is null and l.office_id is null and l.cash_account_id is null), 4)
+         as "قاسەی خاوەن",
+       round(coalesce(sum(l.amount) filter (where l.partner_id is not null), 0), 4) as "لای هاوبەشان",
+       round(coalesce(sum(l.amount) filter (where l.office_id is not null), 0), 4) as "لای نووسینگە",
+       round(coalesce(sum(l.amount) filter (where l.cash_account_id is not null), 0), 4) as "لە حسابەکان",
+       round(sum(l.amount), 4) as "کۆی گشتی",
+       -- Must be 0. Anything else means a row is counted twice or not at all.
+       round(sum(l.amount)
+             - (coalesce(sum(l.amount) filter (
+                 where l.partner_id is null and l.office_id is null and l.cash_account_id is null), 0)
+              + coalesce(sum(l.amount) filter (where l.partner_id is not null), 0)
+              + coalesce(sum(l.amount) filter (where l.office_id is not null), 0)
+              + coalesce(sum(l.amount) filter (where l.cash_account_id is not null), 0)), 4)
+         as "جیاوازی — پێویستە ٠"
+  from public.ledger l
+  join public.currencies c on c.id = l.cur_id
+ group by c.code
+ order by c.code;
+
+\echo ''
+\echo ''
+\echo '════════ ١٠.b ڕیزێک کە دوو خاوەنی هەیە ════════'
+\echo '   پێویستە: بەتاڵ. یەک پارە لە یەک شوێندایە، نەک دوو'
+\echo ''
+
+-- The four columns are meant to be mutually exclusive. Nothing in the schema enforces that yet,
+-- so it is asked rather than assumed. A row here is money being reported in two places at once,
+-- which is how a total that balances can still be wrong.
+select l.id, l.cur_id as "currency", round(l.amount, 4) as "amount",
+       l.partner_id, l.office_id, l.cash_account_id
+  from public.ledger l
+ where (case when l.partner_id      is not null then 1 else 0 end)
+     + (case when l.office_id       is not null then 1 else 0 end)
+     + (case when l.cash_account_id is not null then 1 else 0 end) > 1
+ order by l.date desc
+ limit 20;
+
+\echo ''
+\echo ''
+\echo '════════ ١٠.c حسابەکانی دەرەوەی قاسە — ئێف ئای بی و هاوشێوەکانی ════════'
+\echo '   بەتاڵ واتە هێشتا هیچ حسابێک نەکراوەتەوە، نەک هەڵە'
+\echo ''
+
+select a.name as "account", a.kind, c.code as "currency",
+       case when a.active then 'چالاک' else 'ناچالاک' end as "state",
+       round(coalesce((select sum(l.amount) from public.ledger l
+                        where l.cash_account_id = a.id), 0), 4) as "balance"
+  from public.cash_accounts a
+  join public.currencies c on c.id = a.cur_id
+ order by a.name;
+
+\echo ''
+\echo ''
+\echo '════════ ١١. عمولە — چەند وەرگیراوە ════════'
+\echo '   عمولە دەچێتە acc-4100، هەرگیز نەچێتە acc-4000 (قازانجی ئاڵوگۆڕ)'
+\echo ''
+
+-- §3: a commission is income for a service, not a trading spread, and mixing the two would make
+-- the profit figure meaningless. This asks the books directly which account the money landed in.
+select l.currency, count(*) as "how many",
+       round(sum(case when l.side = 'credit' then l.amount else -l.amount end), 4) as "fee income"
+  from public.journal_lines l
+ where l.account_id = 'acc-4100'
+ group by l.currency
+ order by l.currency;
+
+\echo ''
+\echo '   ئاگاداری: گەر عمولە لە acc-4000 دەرکەوێت، ئەوە هەڵەیە'
+\echo ''
+
+select count(*) as "commission wrongly in the spread account"
+  from public.journal_lines l
+  join public.journal_entries e on e.id = l.entry_id
+ where l.account_id = 'acc-4000'
+   and e.command_key like '%:fee';
+
+\echo ''
+\echo ''
+\echo '════════ ١٢. دەرکردنی کۆمەڵی فیش — کێ چی برد ════════'
+\echo '   هەر ڕیزێک لێرە واتە کۆمەڵێک فیش لە سیستەمەکە دەرچووە'
+\echo ''
+
+-- Handing somebody a hundred receipt images is the largest single disclosure this system makes,
+-- and it leaves through a share sheet the system cannot follow. 202609020001 writes one audit row
+-- per release. This is where the owner reads them.
+select count(*) as "releases",
+       coalesce(max(a.date)::text, '—') as "most recent"
+  from public.audit a
+ where a.action = 'دەرکردنی کۆمەڵی فیش';
+
+\echo ''
+
+select u.name as "who", a.detail as "what", a.date as "when"
+  from public.audit a
+  left join public.app_users u on u.id = a.user_id
+ where a.action = 'دەرکردنی کۆمەڵی فیش'
+ order by a.date desc
+ limit 20;
+
+\echo ''
 \echo '════════ تەواو ════════'
 \echo ''

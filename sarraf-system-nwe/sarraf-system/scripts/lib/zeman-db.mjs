@@ -155,6 +155,22 @@ port = ${PORT}
       psqlFile(path.join(root, "supabase", "migrations", migration));
     }
 
+    // Supabase's own migration ledger, which the live database has and this fixture did not.
+    //
+    // It is not part of any migration in this repository — the Supabase CLI creates it, and
+    // migrate.yml keeps it in step with public.schema_migrations. INSPECT's very first section
+    // compares the two ledgers, which is the check that would catch a `supabase db push` about to
+    // re-run an already-applied migration. Without the table here, that section could not run at
+    // all, so the one gate that executes INSPECT could never reach the other twenty-seven.
+    //
+    // Seeded exactly as migrate.yml seeds it: every version this repository has applied.
+    psql(`
+      create schema if not exists supabase_migrations;
+      create table if not exists supabase_migrations.schema_migrations (version text primary key);
+      insert into supabase_migrations.schema_migrations (version)
+      select m.version from public.schema_migrations m
+      on conflict (version) do nothing;`);
+
     psql(`
       update public.currencies set buy_rate=1, sell_rate=1, rate=1 where id='usd';
       update public.currencies set buy_rate=7.10, sell_rate=7.30, rate=7.20 where id='cny';
