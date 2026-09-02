@@ -400,6 +400,109 @@ for (const file of tracked.filter((f) => f.startsWith(SERVICE_DIR) && f.endsWith
   }
 }
 
+// ── every command on the server can be reached from somewhere ────────────────────────────
+//
+// The service-level reachability rule asks whether a COMPONENT can reach a command — that is
+// what found sarraf_manager_overview, which the accounting gate had been exercising all along
+// while no screen could open it.
+//
+// This rule asks the weaker question underneath, and they are not the same question: is there
+// anything anywhere that runs this at all? 216 functions are declared across the migrations.
+// The answer today is that four are not, and they are named below. A command nothing runs is
+// dead weight, and — worse for a system about to hold money — a surface nobody audits, because
+// nobody thinks of it as part of the application.
+//
+// Alive means one of five things, and a trigger function counts: PostgreSQL checks EXECUTE
+// when a trigger is created, never when it fires, so `execute function public.X` is the whole
+// of how such a function is ever reached.
+{
+  const migrationText = migrations.map((file) => text(`supabase/migrations/${file}`)).join("\n");
+  const declared = new Set([...migrationText.matchAll(
+    /create\s+(?:or\s+replace\s+)?function\s+public\.(sarraf_[a-z0-9_]+)/gi)].map((m) => m[1]));
+  const dropped = new Set([...migrationText.matchAll(
+    /drop\s+function\s+(?:if\s+exists\s+)?public\.(sarraf_[a-z0-9_]+)/gi)].map((m) => m[1]));
+  const triggers = new Set([...migrationText.matchAll(
+    /execute\s+(?:function|procedure)\s+public\.(sarraf_[a-z0-9_]+)/gi)].map((m) => m[1]));
+  // Two kinds of caller, read differently.
+  //
+  // The browser and the API routes pass a function's name as a string to client.rpc, so a bare
+  // name is a call there. A gate or INSPECT.sql runs SQL, so the name must be followed by `(`
+  // — otherwise every function merely NAMED in a gate's comments would read as exercised, and
+  // several are.
+  //
+  // This file is excluded from both. The allowance list below is written here, and scanning
+  // this file made the four names in it look reached by the very note explaining that they are
+  // not — the rule declaring its own exceptions satisfied. Caught by the staleness check, which
+  // then flagged all four at once.
+  const browserText = tracked
+    .filter((file) => /^(?:src\/.*\.(?:js|jsx)|api\/.*\.(?:js|mjs))$/.test(file))
+    .map(text).join("\n");
+  const gateText = tracked
+    .filter((file) => file !== "scripts/verify-source-contracts.mjs"
+      && /^(?:scripts\/.*\.mjs|test\/.*\.js|supabase\/INSPECT\.sql)$/.test(file))
+    .map(text).join("\n");
+  const named = new Set([
+    ...[...browserText.matchAll(/\b(sarraf_[a-z0-9_]+)\b/g)].map((m) => m[1]),
+    ...[...gateText.matchAll(/\b(sarraf_[a-z0-9_]+)\s*\(/g)].map((m) => m[1]),
+  ]);
+
+  // Four commands that nothing anywhere calls, listed by name so the list is reviewed rather
+  // than assumed. They are NOT dropped here: removing a function from a live database is a
+  // destructive change, and one of them is a maintenance sweep the owner may want scheduled
+  // rather than deleted. Naming them keeps the number at four and makes a fifth fail.
+  const KNOWN_UNCALLED = new Map([
+    ["sarraf_confirm_receipt_match", "superseded by sarraf_convert_receipt_batch_to_transaction (202608280024)"],
+    ["sarraf_current_role", "a helper from the legacy baseline; role checks go through sarraf_self_profile"],
+    ["sarraf_rate_limit_sweep", "a maintenance sweep with no scheduler behind it — the owner's call, not a defect"],
+    ["sarraf_set_tenant_rate", "superseded by sarraf_set_receipt_daily_rate, which is what the rates screen calls"],
+  ]);
+
+  // What is left of the migrations once every line that merely NAMES a function is gone:
+  // its own declaration header, and the grant, revoke, comment, alter and drop statements
+  // that administer it. Whatever still says `sarraf_x(` after that is a genuine call from
+  // inside some function's body.
+  const bodies = migrationText
+    .replace(/create\s+(?:or\s+replace\s+)?function\s+public\.sarraf_[a-z0-9_]+\s*\([^;]*?\)\s*returns/gi, " returns ")
+    .replace(/^[ \t]*(?:grant|revoke)\b[^;]*?\bon\s+function\b[^;]*;/gim, " ")
+    .replace(/^[ \t]*comment\s+on\s+function\b[^;]*;/gim, " ")
+    .replace(/^[ \t]*alter\s+function\b[^;]*;/gim, " ")
+    .replace(/^[ \t]*drop\s+function\b[^;]*;/gim, " ");
+  const calledSomewhere = new Set([...bodies.matchAll(/\b(sarraf_[a-z0-9_]+)\s*\(/g)].map((m) => m[1]));
+
+  const unreachable = [];
+  for (const fn of [...declared].sort()) {
+    if (triggers.has(fn) || named.has(fn) || KNOWN_UNCALLED.has(fn)) continue;
+    // Declared and later dropped: the last word in the migration order decides, and a name
+    // that is dropped after its final declaration is simply gone.
+    const lastDeclared = migrationText.lastIndexOf(`function public.${fn}(`);
+    const lastDropped = dropped.has(fn) ? migrationText.lastIndexOf(`exists public.${fn}(`) : -1;
+    if (lastDropped > lastDeclared) continue;
+    // Called from the body of another function, rather than merely administered.
+    //
+    // `uses > decls` was the first attempt and it was inert: every function in this schema is
+    // followed by `revoke all on function X() from public, anon` and `grant execute on
+    // function X() to authenticated`, and both look exactly like a call. Two administrative
+    // lines against one declaration made every function read as "called by something", so the
+    // rule passed on every input and proved nothing. Those clauses are removed first.
+    if (calledSomewhere.has(fn)) continue;
+    unreachable.push(fn);
+  }
+  // An allowance for a function that has since been wired up, or deleted, is a note that has
+  // stopped being true. The list has to shrink when the code does.
+  const stale = [...KNOWN_UNCALLED.keys()].filter((fn) =>
+    !declared.has(fn) || triggers.has(fn) || named.has(fn) || calledSomewhere.has(fn));
+  if (stale.length) {
+    fail(`${stale.length} name(s) in the uncalled-command list are no longer uncalled — they are `
+      + `wired up now, or gone. Remove them from the list:\n  ` + stale.join("\n  "));
+  }
+  if (unreachable.length) {
+    fail(`${unreachable.length} database command(s) exist on the server and can be reached from `
+      + `nowhere — not the browser, not an API route, not another function, not a trigger. `
+      + `Either give them a screen or delete them; a command nobody can call is a surface `
+      + `nobody audits:\n  ` + unreachable.slice(0, 12).join("\n  "));
+  }
+}
+
 // ── one ellipsis, not two spellings of it ────────────────────────────────────────────────
 //
 //   «تەنانەت نووسینەکانی ڕووکاریش ڕێک بکەوەو شتی زیادە لابدە»
