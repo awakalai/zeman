@@ -3051,12 +3051,30 @@ export default function App() {
     },
   ];
   const NAV = NAV_GROUPS.flatMap((g) => g.items);
+  // ── the phone gets the six sections too ────────────────────────────────────────────────
+  //
+  // «دەمەوێت بەشەکان زۆر بە ڕوونی جیا بکەیتەوە نەک ئاوا هەمووی لە یەک شوێن بێت.»
+  //
+  // That was done, and it was done on the desktop only. The phone flattened the same six
+  // groups into one list and put everything past the fourth entry behind «زیاتر» — twenty
+  // screens in a single unlabelled scroll, which is the drawer this overhaul deleted, moved
+  // to the device this business actually runs on.
+  //
+  // So: the bar carries the first section, and the sheet carries the rest WITH their
+  // headings. Both are read from NAV_GROUPS, so a section added to one is in the other.
+  const BAR_NAV = (NAV_GROUPS[0]?.items || []).slice(0, 4);
+  const SHEET_GROUPS = NAV_GROUPS
+    .map((g, i) => ({ ...g, items: i === 0 ? g.items.slice(4) : g.items }))
+    .filter((g) => g.items.length);
   // Exactly one entry lights up. It used to be that «کاری ئەمڕۆ» claimed every page in
   // ADMIN_CENTER_PAGE_IDS, which was right while those pages had no entry of their own and is
   // wrong now that they do — two lit entries tell a person they are in two places at once.
   const isNavActive = (id) => id === "admin-center"
     ? (page === "admin-center" || page === "action-inbox" || page === "close")
     : page === id;
+  // Declared after isNavActive because it calls it: a const is not hoisted, and reading one
+  // above its declaration throws at render rather than at build.
+  const sheetHasActive = SHEET_GROUPS.some((g) => g.items.some(([id]) => isNavActive(id)));
 
 
   const shared = { data, calc, cur, usr, mySafe, profitAll, profitIn, ownProfitIn, ownProfitAll,
@@ -3193,7 +3211,13 @@ export default function App() {
               )}
             </div>
 
-            {!portalUser && <div className="relative">
+            {/* Language and theme are hidden below md and live in the «زیاتر» sheet instead.
+              * Five 36px buttons on a 390px phone left the brand block 39 pixels for a name
+              * that needs 55, so ZEMAN — the name of the product being sold — rendered as
+              * «…AN» on every phone. Settings you touch once should not cost the header its
+              * identity on every open.
+              */}
+            {!portalUser && <div className="relative hidden md:block">
               <button onClick={() => setLangOpen(!langOpen)}
                 aria-label={navSectionLabel("گۆڕینی زمان", "Change language", "تغيير اللغة")} aria-expanded={langOpen}
                 className="w-9 h-9 rounded-full text-[11px] font-bold tap flex items-center justify-center"
@@ -3218,7 +3242,7 @@ export default function App() {
             </div>}
             {!portalUser && <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
               aria-label={theme === "dark" ? navSectionLabel("ڕووناککردنی ڕووکار", "Use light theme", "استخدام المظهر الفاتح") : navSectionLabel("تاریککردنی ڕووکار", "Use dark theme", "استخدام المظهر الداكن")}
-              className="w-9 h-9 rounded-full tap flex items-center justify-center"
+              className="w-9 h-9 rounded-full tap hidden md:flex items-center justify-center"
               style={{ background: "var(--glass)", border: "1px solid var(--line)", color: "var(--txt-2)" }}>
               {theme === "dark" ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
             </button>}
@@ -3397,7 +3421,7 @@ export default function App() {
           <nav className="md:hidden fixed bottom-0 inset-x-0 z-40 px-3 pb-[max(env(safe-area-inset-bottom),10px)] pt-2 pointer-events-none">
             <div className="flex glass rounded-full p-1.5 pointer-events-auto mx-auto max-w-md"
               style={{ boxShadow: "var(--sh-3)" }}>
-              {NAV.slice(0, 4).map(([id, t, Ic]) => {
+              {BAR_NAV.map(([id, t, Ic]) => {
                 const on = isNavActive(id);
                 return (
                   <button key={id} onClick={() => { setPage(id); setDetailId(null); setEditTx(null); setMore(false); }}
@@ -3410,9 +3434,9 @@ export default function App() {
               })}
               <button onClick={() => setMore(!more)}
                 className="flex-1 flex flex-col items-center gap-1 py-2 rounded-full tap"
-                style={NAV.slice(4).some(([id]) => isNavActive(id)) ? { background: "var(--surf-3)" } : {}}>
+                style={sheetHasActive ? { background: "var(--surf-3)" } : {}}>
                 <MoreHorizontal className="w-[19px] h-[19px]"
-                  style={{ color: NAV.slice(4).some(([id]) => isNavActive(id)) ? "var(--ac)" : "var(--txt-3)" }} />
+                  style={{ color: sheetHasActive ? "var(--ac)" : "var(--txt-3)" }} />
                 <span className="text-[9.5px] font-semibold" style={{ color: "var(--txt-3)" }}>{tr("زیاتر")}</span>
               </button>
             </div>
@@ -3420,20 +3444,61 @@ export default function App() {
 
           {more && (
             <div className="md:hidden fixed inset-0 z-50 bg-slate-900/40" onClick={() => setMore(false)}>
-              <div className="absolute bottom-0 right-0 left-0 rounded-t-[28px] p-4 pb-8 sheet"
-                style={{ background: "var(--surf)", boxShadow: "0 -8px 40px -8px rgba(13,17,23,.3)" }} onClick={(e) => e.stopPropagation()}>
-                <div className="w-10 h-1 rounded-full mx-auto mb-4" style={{ background: "var(--line)" }} />
-                <div className="flex items-center justify-between mb-3">
-                  <div className="font-bold text-[var(--txt)]">{tr("بەشەکانی تر")}</div>
-                  <button onClick={() => setMore(false)} aria-label={tr("داخستنی بەشەکانی تر")}
-                    className="p-1.5 text-[var(--txt-3)]"><X className="w-5 h-5" /></button>
+              {/* Bounded, and scrolling in exactly one place. With the six sections, the
+                  settings row and the "view as" picker all stacked, the sheet grew past the
+                  height of the phone and pushed its own handle and close button off the top
+                  of the screen — a panel you cannot see the top of and cannot shut. */}
+              <div className="absolute bottom-0 right-0 left-0 rounded-t-[28px] px-4 pt-4 sheet flex flex-col"
+                style={{ background: "var(--surf)", boxShadow: "0 -8px 40px -8px rgba(13,17,23,.3)",
+                         maxHeight: "88vh", paddingBottom: "max(env(safe-area-inset-bottom),1.5rem)" }}
+                onClick={(e) => e.stopPropagation()}>
+                <div className="shrink-0">
+                  <div className="w-10 h-1 rounded-full mx-auto mb-4" style={{ background: "var(--line)" }} />
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="font-bold text-[var(--txt)]">{tr("بەشەکانی تر")}</div>
+                    <button onClick={() => setMore(false)} aria-label={tr("داخستنی بەشەکانی تر")}
+                      className="p-1.5 text-[var(--txt-3)]"><X className="w-5 h-5" /></button>
+                  </div>
                 </div>
-                {NAV.slice(4).map(([id, t, Ic]) => (
-                  <button key={id} onClick={() => { setPage(id); setDetailId(null); setEditTx(null); setMore(false); }}
-                    className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-[var(--r-sm)] text-sm mb-1 ${isNavActive(id) ? "bg-[var(--pos)] text-white font-semibold" : "text-[var(--txt)] hover:bg-[var(--line)]"}`}>
-                    <Ic className="w-5 h-5" /> {t}
-                  </button>
-                ))}
+                <div className="overflow-y-auto -mx-1 px-1">
+                {/* The same headings as the sidebar, in the same order. A phone screen is
+                  * smaller, not simpler: a person looking for «ناردن» should find it under
+                  * «فیش» here exactly as they would on a desk.
+                  */}
+                <div>
+                  {SHEET_GROUPS.map((group) => (
+                    <div key={group.label} className="mb-2">
+                      <div className="sidebar-section-title px-2 pt-2 pb-1">{group.label}</div>
+                      {group.items.map(([id, t, Ic]) => (
+                        <button key={id} onClick={() => { setPage(id); setDetailId(null); setEditTx(null); setMore(false); }}
+                          className={`w-full flex items-center gap-3 px-4 py-3 rounded-[var(--r-sm)] text-sm mb-1 ${isNavActive(id) ? "bg-[var(--ac)] text-[var(--ac-ink)] font-semibold" : "text-[var(--txt)] hover:bg-[var(--line)]"}`}>
+                          <Ic className="w-5 h-5" /> {t}
+                        </button>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+                {!portalUser && (
+                  <div className="mt-2 pt-3 border-t border-[var(--line)] flex items-center gap-2">
+                    {Object.entries(LANGS).map(([k, v]) => (
+                      <button key={k} onClick={() => changeLang(k)}
+                        className="flex-1 py-2.5 rounded-[var(--r-sm)] text-[12px] font-semibold tap"
+                        style={lang === k
+                          ? { background: "var(--ac)", color: "var(--ac-ink)" }
+                          : { background: "var(--glass)", border: "1px solid var(--line)", color: "var(--txt-2)" }}>
+                        {v.name}
+                      </button>
+                    ))}
+                    <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+                      aria-label={theme === "dark"
+                        ? navSectionLabel("ڕووناککردنی ڕووکار", "Use light theme", "استخدام المظهر الفاتح")
+                        : navSectionLabel("تاریککردنی ڕووکار", "Use dark theme", "استخدام المظهر الداكن")}
+                      className="w-11 h-11 rounded-[var(--r-sm)] tap flex items-center justify-center shrink-0"
+                      style={{ background: "var(--glass)", border: "1px solid var(--line)", color: "var(--txt-2)" }}>
+                      {theme === "dark" ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+                    </button>
+                  </div>
+                )}
                 {isAdmin && (
                   <div className="mt-3 pt-3 border-t border-[var(--line)]">
                     <div className="flex items-center gap-2 text-xs font-semibold text-[var(--txt-2)] mb-2 px-1">
@@ -3442,6 +3507,7 @@ export default function App() {
                     <ViewAsPicker users={data.users} onPick={(id) => { setViewAs(id); setMore(false); }} />
                   </div>
                 )}
+                </div>
               </div>
             </div>
           )}
