@@ -2989,6 +2989,10 @@ export default function App() {
       items: [
         ["dash", tr("داشبۆرد"), LayoutDashboard],
         ["admin-center", navSectionLabel("کاری ئەمڕۆ", "Today's work", "عمل اليوم"), Inbox],
+        // Deleting the tools drawer took the action inbox's only route with it — nav:0 press:0 —
+        // and the navigation test caught it before this was pushed anywhere real. It belongs
+        // here: it is the list of what is waiting, which is what «ئەمڕۆ» is for.
+        ["action-inbox", navSectionLabel("ئینباکسی کارەکان", "Action inbox", "صندوق الإجراءات"), ClipboardCheck],
         ["approvals", navSectionLabel("پەسەندکردن", "Approvals", "الموافقات"), ShieldCheck],
       ],
     },

@@ -98,10 +98,12 @@ test("the manager's own screens are not listed inside a business's admin centre"
 test("the screen opens on the receipts, because that is most of the day", () => {
   const receipts = hub.indexOf('id="today-receipts"');
   const rates = hub.indexOf('id="today-rates"');
-  const tools = hub.indexOf('id="today-tools"');
   assert.ok(receipts > 0, "the receipts section is gone");
   assert.ok(rates > receipts, "the rates are shown above the receipts");
-  assert.ok(tools > rates, "the tools are shown above the work");
+  // The tools section that used to sit below these is gone: sixteen buttons at the foot of one
+  // page is a drawer, not a section, and each of those screens now has a named place in the
+  // navigation. This screen is what its title says — the work waiting today.
+  assert.ok(!hub.includes('id="today-tools"'), "the tools drawer is back");
 });
 
 // A screen that prints four zeroes every morning is a screen that teaches you not to read it.
@@ -119,22 +121,29 @@ test("the counts are read, not stored", () => {
   assert.match(hub, /unpricedCurrencies\(data\?\.currencies \|\| \[\]\)/, "the rates check is not the one the rest of the app uses");
 });
 
+// The guarantee this has always protected is that none of these screens becomes unreachable. It
+// used to be satisfied by the tools drawer listing them; now it is satisfied by the six sections
+// naming them. So it reads the whole file rather than the hub — and it earned its keep the moment
+// the drawer was deleted, when action-inbox was left reachable from nowhere at all.
 test("every screen the admin centre used to offer is still one press away", () => {
   for (const id of ["action-inbox", "approvals", "close", "receipt-review", "receipt-forwarding",
                     "partner-holdings", "debt-center", "cashbox", "partner-accounts",
                     "office-payments", "insights", "integrity", "audit", "export-audit", "backup"]) {
-    assert.ok(hub.includes(`"${id}"`), `${id} disappeared from the admin centre`);
+    const listed = new RegExp(`\\["${id}"`).test(source);
+    const pressed = new RegExp(`go\\("${id}"\\)`).test(source);
+    assert.ok(listed || pressed, `${id} is reachable from nowhere`);
   }
 });
 
 // Two screens called "پشکنینی فیش" meant opening the wrong one and concluding the right one was
 // broken. Names inside one navigation must be distinct.
 test("no two entries share a name", () => {
-  // Only the entries themselves — `["id", label(…), Icon]`. A name repeated in the prose of a
-  // tile that points at the same screen is the screen being called what it is called, twice,
-  // which is the opposite of the problem: two different destinations wearing one name.
-  const entries = [...hub.matchAll(/\["([a-z-]+)", label\("[^"]+", "([^"]+)"/g)];
-  assert.ok(entries.length >= 10, `expected the tools to be listed, found ${entries.length}`);
+  // The entries themselves, wherever they are declared — the navigation now, the tools drawer
+  // before. A name repeated in the prose of a tile that points at the same screen is the screen
+  // being called what it is called twice, which is the opposite of the problem: two different
+  // destinations wearing one name.
+  const entries = [...source.matchAll(/\["([a-z-]+)", (?:label|navSectionLabel)\("[^"]+", "([^"]+)"/g)];
+  assert.ok(entries.length >= 10, `expected the navigation to be listed, found ${entries.length}`);
   const seen = new Map();
   for (const [, id, name] of entries) {
     assert.ok(!seen.has(name) || seen.get(name) === id,
