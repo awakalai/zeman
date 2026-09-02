@@ -38,7 +38,6 @@ img, svg, canvas, video {
 }
 
 /* Tables remain usable on small screens without forcing the page itself wider. */
-.table-responsive,
 .overflow-x-auto {
   max-width: 100%;
   -webkit-overflow-scrolling: touch;
@@ -55,14 +54,6 @@ textarea {
 }
 
 @media (max-width: 430px) {
-  /* Compact page gutters */
-  .max-w-7xl,
-  .max-w-6xl,
-  .max-w-5xl,
-  .max-w-4xl {
-    max-width: 100%;
-  }
-
   /* Keep dashboard cards readable */
   .grid {
     min-width: 0;
@@ -83,11 +74,9 @@ textarea {
 
 @media (max-width: 390px) {
   /* Extra-small devices: reduce visual density without changing content */
-  .gap-6 { gap: 1rem; }
   .gap-5 { gap: .875rem; }
   .p-6 { padding: 1rem; }
   .px-6 { padding-left: 1rem; padding-right: 1rem; }
-  .py-6 { padding-top: 1rem; padding-bottom: 1rem; }
 }
 
 @media (max-width: 375px) {
@@ -115,46 +104,6 @@ textarea {
   }
 }
 
-/* Large desktop: don't allow content to become excessively stretched. */
-@media (min-width: 1440px) {
-  .max-w-7xl {
-    margin-left: auto;
-    margin-right: auto;
-  }
-}
-
-/* Phase 9 — audit/report presentation utilities */
-.sarraf-audit-table{width:100%;border-collapse:separate;border-spacing:0}
-.sarraf-audit-table th{font-size:11px;font-weight:600;text-align:start;color:var(--muted,#7b8190);padding:10px 12px;white-space:nowrap}
-.sarraf-audit-table td{font-size:12px;padding:12px;border-top:1px solid var(--border,#eceef2);vertical-align:middle}
-.sarraf-report-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
-.sarraf-report-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
-@media (max-width:900px){.sarraf-report-summary{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media (max-width:640px){
-  .sarraf-report-summary{grid-template-columns:1fr}
-  .sarraf-audit-table{min-width:680px}
-}
-
-/* Phase 8 — search/filter presentation only */
-.sarraf-search-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.sarraf-search-input{min-width:220px;flex:1}
-.sarraf-filter-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-.sarraf-filter-chip{white-space:nowrap}
-@media (max-width:640px){
-  .sarraf-search-toolbar{align-items:stretch}
-  .sarraf-search-input{min-width:0;width:100%}
-  .sarraf-filter-row{width:100%;overflow-x:auto;flex-wrap:nowrap;padding-bottom:2px}
-  .sarraf-filter-chip{flex:0 0 auto}
-}
-
-/* Phase 7 — presentation utilities only */
-.sarraf-detail-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
-.sarraf-detail-item{min-width:0}
-.sarraf-detail-label{font-size:11px;line-height:1.4;color:var(--muted,#7b8190);margin-bottom:4px}
-.sarraf-detail-value{font-size:13px;line-height:1.5;font-weight:600;overflow-wrap:anywhere}
-@media (max-width:640px){
-  .sarraf-detail-grid{grid-template-columns:1fr;gap:10px}
-}
 /* ══════════════════ ONE PALETTE ══════════════════
  *
  * There were two. This block was written first, and a second :root labelled
@@ -249,7 +198,6 @@ html[lang="en"] body, html[lang="en"] input, html[lang="en"] select, html[lang="
 .aura::before{content:'';position:absolute;inset:-30% -10% auto -10%;height:65%;background:radial-gradient(55% 90% at 50% 0%,rgba(var(--ac-gl),.16),transparent 70%);pointer-events:none}
 
 /* reference-style shell */
-.sarraf-shell { min-height:100vh; background:var(--bg); }
 .sarraf-sidebar { background:#0B0D0F; color:#A9B0B8; box-shadow:10px 0 35px rgba(0,0,0,.08); }
 .sarraf-sidebar .nav-active { background:var(--ac); color:var(--ac-ink) !important; box-shadow:0 8px 20px rgba(var(--ac-gl),.18); }
 .sarraf-sidebar .nav-item:hover { background:rgba(255,255,255,.07); color:#fff !important; }
@@ -262,7 +210,6 @@ html[lang="en"] body, html[lang="en"] input, html[lang="en"] select, html[lang="
 .fin-green { background:linear-gradient(145deg,color-mix(in srgb,var(--ac) 88%,#fff) 0%,var(--ac) 52%,var(--ac-2) 100%); color:var(--ac-ink); border-color:transparent; box-shadow:0 14px 34px rgba(var(--ac-gl),.20); }
 .fin-green .muted { color:rgba(4,25,15,.62); }
 .fin-green .white-muted { color:rgba(255,255,255,.82); }
-.fin-input { background:var(--surf); border:1px solid var(--line); }
 
 ::-webkit-scrollbar{width:7px;height:7px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:99px}
 input,select,textarea{color-scheme:light} [data-theme="dark"] input,[data-theme="dark"] select,[data-theme="dark"] textarea{color-scheme:dark}
@@ -308,11 +255,6 @@ body{
 }
 .zeman-system-status.is-live .is-green{box-shadow:0 0 0 4px var(--pos-bg),0 0 11px color-mix(in srgb,var(--pos) 78%,transparent)}
 .zeman-system-status.is-attention .is-red{box-shadow:0 0 0 4px var(--neg-bg),0 0 11px color-mix(in srgb,var(--neg) 78%,transparent)}
-.sarraf-brand-mark{
-  background:linear-gradient(145deg,#2BDE8D,#18C877);
-  color:#07130D;
-  box-shadow:0 8px 20px rgba(var(--ac-gl),.18),inset 0 1px 0 rgba(255,255,255,.42);
-}
 .sarraf-sidebar{
   background:linear-gradient(180deg,#0C120F 0%,#0A0F0D 100%);
   border-inline-end:1px solid rgba(255,255,255,.055);
