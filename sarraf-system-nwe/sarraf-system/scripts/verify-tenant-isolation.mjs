@@ -1491,6 +1491,37 @@ try {
     }
   });
 
+  // ── the manager's opening screen ────────────────────────────────────────────
+  //
+  // sarraf_manager_overview has answered since 202608230001 and nothing had ever read it. It is
+  // now the first screen a manager meets, which means it must be held to the same rule as
+  // sarraf_manager_attention above: it may count people and name administrators, and it may not
+  // report one riyal of anybody's money.
+  //
+  // It was written before that rule existed and had no check of its own — a view nobody opened
+  // is a view nobody audited. Both facts arrived on the same day.
+  check("the manager's opening screen reports no amount from anybody's books", () => {
+    const out = asDefiner(MGR, `select public.sarraf_manager_overview()::text`);
+    for (const forbidden of ["amount", "total", "balance", "profit", "rate", "cashbox", "debt"]) {
+      if (out.includes(`"${forbidden}"`)) {
+        throw new Error(`the manager's opening screen reported ${forbidden} from a business's books`);
+      }
+    }
+    // It must still be answering: a function that returned an empty object would pass the loop
+    // above for the wrong reason.
+    const parsed = JSON.parse(out);
+    if (!Array.isArray(parsed.administrators) || typeof parsed.manager_count !== "number") {
+      throw new Error(`the overview answered ${out.slice(0, 160)}`);
+    }
+  });
+
+  check("a business owner cannot read the manager's opening screen", () => {
+    let refused = false;
+    try { asDefiner(A_UID, `select public.sarraf_manager_overview()::text`); }
+    catch { refused = true; }
+    if (!refused) throw new Error("a business owner read the whole installation's overview");
+  });
+
   check("a business owner cannot read the vendor's console", () => {
     let refused = false;
     try { asDefiner(A_UID, `select public.sarraf_manager_attention(30)::text`); }
