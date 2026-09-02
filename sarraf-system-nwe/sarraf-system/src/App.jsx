@@ -1369,7 +1369,16 @@ export default function App() {
       const queryErrors = [c, u, l, t, a, ac, rh, apr, ape, tv, ctrl, rt].filter((r) => r?.error);
       if (rm?.error) console.warn("server read model unavailable; using client fallback", rm.error);
       if (adminMode && rt?.error) {
-        setAccessError("Runtime Contract بەردەست نییە — Phase 13F migration/deployment بپشکنە");
+        // «Runtime Contract بەردەست نییە — Phase 13F migration/deployment بپشکنە» stood here,
+        // full-screen, as the only thing a currency dealer was left looking at. It named a
+        // contract, a phase number and two deployment steps, and offered no action any of
+        // them could take. The neighbouring message one line below already does this right:
+        // «ئەکاونتەکەت بە سیستەمەکە نەبەستراوە — پەیوەندی بە ئەدمینەوە بکە.»
+        //
+        // The marker is not lost — it goes to the console, where the person who can act on it
+        // is the person who would look.
+        console.error("runtime contract unavailable — check the Phase 13F migration/deployment", rt.error);
+        setAccessError(tr("سیستەمەکە ئامادە نییە — نوێکردنەوەی داتابەیس تەواو نەبووە. پەیوەندی بە پشتگیرییەوە بکە."));
         setAccessState("error");
         throw rt.error;
       }
@@ -1548,7 +1557,11 @@ export default function App() {
     if (error) {
       const msg = String(error?.message || "");
       if (error?.code === "PGRST202" || /function .* does not exist|could not find the function/i.test(msg)) {
-        throw new Error("Production migration ـەکە هێشتا لە Supabase جێبەجێ نەکراوە");
+        // Same reasoning as the access error above: the person reading this cannot apply a
+        // migration, and telling them the name of the thing that is missing does not change
+        // that. The detail stays in the console for whoever can.
+        console.error("a database command is missing — the production migration has not been applied", error);
+        throw new Error(tr("ئەم کارە ئێستا نییە — نوێکردنەوەی داتابەیس تەواو نەبووە. پەیوەندی بە پشتگیرییەوە بکە."));
       }
       if (error?.code === "55000" || /financial writes are frozen/i.test(msg)) {
         throw new Error("ڕاگرتنی فریاکەوتن چالاکە — هیچ گۆڕانکارییەکی دارایی جێبەجێ ناکرێت");
