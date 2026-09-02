@@ -280,6 +280,9 @@ export async function intakeReceipt({
 }
 
 /** Submit only durable document identities; the server decides each legal next state. */
+// unreached-by-design: sarraf_receipt_submit is live — the accounting and business-flows gates
+// both drive it — but the app submits receipts one at a time through the review path. This
+// wrapper is the tested mapping to the batch form, kept for the screen that would use it.
 export async function submitReceiptDocuments(client, documentIds, commandKey = null) {
   const ids = [...new Set((documentIds || []).filter(Boolean))];
   if (!ids.length) throw zemanRule("هیچ فیشێکی پارێزراو نییە بۆ ناردن");
@@ -369,19 +372,17 @@ export function mayBeReplaced(receipt) {
   return receiptOutcome(receipt) === "rejected" && !receipt?.replacedBy;
 }
 
-/** An uploader's own receipts and where each one has got to. */
-export async function loadMyIntakes(client, limit = 50) {
-  const { data, error } = await client.rpc("sarraf_my_receipt_intakes", { p_limit: limit });
-  if (error) throw error;
-  return (data || []).map((r) => ({
-    id: r.id,
-    state: r.state,
-    flow: r.flow,
-    receivedAt: r.received_at,
-    ocrAttempts: r.ocr_attempts ?? 0,
-    reason: r.rule_reason,
-  }));
-}
+// loadMyIntakes was here, and it is gone on purpose.
+//
+// It called sarraf_my_receipt_intakes — the one-argument version that answers "what is MINE",
+// based on whoever is signed in. That question is the View As defect itself: an administrator
+// previewing a customer's portal was shown their own receipts, listed as that customer's.
+// 202609010008 replaced it with sarraf_my_receipt_intakes_v2, which takes a SUBJECT and lets the
+// server decide who may name one, and loadMyReceipts above is what every caller uses now.
+//
+// Nothing had called this since. Leaving a function in the codebase that asks the superseded
+// question is an invitation to call it again, so the reachability rule in verify:source found it
+// and it is deleted rather than kept "just in case".
 
 /** Plain-language status for an uploader; never internal OCR detail or a false loss. */
 export function intakeStatusText(state) {

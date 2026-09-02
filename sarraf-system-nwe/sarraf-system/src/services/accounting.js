@@ -493,3 +493,55 @@ export function moneyAtOfficeText(row, lang = "ku") {
   const office = row?.officeName || "—";
   return row?.advanceHeld === true ? words.held(office) : words.owed(office);
 }
+
+/**
+ * Sending money to an office before it pays on the owner's behalf (§5.2, §6.1).
+ *
+ *   «کاتێک هەر مامەڵەیەک دەکەم، ئەگەر پارەکەی نوسینگە بیدات، ئەوە لای من لە قاسە دەڕوات و
+ *    دەچێتە ناو حسابی نوسینگە.»
+ *
+ * The owner chose this model — «بەڵێ، پارە لە قاسەی من دەچێتە لای نووسینگە» — and
+ * 202609010013 implements it: Dr acc-1300 / Cr acc-1000, plus a ledger row out of the safe and
+ * one into the office. The server refuses an advance the safe cannot cover; this passes that
+ * refusal on rather than deciding anything about it here.
+ */
+export async function officeAdvance(client, {
+  officeId, currencyCode, amount, reason = null, commandKey,
+}) {
+  const { data, error } = await client.rpc("sarraf_office_advance", {
+    p_office_id: officeId,
+    p_currency_code: currencyCode,
+    p_amount: amount,
+    p_reason: reason,
+    p_command_key: commandKey,
+  });
+  if (error) throw error;
+  const answer = data || {};
+  return {
+    officeId: answer.office_id ?? officeId,
+    currency: answer.currency ?? currencyCode,
+    amount: Number(answer.amount ?? amount),
+    entryId: answer.entry_id || null,
+    replayed: answer.replayed === true,
+  };
+}
+
+/**
+ * What each office is physically holding, which is not the same question as what it is owed.
+ *
+ * An office that has been advanced money is holding the owner's cash; an office that paid out of
+ * its own pocket is owed. Both are real and they are opposite, so they are read separately and
+ * never added together.
+ */
+export async function loadOfficeHoldings(client, officeId = null) {
+  const { data, error } = await client.rpc("sarraf_office_holdings", {
+    p_office_id: officeId || null,
+  });
+  if (error) throw error;
+  return (data || []).map((r) => ({
+    officeId: r.office_id,
+    officeName: r.office_name || r.office_id,
+    currencyId: r.cur_id,
+    holding: Number(r.holding ?? 0),
+  }));
+}

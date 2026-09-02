@@ -238,6 +238,81 @@ for (const file of tracked) {
   }
 }
 
+// ── a command with no button is not a feature ────────────────────────────────────────────────
+//
+// Three times in one week I finished a server command — the commission and its accounts, the
+// office advance, the Explain Balance view — wrote its migration, applied it live, covered it
+// with unit tests and an isolation check, and reported the requirement done. And no screen called
+// any of them. Every gate passed, because every gate was asking about the half that existed.
+//
+// From the owner's side that is not a finished feature; it is a function in a database they
+// cannot reach. So the reachability is asked here: a service function that performs an RPC is a
+// command somebody is meant to press, and if no component ever names it, either the screen is
+// missing or the function is dead. Both are worth being stopped for.
+//
+// Helpers that only shape or validate data are not commands and are not asked about — the rule
+// looks only at functions whose own body calls client.rpc or client.storage.
+const SERVICE_DIR = "src/services";
+const componentText = tracked
+  .filter((f) => f.endsWith(".jsx"))
+  .map((f) => text(f))
+  .join("\n");
+
+// Is this service file itself imported by something the owner can open? One level, which is what
+// this codebase actually does — a component imports a service, and a service may lean on a
+// sibling. A chain longer than that would be worth flagging on its own.
+const componentReaches = (serviceFile) => {
+  const base = serviceFile.split("/").pop().replace(/\.js$/, "");
+  return componentText.includes(`/${base}`);
+};
+
+for (const file of tracked.filter((f) => f.startsWith(SERVICE_DIR) && f.endsWith(".js"))) {
+  const source = text(file);
+  const exports = [...source.matchAll(/export\s+(?:async\s+)?function\s+(\w+)/g)];
+  for (let i = 0; i < exports.length; i += 1) {
+    const name = exports[i][1];
+    const from = exports[i].index;
+    const to = i + 1 < exports.length ? exports[i + 1].index : source.length;
+    const body = source.slice(from, to);
+    if (!/client\.rpc\(|client\.storage\b/.test(body)) continue;
+    // Reached directly by a component, by another service, or by a sibling in its own file.
+    //
+    // That last case is not a technicality and the first version of this rule got it wrong:
+    // noteReceiptUploadFailure is called only by intakeReceipt, three functions below it in the
+    // same file, and intakeReceipt is what the upload screen calls. Flagging it would have
+    // invited deleting the one line that records why an upload failed. A function reached
+    // through another function is reached.
+    const withinOwnFile = (source.slice(0, from) + source.slice(to)).includes(name);
+    // A TEST IS NOT A SCREEN, and this rule passed while measuring nothing until it said so.
+    //
+    // The first version counted any tracked .js file as "reached". Every one of the three
+    // unreachable commands had unit tests — that is how they got as far as being reported done —
+    // so the test file satisfied the rule and the gate agreed with me. Proved by deleting the
+    // commission screen: the rule stayed green. Only a component, or a service a component
+    // reaches, counts as somewhere the owner can get to.
+    const elsewhere = tracked
+      .filter((f) => f !== file && f.startsWith(SERVICE_DIR) && f.endsWith(".js"))
+      .some((f) => text(f).includes(name) && componentReaches(f));
+    // A narrow, visible escape, and the reason it is narrow.
+    //
+    // sarraf_receipt_submit is real, live behaviour — the accounting gate and the business-flows
+    // gate both drive it — but the app submits receipts one at a time through the review path, so
+    // its client wrapper has no screen. That is neither a missing feature nor dead code, and
+    // deleting a tested mapping to a working command would be a loss.
+    //
+    // So a wrapper may say so, in one line, directly above its export. It has to be written by a
+    // person and it shows up in the diff, which is the difference between an exemption and a hole:
+    // every one of these had to be looked at to get here, and the four that turned out to be
+    // missing screens were built rather than annotated.
+    const exempt = /\/\/\s*unreached-by-design:\s*\S/.test(source.slice(Math.max(0, from - 400), from));
+    if (!exempt && !componentText.includes(name) && !elsewhere && !withinOwnFile) {
+      fail(`${file}: ${name}() calls the server and no screen ever reaches it. `
+        + `Either the screen it belongs to was never built, or the function is dead. `
+        + `A command the owner cannot press is not a finished feature.`);
+    }
+  }
+}
+
 const workflow = text("../../.github/workflows/verify.yml");
 for (const required of ["npm ci", "npm test", "npm run build", "npm run verify:accounting", "npm run verify:roles", "npm audit --audit-level=high"]) {
   if (!workflow.includes(required)) fail(`CI is missing required gate: ${required}`);
