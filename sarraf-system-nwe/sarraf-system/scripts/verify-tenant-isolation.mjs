@@ -1668,6 +1668,89 @@ try {
     if (held !== "false") throw new Error(`the office reads as holding money it was never sent: ${held}`);
   });
 
+  // ── a hundred receipts leaving at once ──────────────────────────────────────
+  //
+  //   «ئەو فیشانەی لە ئەکاونتی مشتەرییەکاندا هەیە... پێویستە بتوانرێت بە کۆمەڵ بۆ نمونە تا
+  //    ١٠٠ دانە بەیەکەوە فۆرۆرد بکرێت و بنێررێت بۆ واتس ئەپ.»
+  //
+  // A hundred document ids arriving from a checkbox column is the shape of request where a
+  // per-row authorization check quietly stops happening — it is tempting to check the first one,
+  // or to check the customer once and trust the rest of the list. 202609020001 writes it as a
+  // WHERE clause instead, and this is where that claim gets tested rather than asserted: a list
+  // that mixes one customer's receipts with another's, put to the server, and the answer counted.
+  const bundled = (uid, ids, subject) => asUser(uid,
+    `select coalesce(string_agg(document_id, ',' order by document_id), '<none>')
+       from public.sarraf_release_receipts_for_bundle(
+         array[${ids.map((i) => `'${i}'`).join(",")}]::text[],
+         ${subject === null ? "null" : `'${subject}'`})`).trim();
+
+  check("a customer bundling their own receipts gets their own", () => {
+    const seen = bundled(PORTAL_C1_UID, ["vas-doc1"], "vas-c1");
+    if (seen !== "vas-doc1") throw new Error(`saw ${seen}, expected vas-doc1`);
+  });
+
+  // The check that matters. A list containing somebody else's receipt does not fail loudly and
+  // does not release it: the id is simply absent from the answer.
+  check("a receipt belonging to somebody else is dropped from the list, not released", () => {
+    const seen = bundled(PORTAL_C1_UID, ["vas-doc1", "vas-doc2", "vas-doca"], "vas-c1");
+    if (seen !== "vas-doc1") throw new Error(`saw ${seen}, which released a receipt not theirs`);
+  });
+
+  check("a customer cannot bundle another customer's receipts by naming them", () => {
+    refused(PORTAL_C1_UID,
+      "select * from public.sarraf_release_receipts_for_bundle(array['vas-doc2']::text[], 'vas-c2')",
+      "one customer bundling another customer's receipts");
+  });
+
+  check("an administrator bundling for a customer gets that customer's receipts", () => {
+    const seen = bundled(PORTAL_ADMIN, ["vas-doc1", "vas-doc2", "vas-doca"], "vas-c2");
+    if (seen !== "vas-doc2") throw new Error(`saw ${seen}, expected only vas-doc2`);
+  });
+
+  check("the other business's owner cannot bundle a customer of this one", () => {
+    refused(B_UID,
+      "select * from public.sarraf_release_receipts_for_bundle(array['vas-doc1']::text[], 'vas-c1')",
+      "an owner of another business bundling this one's customer");
+  });
+
+  // §11 names one hundred. Truncating silently would hand somebody ninety-nine of the hundred
+  // and twenty they asked for with no way to know which twenty-one are absent.
+  check("more than a hundred receipts is refused rather than quietly truncated", () => {
+    const many = Array.from({ length: 101 }, (_, i) => `'vas-doc1'`).join(",");
+    refused(PORTAL_C1_UID,
+      `select * from public.sarraf_release_receipts_for_bundle(array[${many}]::text[], 'vas-c1')`,
+      "a bundle of more than one hundred receipts");
+  });
+
+  // Handing out a hundred receipt images is the largest disclosure this system makes, and it
+  // leaves through a share sheet the system cannot follow. A release that left no trace would be
+  // a hole in the audit trail exactly where it matters most.
+  //
+  // Clearing the old rows first is not an option, and finding that out is itself the point: the
+  // audit table refuses a delete with "audit is append-only". So the check takes a mark before
+  // the release and reads only what appeared after it.
+  check("every release writes down who released how many, for whom", () => {
+    const before = psql(`select count(*) from public.audit
+                          where action = 'دەرکردنی کۆمەڵی فیش'`).trim();
+    bundled(PORTAL_ADMIN, ["vas-doc1", "vas-doc2", "vas-doca"], "vas-c2");
+    const after = psql(`select count(*) from public.audit
+                         where action = 'دەرکردنی کۆمەڵی فیش'`).trim();
+    if (Number(after) !== Number(before) + 1) {
+      throw new Error(`a release of three receipts wrote ${Number(after) - Number(before)} audit rows`);
+    }
+    const row = psql(`select coalesce(user_id || ' | ' || detail, '<none>') from public.audit
+                       where action = 'دەرکردنی کۆمەڵی فیش'
+                       order by date desc, id desc limit 1`).trim();
+    if (!row.startsWith("iso-a")) throw new Error(`the audit row does not name the actor: ${row}`);
+    // One of three released — the row must say what actually left, not what was asked for.
+    if (!/\b1 .*\b3 /.test(row)) {
+      throw new Error(`the audit row does not say how many of how many: ${row}`);
+    }
+    if (!row.includes("vas-c2") && !row.includes("بۆ ")) {
+      throw new Error(`the audit row does not name who it was for: ${row}`);
+    }
+  });
+
   // ── the balance nobody could explain ────────────────────────────────────────
   //
   // The owner reported a CNY cashbox that goes negative for no visible reason. It is not one bad
