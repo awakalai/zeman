@@ -44,6 +44,33 @@ test("the manager's navigation carries the installation and its health", () => {
   }
 });
 
+// sarraf_manager_overview has returned the administrators, the counts by role and the last fifty
+// changes across the whole installation since 202608230001, and until now no screen asked it. A
+// route that exists on the server and nowhere in the interface is a feature that was never built,
+// so this pins the three pieces that make it openable: nav entry, allowed page, rendered route.
+test("the manager can open the installation at a glance", () => {
+  assert.ok(managerNav.includes('"manager-overview"'),
+    "the overview is not in the manager's navigation");
+  assert.match(source, /"manager-overview",/, "manager-overview is not an allowed page");
+  assert.match(source, /page === "manager-overview" && <DeferredPanel><ManagerOverview/,
+    "manager-overview has no route");
+});
+
+// No cashbox, no profit, no total. The manager belongs to no business, so any figure on this
+// screen would be a figure out of somebody else's books.
+test("the installation overview shows no business's money", () => {
+  const overview = readFileSync(
+    new URL("../src/components/accounting/ManagerOverview.jsx", import.meta.url), "utf8");
+  // What it may read, rather than a list of words it may not contain: the imports are the whole
+  // of what a component can reach, so pinning them says more than any search for "profit" — and
+  // says it about the code rather than about the prose explaining the code.
+  const services = [...overview.matchAll(/from "\.\.\/\.\.\/services\/([A-Za-z]+)/g)]
+    .map((m) => m[1]).sort();
+  assert.deepEqual(services, ["adminRanks", "managerConsole", "userFacingError"],
+    "the overview reaches a service that can return one business's money");
+  assert.match(overview, /loadManagerOverview/, "the overview does not read the server's view");
+});
+
 test("the manager lands on the businesses, not on an exchange's dashboard", () => {
   assert.match(source, /adminLevel === "manager" && page === "dash"[\s\S]{0,120}setPage\("manager-console"\)/,
     "the manager still lands on the trading dashboard");

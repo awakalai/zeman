@@ -298,3 +298,40 @@ const ENTRIES_UNPOSTED = {
   en: "Journal entries not posted",
   ar: "قيود غير مُرحَّلة",
 };
+
+/**
+ * The installation at a glance — the first thing a manager should see.
+ *
+ * sarraf_manager_overview has existed since 202608230001 and nothing has ever read it. It
+ * answers the questions the person who sold the software actually opens the application with:
+ * how many businesses are on it, who administers them, and what has changed lately across the
+ * whole installation rather than inside one business's books.
+ *
+ * No money appears here and none is available to. A manager is not a party to anybody's trades,
+ * and the function returns counts and names — enough to know an installation is in use, not
+ * enough to be looking at somebody's money.
+ */
+export async function loadManagerOverview(client) {
+  const { data, error } = await client.rpc("sarraf_manager_overview");
+  if (error) throw error;
+  const answer = data || {};
+  return {
+    administrators: (answer.administrators || []).map((a) => ({
+      id: a.id,
+      name: a.name || a.id,
+      level: a.level || null,
+      phone: a.phone || null,
+      deleted: a.deleted === true,
+      createdAt: a.created_at || null,
+    })),
+    byRole: answer.by_role || {},
+    managerCount: Number(answer.manager_count ?? 0),
+    ownerCount: Number(answer.owner_count ?? 0),
+    // Newest first, as the server orders them. Fifty is the server's limit, not a page size.
+    recentChanges: (answer.recent_changes || []).map((c) => ({
+      at: c.at || null,
+      action: c.action || "",
+      detail: c.detail || "",
+    })),
+  };
+}

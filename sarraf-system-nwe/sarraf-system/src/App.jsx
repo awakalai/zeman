@@ -47,7 +47,7 @@ import {
   LayoutDashboard, Vault, ArrowLeftRight, ListOrdered, Users, Handshake, Boxes,
   TrendingUp, Building2, Banknote, UserCog, PieChart, History, Plus, Trash2, Pencil,
   CheckCircle2, AlertTriangle, Eye, LogOut, Wallet, ChevronLeft, Coins,
-  Receipt, TrendingDown, ScanLine, Scale, Upload, XCircle, SlidersHorizontal, Search, MoreHorizontal, Zap, ArrowDownLeft, ArrowUpRight, X, Share2, Database, Download, ClipboardCheck, RotateCcw, MessageCircle, Moon, Sun, WifiOff, Wifi, EyeOff, Bell, QrCode, Camera, Fingerprint, ShieldCheck, KeyRound, Inbox, ShieldAlert, FileCheck2, Send, Clock
+  Receipt, TrendingDown, ScanLine, Scale, Upload, XCircle, SlidersHorizontal, Search, MoreHorizontal, Zap, ArrowDownLeft, ArrowUpRight, X, Share2, Database, Download, ClipboardCheck, RotateCcw, MessageCircle, Moon, Sun, WifiOff, Wifi, EyeOff, Bell, QrCode, Camera, Fingerprint, ShieldCheck, KeyRound, Inbox, ShieldAlert, FileCheck2, Send, Clock, Gauge
 } from "lucide-react";
 
 const lazyNamed = (loader, name) => React.lazy(() => loader().then((module) => ({ default: module[name] })));
@@ -70,6 +70,7 @@ const FaultList = lazyNamed(() => import("./components/system/FaultList"), "Faul
 const PartnerHoldings = lazyNamed(() => import("./components/accounting/PartnerHoldings"), "PartnerHoldings");
 const ManagerCenter = lazyNamed(() => import("./components/accounting/ManagerCenter"), "ManagerCenter");
 const ManagerConsole = lazyNamed(() => import("./components/accounting/ManagerConsole"), "ManagerConsole");
+const ManagerOverview = lazyNamed(() => import("./components/accounting/ManagerOverview"), "ManagerOverview");
 const ReceiptReviewWorkspace = lazyNamed(() => import("./components/receipts/ReceiptReviewWorkspace"), "ReceiptReviewWorkspace");
 const ReceiptForwardingCenter = lazyNamed(() => import("./components/receipts/ReceiptForwardingCenter"), "ReceiptForwardingCenter");
 const ForwardedReceipts = lazyNamed(() => import("./components/receipts/ForwardedReceipts"), "ForwardedReceipts");
@@ -201,6 +202,7 @@ const ADMIN_CENTER_PAGE_IDS = new Set([
   "explain-balance",
   "manager-center",
   "manager-console",
+  "manager-overview",
   "receipt-review",
   "receipt-forwarding",
   "backup",
@@ -2948,6 +2950,10 @@ export default function App() {
     {
       label: navSectionLabel("دامەزراندن", "Installation", "التثبيت"),
       items: [
+        // The installation at a glance. sarraf_manager_overview has answered this since
+        // 202608230001 and no screen had ever asked it — the manager had a console listing
+        // businesses and no way to see the whole of what they maintain.
+        ["manager-overview", navSectionLabel("سیستەم بە گشتی", "System at a glance", "النظام في لمحة"), Gauge],
         ["manager-console", navSectionLabel("سەرخێڵەکان", "Businesses", "الأعمال"), Building2],
         ["manager-center", navSectionLabel("ئەکاونت و پلەکان", "Accounts & ranks", "الحسابات والرتب"), KeyRound],
       ],
@@ -3368,6 +3374,8 @@ export default function App() {
               request={adminUserRequest} onDone={loadAll} /></DeferredPanel>}
             {page === "manager-console" && <DeferredPanel><ManagerConsole client={supabase}
               lang={lang} isManager={isSystemManager} flash={flash} /></DeferredPanel>}
+            {page === "manager-overview" && <DeferredPanel><ManagerOverview client={supabase}
+              lang={lang} /></DeferredPanel>}
             {page === "cashbox" && <DeferredPanel><CashboxPanel client={supabase} lang={lang} flash={flash}
               customers={(data?.users || []).filter((u) => u.role === "customer" && !u.deleted)}
               rateFor={(code) => { const c = (data?.currencies || []).find((x) => x.code === code);
