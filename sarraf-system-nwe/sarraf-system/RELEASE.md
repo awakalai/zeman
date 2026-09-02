@@ -24,8 +24,8 @@ Each link is a gate that runs in CI and fails the `verified` check if it breaks.
 | Brand, share, search, readiness | `verify:brand` `verify:share` `verify:search` `verify:production` | the repository | — |
 | Free variables | `verify:names` | the repository | every handler |
 | Three languages | `verify:i18n` | the repository | no untranslated string, no alias |
-| Unit and service tests | `npm test` | pure modules | **886 tests** |
-| Accounting contracts | `verify:accounting` | real migrations, real PostgreSQL | **317 checks** |
+| Unit and service tests | `npm test` | pure modules | **890 tests** |
+| Accounting contracts | `verify:accounting` | real migrations, real PostgreSQL | **344 checks** |
 | Business flows | `verify:flows` | real migrations, real PostgreSQL | **25 flows, 152 steps** |
 | Receipt reliability | `verify:receipts` | real migrations, real PostgreSQL | **35 checks** |
 | Tenant isolation | `verify:isolation` | real migrations, real PostgreSQL | **123 checks** |
@@ -261,8 +261,37 @@ No history was deleted, no posted row modified, no migration rewritten, no RLS d
 The later rounds kept the same rule. `sarraf_partner_batch_detail` was re-declared so a batch
 split between two partners shows each of them what they actually hold — a visibility change, not
 an accounting one; the sums it reports come from the same columns as before. `202609020002` adds
-no table, no constraint and no column. The 317 accounting contracts and 25 business flows are
+no table, no constraint and no column. The 344 accounting contracts and 25 business flows are
 what prove the results did not move.
+
+### 5b. What the owner's correction did change, on purpose
+
+The owner read the finished system and said several things had been misunderstood. Those are
+changes to what the system does, not refactors, and they are listed here rather than left to be
+inferred from a diff.
+
+- **`202609020003` — مامەڵەی عمولە.** A fourth `business_flow`, two new nullable columns on
+  `txs` (`from_account_id`, `to_account_id`), and one new command. The unnamed
+  `check (cur_id <> against_id)` the table has carried since the legacy baseline is replaced by a
+  named constraint carrying the same rule plus the commission exception. Ordinary trades are
+  unaffected: every one of the 25 business flows still produces the same result.
+- **`202609020004` — money enters a named place.** `sarraf_post_ledger_command` now honours
+  `cash_account_id`, a column `ledger` has carried since `202609010011`. A row that names no
+  place is the cash, which is what every row written before this meant, so nothing existing
+  changes meaning. It also **corrects a defect**: the sufficiency check summed every row of a
+  currency, which was the cashbox exactly while nothing had ever named an account, and would
+  have let a cash withdrawal be funded by money sitting in a bank the moment one did. On the
+  live data both readings return the same number for every currency.
+- **`202609020005` — `sarraf_service_transaction` dropped.** It modelled a principal plus a
+  separate fee, which the owner said was a misreading. Only the command is dropped. Every ledger
+  row, journal entry and audit line any past service wrote stays where it is and keeps
+  reconciling.
+- **`202609020006` — a debt can be paid.** The register could offset and forgive; it could not
+  record money actually moving. Settlement goes through `debt_settlements`, which already owns
+  the debt's balance and status, so there is one path for a payment and not two.
+- **`202609020007` — a debtor can be told.** One new notification kind, and a narrow insert
+  policy so the command that writes it — which runs as `sarraf_definer`, not as the superuser
+  every notification trigger before it used — may write inside its own tenant and nowhere else.
 
 ## 6. What this document does NOT claim
 
@@ -278,6 +307,9 @@ Stated plainly, because a reader in a hurry will take silence for a guarantee.
   20,000 rows of history. Nobody has run this system under concurrent real traffic.
 - **It is not a legal or compliance review.** Whether this installation satisfies the obligations
   of a money-services business in its jurisdiction is not a question any gate here answers.
+- **It is not a claim that the interface has been used in anger.** The owner's corrections were
+  built and gated, and `verify:roles` and `verify:journey` drive them in a real browser. Nobody
+  has yet run a day's real trading through the rebuilt قاسە, receipts and debt screens.
 - **Two trades are still outside the books.** `mtc4exnjokonia` and `mtcr13cvgpfdg9` remain draft
   journal entries awaiting a USD→CNY rate. The trial balance in §2 balances without them, which
   is exactly why they must be finished rather than forgotten: the books are consistent and
