@@ -15,6 +15,9 @@
  * made, so that a refusal arrives before anything is attempted rather than after.
  */
 
+import { activeLanguage } from "./activeLanguage.js";
+import { zemanRule } from "./userFacingError";
+
 const id = () => globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 const clean = (v) => String(v ?? "").normalize("NFKC").trim();
 
@@ -26,6 +29,17 @@ export const offsetCommandKey = (leftId, rightId) =>
   `debt-offset:${clean(leftId).slice(0, 60)}:${clean(rightId).slice(0, 60)}:${id()}`;
 export const writeOffCommandKey = (debtId) =>
   `debt-write-off:${clean(debtId).slice(0, 60)}:${id()}`;
+// Both servers refuse a key that is not their own prefix followed by 8-200 characters of
+// [A-Za-z0-9:_-], so the shape is built here rather than left to each caller to remember.
+const safeSubject = (value) => String(value ?? "").replace(/[^A-Za-z0-9:_-]/g, "-").slice(0, 60);
+
+// The refusals below are written in three languages rather than one. The twenty-nine older ones
+// in this file are Kurdish-only, which is a debt of its own; new ones do not add to it.
+const say3 = (arms) => arms[activeLanguage()] || arms.ku;
+export const settleCommandKey = (debtId) =>
+  `settle-debt:${safeSubject(debtId)}:${id()}`;
+export const remindCommandKey = (debtId) =>
+  `debt-reminder:${safeSubject(debtId)}:${id()}`;
 
 /**
  * Can these two debts be netted against each other?
@@ -107,6 +121,54 @@ export async function writeOffDebt(client, { debtId, amount = null, reason, comm
     p_debt_id: debtId,
     p_amount: amount == null ? null : Number(amount),
     p_reason: why,
+    p_command_key: key,
+  });
+  if (error) throw error;
+  return { result: data, commandKey: key };
+}
+
+/**
+ * قەرزەکە بدەمەوە — a debt paid, or received, with the money landing where the owner says.
+ *
+ *   «هەر لەوێوە بتوانم قەرزەکان سفر بکەمەوە، واتا قەرزەکە بدەمەوە.»
+ *
+ * Not writing it off: giving up money you are owed is a loss and receiving it is not, and a
+ * system offering only the first invites recording a loss every time somebody actually pays.
+ * A null place is the cash. The server decides both direction and sufficiency.
+ *
+ * Mirrors public.sarraf_settle_debt.
+ */
+export async function settleDebt(client, { debtId, amount = null, cashAccountId = null, note = null, commandKey }) {
+  if (!debtId) throw zemanRule(say3({ ku: "قەرزێک پێویستە", en: "A debt is required", ar: "الدين مطلوب" }));
+  if (amount != null && !(Number(amount) > 0)) {
+    throw zemanRule(say3({ ku: "بڕەکە دەبێت لە سفر گەورەتر بێت",
+      en: "The amount has to be greater than zero", ar: "يجب أن يكون المبلغ أكبر من صفر" }));
+  }
+  const key = commandKey || settleCommandKey(debtId);
+  const { data, error } = await client.rpc("sarraf_settle_debt", {
+    p_debt_id: debtId,
+    p_amount: amount == null ? null : Number(amount),
+    p_cash_account_id: cashAccountId || null,
+    p_note: clean(note) || null,
+    p_command_key: key,
+  });
+  if (error) throw error;
+  return { result: data, commandKey: key };
+}
+
+/**
+ * «نۆتفیکەیشن بۆ ئەوان بنێرم کە ئەوەنە قەرزارن» — one reminder, to the party that owes it,
+ * saying how much is left. The server refuses a debt that is closed, one the business itself
+ * owes, and one whose debtor has no account to receive it.
+ *
+ * Mirrors public.sarraf_remind_debtor.
+ */
+export async function remindDebtor(client, { debtId, note = null, commandKey }) {
+  if (!debtId) throw zemanRule(say3({ ku: "قەرزێک پێویستە", en: "A debt is required", ar: "الدين مطلوب" }));
+  const key = commandKey || remindCommandKey(debtId);
+  const { data, error } = await client.rpc("sarraf_remind_debtor", {
+    p_debt_id: debtId,
+    p_note: clean(note) || null,
     p_command_key: key,
   });
   if (error) throw error;

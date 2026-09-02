@@ -3553,6 +3553,223 @@ try {
   };
   holdingEntryChecks();
 
+  // ── قەرزەکە بدەمەوە ───────────────────────────────────────────────────────────────────────
+  //
+  //   «دەمەوێت زۆر ورد و پڕۆفیشناڵ بێت. وە هەر لەوێوە بتوانم قەرزەکان سفر بکەمەوە، واتا
+  //    قەرزەکە بدەمەوە.»
+  //
+  // The debt centre could offset two debts and give one up. It could not do the ordinary
+  // thing — pay it, or be paid — so «سفر کردنەوە» could only be reached by recording a loss.
+  const settlementChecks = () => {
+    const debtRow = (id) => psql(
+      `select status||'|'||outstanding_principal from public.debts where id='${id}'`).trim();
+
+    check("a debt owed to the business closes when the money arrives", () => {
+      iqdRate();
+      psql(`insert into public.debts(id,debtor_type,debtor_id,creditor_type,creditor_id,currency,
+              original_principal,outstanding_principal,source_type,reason,created_by)
+            values ('d-pay-in','customer','cust-1','zeman',null,'IQD',60000,60000,
+                    'unpaid_transaction','they took the money and owe it','u-a')`);
+      const cashBefore = safeIqd();
+      const out = JSON.parse(psql(`select public.sarraf_settle_debt('d-pay-in',60000,null,
+        'قەرزەکەی دایەوە','settle-debt:paid-in-full-cash')::text`));
+      if (Number(out.settled) !== 60000) throw new Error(`settled ${out.settled}`);
+      if (out.we_owed !== false) throw new Error("a debt owed to the business was read as one it owes");
+      if (debtRow("d-pay-in") !== "settled|0.0000000000") {
+        throw new Error(`the debt is ${debtRow("d-pay-in")}`);
+      }
+      if (safeIqd() - cashBefore !== 60000) {
+        throw new Error(`the cash moved ${safeIqd() - cashBefore}, expected 60000`);
+      }
+    });
+
+    check("and it is a receipt of money, never an expense", () => {
+      // The whole reason this command exists: writing the debt off instead would put 60,000
+      // into acc-5200 and report a loss on a debt that was paid in full.
+      const loss = Number(psql(`select coalesce(sum(case when l.side='debit' then l.base_amount
+              else -l.base_amount end),0)::text from public.journal_lines l
+        join public.journal_entries e on e.id=l.entry_id
+       where l.account_id='acc-5200' and e.source_type='debt_settlement'`).trim());
+      if (loss !== 0) throw new Error(`a settlement reached the write-off expense by ${loss}`);
+    });
+
+    check("a debt the business owes closes when the money leaves", () => {
+      psql(`insert into public.debts(id,debtor_type,debtor_id,creditor_type,creditor_id,currency,
+              original_principal,outstanding_principal,source_type,reason,created_by)
+            values ('d-pay-out','zeman',null,'customer','cust-1','IQD',20000,20000,
+                    'unpaid_transaction','their money is still with us','u-a')`);
+      const cashBefore = safeIqd();
+      const out = JSON.parse(psql(`select public.sarraf_settle_debt('d-pay-out',20000,null,
+        'پارەکەم دایەوە','settle-debt:paid-out-in-full')::text`));
+      if (out.we_owed !== true) throw new Error("a debt the business owes was read the other way");
+      if (debtRow("d-pay-out") !== "settled|0.0000000000") {
+        throw new Error(`the debt is ${debtRow("d-pay-out")}`);
+      }
+      if (safeIqd() - cashBefore !== -20000) {
+        throw new Error(`the cash moved ${safeIqd() - cashBefore}, expected -20000`);
+      }
+    });
+
+    check("paying part of a debt leaves the rest open", () => {
+      psql(`insert into public.debts(id,debtor_type,debtor_id,creditor_type,creditor_id,currency,
+              original_principal,outstanding_principal,source_type,reason,created_by)
+            values ('d-part','customer','cust-1','zeman',null,'IQD',50000,50000,
+                    'unpaid_transaction','part of it will come later','u-a')`);
+      psql(`select public.sarraf_settle_debt('d-part',30000,null,'بەشێکی','settle-debt:part-payment-one')`);
+      if (debtRow("d-part") !== "partially_settled|20000.0000000000") {
+        throw new Error(`the debt is ${debtRow("d-part")}`);
+      }
+    });
+
+    check("paying more than is left is refused rather than quietly capped", () => {
+      // Capping it would move money the debt cannot account for, and the owner would have no
+      // way to tell that the amount they typed is not the amount that moved.
+      const cash = safeIqd();
+      let refused = false;
+      try {
+        psql(`select public.sarraf_settle_debt('d-part',999999,null,'زۆرتر','settle-debt:over-the-remainder')`);
+      } catch { refused = true; }
+      if (!refused) throw new Error("a payment larger than the debt was accepted");
+      if (safeIqd() !== cash) throw new Error("a refused payment moved the cash anyway");
+      if (debtRow("d-part") !== "partially_settled|20000.0000000000") {
+        throw new Error(`a refused payment changed the debt to ${debtRow("d-part")}`);
+      }
+    });
+
+    check("the business cannot pay a debt from a place that does not hold the money", () => {
+      psql(`insert into public.debts(id,debtor_type,debtor_id,creditor_type,creditor_id,currency,
+              original_principal,outstanding_principal,source_type,reason,created_by)
+            values ('d-broke','zeman',null,'customer','cust-1','IQD',999999999,999999999,
+                    'unpaid_transaction','more than the business holds','u-a')`);
+      let refused = false;
+      try {
+        psql(`select public.sarraf_settle_debt('d-broke',999999999,null,'ناتوانم','settle-debt:more-than-held')`);
+      } catch { refused = true; }
+      if (!refused) throw new Error("the business paid out money it does not have");
+    });
+
+    check("a debt paid into a named account raises that account, not the cash", () => {
+      psql(`select public.sarraf_open_cash_account('debt-fib','Debt FIB','iqd','bank',null)`);
+      psql(`insert into public.debts(id,debtor_type,debtor_id,creditor_type,creditor_id,currency,
+              original_principal,outstanding_principal,source_type,reason,created_by)
+            values ('d-to-acct','customer','cust-1','zeman',null,'IQD',15000,15000,
+                    'unpaid_transaction','they will send it to the bank','u-a')`);
+      const cashBefore = safeIqd(), acctBefore = inAccount("debt-fib");
+      psql(`select public.sarraf_settle_debt('d-to-acct',15000,'debt-fib','بۆ بانک','settle-debt:into-the-bank')`);
+      if (inAccount("debt-fib") - acctBefore !== 15000) {
+        throw new Error(`the account moved ${inAccount("debt-fib") - acctBefore}, expected 15000`);
+      }
+      if (safeIqd() !== cashBefore) throw new Error("the cash moved on a payment into an account");
+    });
+
+    check("pressing the same payment twice does not pay it twice", () => {
+      const cash = safeIqd(), before = debtRow("d-part");
+      psql(`select public.sarraf_settle_debt('d-part',5000,null,'دووبارە','settle-debt:pressed-twice-here')`);
+      const once = debtRow("d-part"), cashOnce = safeIqd();
+      if (once === before) throw new Error("the first press did nothing");
+      psql(`select public.sarraf_settle_debt('d-part',5000,null,'دووبارە','settle-debt:pressed-twice-here')`);
+      if (debtRow("d-part") !== once) throw new Error("the second press moved the debt again");
+      if (safeIqd() !== cashOnce) throw new Error("the second press moved the money again");
+      if (cash === cashOnce) throw new Error("the first press moved no money");
+    });
+
+    check("a debt already settled cannot be settled again", () => {
+      let refused = false;
+      try {
+        psql(`select public.sarraf_settle_debt('d-pay-in',1,null,'دووبارە','settle-debt:already-closed-once')`);
+      } catch { refused = true; }
+      if (!refused) throw new Error("a closed debt accepted another payment");
+    });
+
+    check("the books still reconcile after money has settled debts both ways", () => {
+      const diff = Number(psql(`select coalesce(round(sum(case when l.side='debit' then l.base_amount
+              else -l.base_amount end), 6),0)::text from public.journal_lines l
+        join public.journal_entries e on e.id=l.entry_id where e.status='posted'`).trim());
+      if (diff !== 0) throw new Error(`the books are out by ${diff}`);
+    });
+  };
+  settlementChecks();
+
+  // ── «نۆتفیکەیشن بۆ ئەوان بنێرم کە ئەوەنە قەرزارن» ─────────────────────────────────────────
+  //
+  // Every notification kind this system had was about a receipt. Debt is the other half of what
+  // a person needs to be told, and the owner's only options were to phone them or say nothing.
+  const reminderChecks = () => {
+    const inboxOf = (userId) => psql(
+      `select coalesce(string_agg(kind||'|'||title, ' / ' order by title),'none')
+         from public.zeman_notifications where recipient_id='${userId}'`).trim();
+
+    check("the person who owes money is told what they owe", () => {
+      psql(`insert into public.debts(id,debtor_type,debtor_id,creditor_type,creditor_id,currency,
+              original_principal,outstanding_principal,source_type,reason,created_by)
+            values ('d-remind','customer','cust-1','zeman',null,'IQD',75000,75000,
+                    'unpaid_transaction','مامەڵەی نەدراوە','u-a')`);
+      const out = JSON.parse(psql(`select public.sarraf_remind_debtor('d-remind',null,
+        'debt-reminder:first-reminder-sent')::text`));
+      if (out.recipient_id !== "cust-1") throw new Error(`it went to ${out.recipient_id}`);
+      if (Number(out.outstanding) !== 75000) throw new Error(`it says ${out.outstanding}`);
+      const inbox = inboxOf("cust-1");
+      if (!inbox.includes("debt_reminder")) throw new Error(`their inbox reads ${inbox}`);
+      // The amount has to be in it: a reminder that does not say how much is not a reminder.
+      if (!inbox.includes("75000")) throw new Error(`the amount is missing from ${inbox}`);
+    });
+
+    check("pressing remind twice sends one reminder, not two", () => {
+      const before = Number(psql(`select count(*)::text from public.zeman_notifications
+                                   where recipient_id='cust-1' and kind='debt_reminder'`).trim());
+      psql(`select public.sarraf_remind_debtor('d-remind',null,'debt-reminder:first-reminder-sent')`);
+      const after = Number(psql(`select count(*)::text from public.zeman_notifications
+                                  where recipient_id='cust-1' and kind='debt_reminder'`).trim());
+      if (after !== before) throw new Error(`the inbox went from ${before} to ${after}`);
+    });
+
+    // Written this way on purpose. The first version only asked "was it refused", and it
+    // passed with every guard in the command deleted: recipient_id is NOT NULL, so the row
+    // was rejected by the column rather than by anything anybody wrote. A refusal the owner
+    // cannot read and the code did not intend is not the behaviour this claims to check, so
+    // it asks the database for the SQLSTATE — 22023 is a deliberate refusal, 23502 is a null
+    // arriving somewhere it should never have reached.
+    psql(`create or replace function public.zeman_probe_remind(p_debt text, p_key text)
+          returns text language plpgsql as $fn$
+          begin
+            perform public.sarraf_remind_debtor(p_debt, null, p_key);
+            return 'accepted';
+          exception when others then return sqlstate;
+          end $fn$`);
+
+    check("a debt the business itself owes cannot be turned into a reminder", () => {
+      // Telling somebody they owe money when the business owes THEM is the opposite of true.
+      psql(`insert into public.debts(id,debtor_type,debtor_id,creditor_type,creditor_id,currency,
+              original_principal,outstanding_principal,source_type,reason,created_by)
+            values ('d-ours','zeman',null,'customer','cust-1','IQD',9000,9000,
+                    'unpaid_transaction','پارەکەیان لای ئێمەیە','u-a')`);
+      const state = psql(
+        `select public.zeman_probe_remind('d-ours','debt-reminder:our-own-debt-here')`).trim();
+      if (state === "accepted") throw new Error("the business reminded somebody of a debt it owes them");
+      if (state !== "22023") throw new Error(`refused with ${state}, not a deliberate refusal`);
+    });
+
+    check("a debt already paid cannot be turned into a reminder", () => {
+      const state = psql(
+        `select public.zeman_probe_remind('d-pay-in','debt-reminder:already-paid-off')`).trim();
+      if (state === "accepted") throw new Error("a settled debt was chased");
+      if (state !== "23514") throw new Error(`refused with ${state}, not a deliberate refusal`);
+    });
+
+    check("a reminder reaches only the person who owes it", () => {
+      const others = Number(psql(`select count(*)::text from public.zeman_notifications
+         where kind='debt_reminder' and recipient_id <> 'cust-1'`).trim());
+      if (others !== 0) throw new Error(`${others} reminder(s) reached somebody else`);
+    });
+
+    check("sending a reminder moves no money and closes no debt", () => {
+      const st = psql(`select status||'|'||outstanding_principal from public.debts
+                        where id='d-remind'`).trim();
+      if (st !== "open|75000.0000000000") throw new Error(`the debt is now ${st}`);
+    });
+  };
+  reminderChecks();
+
   check("a second reset cannot empty a system that has since gone live", () => {
     const out = JSON.parse(psql("select public.sarraf_reset_installation()::text"));
     if (out.done !== false) throw new Error(JSON.stringify(out));
