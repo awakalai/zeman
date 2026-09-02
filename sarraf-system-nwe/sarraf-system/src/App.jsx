@@ -27,6 +27,7 @@ import { CommandKeyBook, runIdempotentCommand } from "./services/commandRetry";
 import { toCsv } from "./services/csvSafe";
 import { revokeAllUrls, revokeDroppedUrls } from "./services/objectUrls";
 import { unrealizedPnl, unrealizedReasonText } from "./services/unrealizedPnl";
+import { EARNING_KINDS, earningsByKind } from "./services/earningsByKind";
 import { capitalEventsFrom, investorShare, investorsTotalByCurrency, profitEventsFrom } from "./services/investorShare";
 import { crossRate, fromUsdAsOf, rateAsOf, rateErrorText, rateOf, unpricedCurrencies, usdFromAsOf, validateRate } from "./services/currencyRate";
 import {
@@ -10153,6 +10154,13 @@ function Report({ data, calc, cur, usr, profitIn, investorsProfitIn, invShare, s
       else loss[t.profitCurId] = (loss[t.profitCurId] || 0) + Math.abs(t.profit);
     }
   });
+
+  // «دەبێت لە ڕاپۆرتا هەموو خێرێک هەبێت کە لەم ئیشە یان هەر ئیشیکی تر چەندم خیر کردووە» —
+  // the line above adds every sale's spread into one figure and a commission trade is not in it
+  // at all. The split lives in its own module, with its own tests, because it is money maths.
+  const earningKinds = useMemo(
+    () => earningsByKind({ txs, usdValueAt }), [txs, usdValueAt]);
+
   const exp = {}, fee = {}, payout = {}, flow = {};
   entries.forEach((e) => {
     if (e.type === "expense") exp[e.curId] = (exp[e.curId] || 0) + Math.abs(e.amount);
@@ -10293,6 +10301,46 @@ function Report({ data, calc, cur, usr, profitIn, investorsProfitIn, invShare, s
             <PL label={tr("خێری وەبەرهێنەران")} m={invP} tone="neg" />
             <div className="mt-1 pt-1 border-t-2 border-slate-900/10">
               <PL label={tr("نەتیجەی کۆتایی (بۆ خۆم)")} m={net} tone="auto" bold />
+            </div>
+
+            {/* «هەموو خێرێک هەبێت کە لەم ئیشە یان هەر ئیشیکی تر چەندم خیر کردووە» — the line
+              * above is one figure for every sale added together, and a commission trade is not
+              * in it at all. This says which work earned what, in dollars, because that is the
+              * only unit the three kinds share. */}
+            <div className="mt-4 pt-3 border-t border-[var(--line)]">
+              <SecLbl>{tr("کام ئیشە چەندی خێر کردووە")}</SecLbl>
+              <div className="mt-2 space-y-1">
+                {EARNING_KINDS.map((key) => {
+                  const k = earningKinds[key];
+                  const label = key === "commission" ? tr("مامەڵەی عمولە")
+                    : key === "direct" ? tr("مامەڵەی ڕاستەوخۆ") : tr("کڕین و فرۆشتن");
+                  return (
+                  <div key={key} className="report-pl-row">
+                    <span className="report-pl-label">
+                      {label}
+                      <span className="text-[10.5px] ms-1.5" style={{ color: "var(--txt-3)" }}>
+                        {k.n} {tr("مامەڵە")}
+                      </span>
+                    </span>
+                    <div className="text-end">
+                      <span className="text-[13px]" style={{ ...num, fontWeight: 600,
+                        color: k.usd < 0 ? "var(--neg)" : k.usd > 0 ? "var(--pos)" : "var(--txt-3)" }}>
+                        {k.usd < 0 ? "−" : k.usd > 0 ? "+" : ""}{fmt(Math.abs(k.usd), 2)}
+                        <span className="text-[10.5px] font-normal ms-1" style={{ color: "var(--txt-3)" }}>USD</span>
+                      </span>
+                    </div>
+                  </div>
+                  );
+                })}
+              </div>
+              {/* Said rather than left to be worked out: a trade whose currency had no rate that
+                  day cannot be valued, so it is counted apart rather than counted as zero. */}
+              <div className="text-[10.5px] mt-2" style={{ color: "var(--txt-3)" }}>
+                {tr("بە دۆلار هەڵسەنگێندراوە بە نرخی هەمان ڕۆژ — ئەو مامەڵانەی نرخیان نەبووە لێرەدا نین")}
+                {EARNING_KINDS.reduce((n, key) => n + earningKinds[key].unvalued, 0) > 0 && (
+                  <> · <b>{EARNING_KINDS.reduce((n, key) => n + earningKinds[key].unvalued, 0)}</b></>
+                )}
+              </div>
             </div>
             {ratesReady && (
               <div className={`report-net-box ${netUsd < 0 ? "is-negative" : netUsd > 0 ? "is-positive" : ""}`}>
