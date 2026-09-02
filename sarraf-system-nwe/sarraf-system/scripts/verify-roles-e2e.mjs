@@ -401,6 +401,27 @@ try {
       record(closeVisible === true, `${label}: the sheet can be closed without scrolling to find the button`,
         closeVisible === null ? "the sheet has no close button" : "the close button is off screen");
 
+      // The same accessible-names contract the desktop runs, because the phone has controls
+      // the desktop does not. It found one immediately: the floating «مامەڵەی نوێ» button,
+      // the largest control in the mobile application, announced as "button" and nothing
+      // more. It is md:hidden, so ten desktop passes could never have seen it.
+      await page.keyboard.press("Escape");
+      await page.waitForTimeout(400);
+      const nameless = await page.evaluate(() => [...document.querySelectorAll("button,a[href],input,select,textarea")]
+        .filter((el) => {
+          const style = getComputedStyle(el);
+          const box = el.getBoundingClientRect();
+          return style.display !== "none" && style.visibility !== "hidden"
+            && box.width > 0 && box.height > 0 && el.getAttribute("type") !== "hidden";
+        })
+        .filter((el) => ![el.getAttribute("aria-label"), el.getAttribute("title"), el.textContent,
+          [...(el.labels || [])].map((l) => l.textContent || "").join(" ")]
+          .some((v) => String(v || "").trim()))
+        .map((el) => `${el.tagName.toLowerCase()}@${Math.round(el.getBoundingClientRect().x)},${Math.round(el.getBoundingClientRect().y)}`)
+        .slice(0, 8));
+      record(nameless.length === 0, `${label}: visible controls have accessible names`,
+        nameless.join(", "));
+
       const phoneCrashes = crashes.filter((e) => !/supabaseUrl|Failed to load resource|net::ERR/i.test(e));
       record(phoneCrashes.length === 0, `${label}: no uncaught error`, phoneCrashes.slice(0, 2).join(" | "));
       await ctx.close();
@@ -416,6 +437,43 @@ try {
       record(body.includes(needle),
         `${label}: can reach «${needle}»`,
         body.includes(needle) ? "" : "the surface this role is entitled to was missing");
+    }
+
+    // No page-level band may start underneath the sidebar.
+    //
+    // The sidebar is `fixed left-0` and 236px wide, so anything laid out full-width is drawn
+    // behind it. That is what had happened to the market ticker: market-pulse.css offset it
+    // with `margin-inline-start`, which in a right-to-left interface is the RIGHT edge — so
+    // it was pushed away from the side that has nothing on it and left running under the
+    // navigation. The first rate scrolled under the sidebar on every desktop.
+    //
+    // Measured on the BANDS, not on every leaf. The first version of this walked every text
+    // node, and the marquee's track is deliberately wider than its own `overflow:hidden` box
+    // — so it reported items that are clipped and invisible, and went on reporting them after
+    // the bug was fixed. A check that cannot go quiet is not a check.
+    const underSidebar = await page.evaluate(() => {
+      const bar = document.querySelector(".sarraf-sidebar");
+      if (!bar) return null;
+      const edge = bar.getBoundingClientRect().right;
+      if (edge < 10) return [];
+      const bands = [".market-ticker", "main", ".sarraf-topbar > div"];
+      const wrong = [];
+      for (const selector of bands) {
+        for (const el of document.querySelectorAll(selector)) {
+          const r = el.getBoundingClientRect();
+          if (r.width < 50) continue;
+          // Where the CONTENT starts, not where the box does. <main> spans the full width and
+          // steps aside with padding-left:260px, which is a correct way to clear a fixed
+          // sidebar; measuring its border box would call that a fault.
+          const inner = r.left + parseFloat(getComputedStyle(el).paddingLeft || 0);
+          if (inner < edge - 4) wrong.push(`${selector} content starts at ${Math.round(inner)}px, sidebar ends at ${Math.round(edge)}px`);
+        }
+      }
+      return wrong;
+    });
+    if (underSidebar !== null) {
+      record(underSidebar.length === 0, `${label}: nothing is drawn underneath the sidebar`,
+        underSidebar.join(" · "));
     }
 
     // Critical accessibility contract in the shipped DOM: every visible interactive control

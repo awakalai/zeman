@@ -274,8 +274,11 @@ body{
 .sarraf-sidebar .nav-item:hover{
   background:rgba(255,255,255,.055);
 }
+/* This is the SECOND .nav-active rule in this file. The first asks for var(--ac); this one
+   overrode it with the accent that was retired, so the single most visible element on the
+   screen — the entry you are standing on — was painted in the old palette. */
 .sarraf-sidebar .nav-active{
-  background:linear-gradient(135deg,#2BDE8D,#1ACB7A);
+  background:linear-gradient(135deg,var(--ac),var(--ac-2));
   box-shadow:0 8px 22px rgba(var(--ac-gl),.16);
 }
 .sarraf-topbar{
@@ -334,8 +337,8 @@ body{
   font-size:11px;
 }
 .sarraf-primary-action{
-  color:#07130D;
-  background:linear-gradient(135deg,#2BDE8D,#1BCB7A);
+  color:var(--ac-ink);
+  background:linear-gradient(135deg,var(--ac),var(--ac-2));
   box-shadow:0 10px 24px rgba(var(--ac-gl),.17);
 }
 .sarraf-primary-action:hover{box-shadow:0 13px 28px rgba(var(--ac-gl),.23)}

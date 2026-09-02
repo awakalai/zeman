@@ -3269,6 +3269,7 @@ export default function App() {
         </div>
       )}
 
+      {/* The offset lives in market-pulse.css, next to the rule it corrects. */}
       {!portalUser && <DeferredPanel compact><MarketPulse currencies={data.currencies} lang={lang} online={online} /></DeferredPanel>}
 
       {portalUser ? (
@@ -3997,11 +3998,11 @@ function Dashboard({ data, calc, cur, mySafe, profitIn, ownProfitIn, investorsPr
           <div className="relative h-[210px]">
             <svg viewBox="0 0 700 210" preserveAspectRatio="none" className="w-full h-full overflow-visible">
               {[0,1,2,3].map(i=><line key={i} x1="0" x2="700" y1={28+i*48} y2={28+i*48} stroke="var(--line)" strokeWidth="1"/>) }
-              <defs><linearGradient id="profitFillSarraf" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#00D978" stopOpacity=".22"/><stop offset="100%" stopColor="#00D978" stopOpacity="0"/></linearGradient></defs>
+              <defs><linearGradient id="profitFillSarraf" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="var(--ac)" stopOpacity=".22"/><stop offset="100%" stopColor="var(--ac)" stopOpacity="0"/></linearGradient></defs>
               {(()=>{
                 const pts=last7.map((x,i)=>[20+i*(660/6),185-(Math.max(0,x.v)/chartMax)*145]);
                 const d=pts.map((p,i)=>`${i?"L":"M"}${p[0]},${p[1]}`).join(" ");
-                return <><path d={`${d} L680 185 L20 185 Z`} fill="url(#profitFillSarraf)"/><path d={d} fill="none" stroke="#00D978" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/>{pts.map((p,i)=><circle key={i} cx={p[0]} cy={p[1]} r={i===pts.length-1?5:3.5} fill="#00D978" stroke="var(--surf)" strokeWidth="2"/>)}</>;
+                return <><path d={`${d} L680 185 L20 185 Z`} fill="url(#profitFillSarraf)"/><path d={d} fill="none" stroke="var(--ac)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/>{pts.map((p,i)=><circle key={i} cx={p[0]} cy={p[1]} r={i===pts.length-1?5:3.5} fill="var(--ac)" stroke="var(--surf)" strokeWidth="2"/>)}</>;
               })()}
             </svg>
           </div>
@@ -4044,13 +4045,21 @@ function Dashboard({ data, calc, cur, mySafe, profitIn, ownProfitIn, investorsPr
         <section className="fin-card p-5 md:p-6">
           <div className="flex items-center justify-between mb-4"><h2 className="text-[16px] font-bold">{tr("خەرجی")}</h2><span className="text-[10px]" style={{color:"var(--txt-3)"}}>{tr("ئەم هەفتەیە")}</span></div>
           <div className="flex items-end gap-2 h-[185px]">
-            {expenses.map((x,i)=><div key={x.k} className="flex-1 h-full flex flex-col justify-end items-center gap-2"><div className="w-full max-w-[22px] rounded-t-full" style={{height:`${Math.max(8,(x.v/expMax)*145)}px`,background:i===expenses.length-1?"#00D978":"#BFEFD9"}} title={fmt(x.v,0)}/><span className="text-[9px]" style={{color:"var(--txt-3)"}}>{x.k.slice(5)}</span></div>)}
+            {expenses.map((x,i)=><div key={x.k} className="flex-1 h-full flex flex-col justify-end items-center gap-2"><div className="w-full max-w-[22px] rounded-t-full" style={{height:`${Math.max(8,(x.v/expMax)*145)}px`,background:i===expenses.length-1?"var(--ac)":"color-mix(in srgb,var(--ac) 26%,var(--surf))"}} title={fmt(x.v,0)}/><span className="text-[9px]" style={{color:"var(--txt-3)"}}>{x.k.slice(5)}</span></div>)}
           </div>
         </section>
       </div>
 
       <div className="md:hidden fixed bottom-[74px] end-4 z-30">
-        <button onClick={()=>go("newtx")} className="w-14 h-14 rounded-full flex items-center justify-center tap" style={{background:"#00D978",color:"#07130D",boxShadow:"0 12px 28px rgba(0,217,120,.28)"}}><Plus className="w-6 h-6"/></button>
+        {/* The largest button in the phone application, and it had no name at all — a screen
+          * reader announced "button". The desktop role gate checks every visible control for
+          * an accessible name and never saw this one, because it is md:hidden.
+          */}
+        <button onClick={()=>go("newtx")} aria-label={tr("مامەڵەی نوێ")}
+          className="w-14 h-14 rounded-full flex items-center justify-center tap"
+          style={{background:"var(--ac)",color:"var(--ac-ink)",boxShadow:"0 12px 28px rgba(var(--ac-gl),.28)"}}>
+          <Plus className="w-6 h-6"/>
+        </button>
       </div>
     </div>
   );

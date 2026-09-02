@@ -335,14 +335,28 @@ for (const file of tracked.filter((f) => f.startsWith(SERVICE_DIR) && f.endsWith
   if (darks !== 1) {
     fail(`src/styles/zeman.css declares a dark palette ${darks} times, for the same reason.`);
   }
-  // The retired accent. Two rules kept hard-coding it — the active navigation entry and the
-  // primary button, which are the two most visible things on the screen, so the old palette
-  // kept showing through exactly where it would be noticed.
-  const retired = [...css.matchAll(/#00D978/g)].length;
-  const inProse = [...css.matchAll(/\* .*#00D978/g)].length;
-  if (retired > inProse) {
-    fail(`src/styles/zeman.css still hard-codes the retired accent #00D978 in a rule. `
-      + `Ask for var(--ac) so there is one place a colour is decided.`);
+  // The retired accent — the whole family, and everywhere, not one hex in one file.
+  //
+  // The first version of this rule looked for #00D978 in zeman.css alone, and passed while
+  // the application was still painted in the old palette in eight places: the SECOND
+  // .nav-active rule (which overrode the first), .sarraf-primary-action, the profit chart's
+  // gradient, stroke and dots, the expense bars, and the phone's floating action button —
+  // the largest button in the mobile app. A gate scoped to one file and one hex is a gate
+  // that reports on the file, not on what a person sees.
+  const RETIRED = /#(?:00D978|2BDE8D|18C877|1ACB7A|1BCB7A|BFEFD9)\b/gi;
+  const stillPainted = [];
+  for (const file of tracked.filter((f) => /^src\/.*\.(?:css|js|jsx)$/.test(f))) {
+    for (const [index, line] of text(file).split("\n").entries()) {
+      // Prose naming the colour it replaced is the explanation, not the paint.
+      if (/^\s*(?:\/\/|\*|\/\*|\{\/\*)/.test(line)) continue;
+      const hit = line.match(RETIRED);
+      if (hit) stillPainted.push(`${file}:${index + 1}  ${hit.join(", ")}`);
+    }
+  }
+  if (stillPainted.length) {
+    fail(`${stillPainted.length} place(s) still hard-code a retired accent colour instead of `
+      + `asking for var(--ac), so two greens sit side by side on one screen:\n  `
+      + stillPainted.slice(0, 12).join("\n  "));
   }
 }
 
