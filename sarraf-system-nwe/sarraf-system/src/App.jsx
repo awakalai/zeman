@@ -3097,9 +3097,22 @@ export default function App() {
   //
   // So: the bar carries the first section, and the sheet carries the rest WITH their
   // headings. Both are read from NAV_GROUPS, so a section added to one is in the other.
-  const BAR_NAV = (NAV_GROUPS[0]?.items || []).slice(0, 4);
+  // ── The four the owner named ───────────────────────────────────────────────────────────────
+  //
+  //   «ئەو بەشەی خوارەوەش ئاوا لێبکە: داشبۆرد / کاری ئەمڕۆ / بەکارهێنەران / مامەڵەکان»
+  //
+  // Named rather than taken as "the first four of the first group", which is how this was
+  // written and is why the bar read داشبۆرد · کاری ئەمڕۆ · ئینباکس · پەسەندکردن — four entries
+  // that happened to be adjacent in a list, not the four a person reaches for. A named list
+  // also cannot drift when a group is reordered.
+  const PHONE_BAR_IDS = ["dash", "admin-center", "people", "txs"];
+  const BAR_NAV = PHONE_BAR_IDS
+    .map((id) => NAV_GROUPS.flatMap((g) => g.items).find(([itemId]) => itemId === id))
+    .filter(Boolean);
+  // Whatever the bar does not carry goes in the sheet, so nothing loses its only door — the
+  // mistake that once left the action inbox with nav:0 press:0.
   const SHEET_GROUPS = NAV_GROUPS
-    .map((g, i) => ({ ...g, items: i === 0 ? g.items.slice(4) : g.items }))
+    .map((g) => ({ ...g, items: g.items.filter(([id]) => !PHONE_BAR_IDS.includes(id)) }))
     .filter((g) => g.items.length);
   // Exactly one entry lights up. It used to be that «کاری ئەمڕۆ» claimed every page in
   // ADMIN_CENTER_PAGE_IDS, which was right while those pages had no entry of their own and is
@@ -11007,6 +11020,33 @@ function Insights({ data, calc, cur, usr, profitIn, ownProfitIn, sumUsd, ratesRe
 
   const TABS = [["trend", tr("ڕەوت")], ["fc", tr("پێشبینین")], ["rates", tr("مێژووی نرخ")], ["report", tr("ڕاپۆرتی ڕۆژ")], ["log", tr("چالاکی")]];
 
+  // ── What each of these five actually answers ───────────────────────────────────────────────
+  //
+  //   «بەشەکانی تریش هیچ لێیان تێناگەم زۆر زۆر ناڕوونن ... پێویستە ئەو بەشانە ڕوون بن.»
+  //
+  // The screen was five words — ڕەوت، پێشبینین، مێژووی نرخ، ڕاپۆرتی ڕۆژ، چالاکی — over charts
+  // with no statement of what they are of. A person who does not already know what a tab is for
+  // cannot find out by pressing it, because the chart looks the same either way. One sentence
+  // each, saying the question it answers, is the whole difference between a wall of numbers and
+  // a screen somebody can use.
+  const TAB_HELP = {
+    trend: l10n("چەندت خێر کردووە لە هەر ڕۆژێکدا، و چەند مامەڵەت کردووە — بۆ ئەوەی بزانیت کام ڕۆژ باشتر بووە",
+      "What you earned each day and how many trades you made — so you can see which days went well",
+      "كم ربحت كل يوم وكم معاملة أجريت — لترى أي الأيام كانت أفضل"),
+    fc: l10n("ئەگەر ڕۆژەکانی داهاتوو وەک ڕۆژەکانی ڕابردوو بن، چەند خێر چاوەڕێ دەکرێت — ئەمە پێشبینینە، نەک بەڵێن",
+      "If the coming days look like the past ones, what to expect — this is an estimate, not a promise",
+      "إذا كانت الأيام القادمة كالماضية، فما المتوقع — هذا تقدير وليس وعداً"),
+    rates: l10n("نرخەکان چۆن گۆڕاون بە درێژایی کات، بەو نرخانەی خۆت تۆمارت کردوون",
+      "How the rates have moved over time, from the rates you recorded yourself",
+      "كيف تحرّكت الأسعار عبر الوقت، حسب الأسعار التي سجّلتها بنفسك"),
+    report: l10n("کورتەی ئەمڕۆ بە یەک ڕوانین: چی هاتووە، چی چووە، و چی ماوە",
+      "Today at a glance: what came in, what went out, and what is left",
+      "اليوم بلمحة: ما دخل وما خرج وما تبقّى"),
+    log: l10n("کێ چی کردووە و کەی — هەموو کردارێک کە کەسێک ئەنجامی داوە",
+      "Who did what and when — every action anybody took",
+      "من فعل ماذا ومتى — كل إجراء قام به أي شخص"),
+  };
+
   return (
     <div className="space-y-5">
       <div className="analytics-head">
@@ -11022,6 +11062,12 @@ function Insights({ data, calc, cur, usr, profitIn, ownProfitIn, sumUsd, ratesRe
             className={`analytics-tab tap ${tab === k ? "is-active" : ""}`}>{t}</button>
         ))}
       </div>
+
+      {/* Under the tabs rather than inside each one, so it is in the same place every time and
+          a person learns where to look for it. */}
+      <p className="text-[12px] leading-relaxed" style={{ color: "var(--txt-2)" }} aria-live="polite">
+        {TAB_HELP[tab]}
+      </p>
 
       {tab === "trend" && (
         <>
