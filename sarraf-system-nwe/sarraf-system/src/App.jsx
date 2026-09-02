@@ -1551,7 +1551,7 @@ export default function App() {
         throw new Error("Production migration ـەکە هێشتا لە Supabase جێبەجێ نەکراوە");
       }
       if (error?.code === "55000" || /financial writes are frozen/i.test(msg)) {
-        throw new Error("Emergency Freeze چالاکە — هیچ گۆڕانکارییەکی دارایی جێبەجێ ناکرێت");
+        throw new Error("ڕاگرتنی فریاکەوتن چالاکە — هیچ گۆڕانکارییەکی دارایی جێبەجێ ناکرێت");
       }
       throw error;
     }
@@ -2688,7 +2688,7 @@ export default function App() {
   const setMaintenanceMode = async (enabled, reason) => {
     const why = String(reason || "").trim();
     if (why.length < 12) {
-      flash("هۆکاری Emergency Freeze لانیکەم ١٢ پیت بێت");
+      flash("هۆکاری ڕاگرتنی فریاکەوتن لانیکەم ١٢ پیت بێت");
       return false;
     }
     setBusy(true);
@@ -2699,11 +2699,11 @@ export default function App() {
         p_command_key: commandKey(enabled ? "freeze-on" : "freeze-off"),
       });
       await loadAll();
-      flash(enabled ? "Emergency Freeze چالاک کرا ✓" : "Emergency Freeze ناچالاک کرا ✓");
+      flash(enabled ? "ڕاگرتنی فریاکەوتن چالاک کرا ✓" : "ڕاگرتنی فریاکەوتن ناچالاک کرا ✓");
       return result;
     } catch (e) {
       console.error("maintenance-mode", e);
-      flash(errorTextOr(e, "نەتوانرا Emergency Freeze بگۆڕدرێت"), "error");
+      flash(errorTextOr(e, "نەتوانرا ڕاگرتنی فریاکەوتن بگۆڕدرێت"), "error");
       return false;
     } finally {
       setBusy(false);
@@ -2759,7 +2759,7 @@ export default function App() {
   */
   const downloadBackup = () => run(async () => {
     if (!(profile?.role === "admin" && profile?.adminLevel === "owner")) {
-      flash("تەنها خاوەنی سیستەم دەتوانێت export ـی تەواوی داتا دابەزێنێت");
+      flash("تەنها خاوەنی سیستەم دەتوانێت هەناردەی تەواوی داتا دابەزێنێت");
       return false;
     }
 
@@ -2803,7 +2803,7 @@ export default function App() {
         p_command_key: commandKey("audit-export"),
       });
     } catch (e) { console.error("backup audit", e); }
-    flash("export ـی داتا ئامادە کرا ✓");
+    flash("هەناردەی داتا ئامادە کرا ✓");
     return payload.integrity?.checksum || true;
   });
 
@@ -3117,7 +3117,7 @@ export default function App() {
           style={{ background: "color-mix(in srgb, var(--neg) 92%, black)", color: "#fff" }}>
           <AlertTriangle className="w-4 h-4 shrink-0" />
           <span>
-            Emergency Freeze چالاکە — گۆڕانکاری دارایی قەدەغەیە
+            ڕاگرتنی فریاکەوتن چالاکە — گۆڕانکاری دارایی قەدەغەیە
             {data.runtime.maintenance_reason ? ` · ${data.runtime.maintenance_reason}` : ""}
           </span>
         </div>
@@ -10566,7 +10566,7 @@ function Backup({ data, calc, cur, downloadBackup, flash, sumUsd, mySafe, owners
             disabled={busy}
           >
             <Download className="w-4 h-4" />
-            {busy ? tr("جێبەجێکردن…") : tr("دابەزاندنی off-site JSON export")}
+            {busy ? tr("جێبەجێکردن…") : tr("دابەزاندنی هەناردەی JSON بۆ دەرەوە")}
           </Btn>
         ) : (
           <div className="text-xs text-[var(--txt-3)]">
@@ -10580,7 +10580,7 @@ function Backup({ data, calc, cur, downloadBackup, flash, sumUsd, mySafe, owners
       <Card className="p-5">
         <SecLbl>{tr("تاقیکردنەوەی گەڕاندنەوە")}</SecLbl>
         <div className="text-xs text-[var(--txt-2)] mb-3 leading-relaxed">
-          {tr("فایلێکی export ـی پاشەکەوتکراو هەڵبژێرە — پشکنین دەکرێت کە تێکنەچووبێت و لەگەڵ داتابەیسی ئێستا بگونجێت.")}
+          {tr("فایلێکی هەناردەی پاشەکەوتکراو هەڵبژێرە — پشکنین دەکرێت کە تێکنەچووبێت و لەگەڵ داتابەیسی ئێستا بگونجێت.")}
         </div>
         <input type="file" accept="application/json,.json" className="text-xs w-full"
           onChange={async (e) => {

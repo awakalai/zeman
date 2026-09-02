@@ -81,7 +81,7 @@ export const VERDICT = Object.freeze({
 export const VERDICT_TEXT = Object.freeze({
   ok: "فایلەکە تەواوە و لەگەڵ داتابەیس دەگونجێت ✓",
   unreadable: "فایلەکە ناخوێندرێتەوە — JSON دروست نییە",
-  wrong_format: "ئەم فایلە export ـی ZEMAN نییە",
+  wrong_format: "ئەم فایلە هەناردەی ZEMAN نییە",
   no_checksum: "فایلەکە checksum ـی نییە — ناتوانرێت پشتڕاست بکرێتەوە",
   corrupt: "فایلەکە دەستکاری کراوە یان تێکچووە — checksum یەک ناگرێتەوە",
   drifted: "فایلەکە تەواوە بەڵام کۆن بووە — داتابەیس گۆڕاوە",
