@@ -25,7 +25,7 @@ Each link is a gate that runs in CI and fails the `verified` check if it breaks.
 | Three languages | `verify:i18n` | the repository | no untranslated string, no alias |
 | Unit and service tests | `npm test` | pure modules | **886 tests** |
 | Accounting contracts | `verify:accounting` | real migrations, real PostgreSQL | **317 checks** |
-| Business flows | `verify:flows` | real migrations, real PostgreSQL | **24 flows, 147 steps** |
+| Business flows | `verify:flows` | real migrations, real PostgreSQL | **25 flows, 152 steps** |
 | Receipt reliability | `verify:receipts` | real migrations, real PostgreSQL | **35 checks** |
 | Tenant isolation | `verify:isolation` | real migrations, real PostgreSQL | **121 checks** |
 | Query plans at volume | `verify:scale` | seeded volume, 20,000 rows | **16 opening queries** |
@@ -99,6 +99,13 @@ by reading the code. Several were found only that way.
 - **An upload that errored must not enter the system** — four checks in `verify:receipts`, and
   the live database shows the five affected documents sitting in `upload_failed_retryable` with
   no ledger effect.
+- **The direct trade** — «مامەڵەی ڕاستەوخۆ ( خێر ٪١٠٠ بۆخۆم و لای کەس هەڵناگیرێ )». The owner
+  named three flows they do every day; two of them were executed end to end here and the third
+  was not. The accounting gate checked that a direct pair is *labelled* `owner_cashbox`, but it
+  did that by inserting two rows into `public.txs` by hand — proving the label and nothing about
+  the money. Business flow 25 runs the owner's own command and then asks both halves of the
+  sentence: the profit is the whole spread with no partner rate taken out of it, and no ledger
+  row the trade wrote names a partner, an office or an account.
 
 **`OWNER-DISCOVERY-001` is open** — a transaction workflow awaiting verbal clarification. Nothing
 has been assumed or built for it. **While it is open, the system as a whole is not ready for real
@@ -184,7 +191,7 @@ No history was deleted, no posted row modified, no migration rewritten, no RLS d
 The later rounds kept the same rule. `sarraf_partner_batch_detail` was re-declared so a batch
 split between two partners shows each of them what they actually hold — a visibility change, not
 an accounting one; the sums it reports come from the same columns as before. `202609020002` adds
-no table, no constraint and no column. The 317 accounting contracts and 24 business flows are
+no table, no constraint and no column. The 317 accounting contracts and 25 business flows are
 what prove the results did not move.
 
 ## 6. What this document does NOT claim
