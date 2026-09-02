@@ -31,7 +31,7 @@ Each link is a gate that runs in CI and fails the `verified` check if it breaks.
 | Query plans at volume | `verify:scale` | seeded volume, 20,000 rows | **16 opening queries** |
 | The inspection itself | `verify:inspect` | real migrations, `auth.uid()` unset | **28 sections** |
 | Per-role interface | `verify:roles` | Chromium, dev server, 1280×900 **and 390×844** | **82 checks** |
-| The receipt's journey | `verify:journey` | Chromium + real PostgreSQL | end to end |
+| The receipt's journey | `verify:journey` | Chromium + real PostgreSQL | **22 checks** |
 | The bundle that ships | `verify:bundle` | Chromium, `dist/` under vercel.json headers | **8 checks** |
 
 `verify:bundle` was added last and closes a gap the others left open. Every other browser gate
