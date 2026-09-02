@@ -128,6 +128,40 @@ try {
            + (case when l.cash_account_id is not null then 1 else 0 end) > 1`).trim();
     if (out !== "0") throw new Error(`${out} row(s) claim two holders`);
   });
+  // Section 13 asks the question section 3 cannot: not "does this row name a business?" but
+  // "does it name the RIGHT one?".
+  //
+  // A null tenant is visible — section 3 counts it and section 4 says whether such rows are
+  // still being made. A row carrying the WRONG tenant is invisible to both, satisfies every
+  // not-null constraint, and puts one business's money inside another's books. Asserted here
+  // rather than only printed, because a number a person has to notice is a number nobody
+  // notices on the morning it first stops being zero.
+  check("no row belongs to a different business than its parent", () => {
+    const out = db.psql(`
+      select coalesce(sum(n), 0)::text from (
+        select count(*) n from public.ledger l join public.txs t on t.id = l.tx_id
+         where l.tenant_id is distinct from t.tenant_id
+        union all
+        select count(*) from public.journal_entries j join public.txs t on t.id = j.transaction_id
+         where j.tenant_id is distinct from t.tenant_id
+        union all
+        select count(*) from public.receipts r join public.receipt_batches b on b.id = r.batch_id
+         where r.tenant_id is distinct from b.tenant_id
+        union all
+        select count(*) from public.journal_entries j
+          join public.receipt_batches b on b.id = j.receipt_batch_id
+         where j.tenant_id is distinct from b.tenant_id
+        union all
+        select count(*) from public.txs t join public.app_users u on u.id = t.cp_id
+         where u.tenant_id is not null and t.tenant_id is distinct from u.tenant_id
+        union all
+        select count(*) from public.txs t join public.app_users u on u.id = t.partner_id
+         where u.tenant_id is not null and t.tenant_id is distinct from u.tenant_id
+        union all
+        select count(*) from public.receipt_batches b join public.app_users u on u.id = b.customer_id
+         where u.tenant_id is not null and b.tenant_id is distinct from u.tenant_id) s`).trim();
+    if (out !== "0") throw new Error(`${out} row(s) sit in a different business than their parent`);
+  });
 } finally {
   db.stop();
 }
