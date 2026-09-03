@@ -1539,7 +1539,7 @@ export default function App() {
     return { id: t.id, code: t.code || null, type: t.type, direct: !!t.direct,
       pair_id: t.pairId ?? null, direct_role: t.directRole ?? null, own_money: !!t.ownMoney,
       business_flow: t.businessFlow,
-      buy_rate: t.buyRate ?? null, buy_total: t.buyTotal ?? null, cp_id: t.cpId, cp_name: t.cpName, cur_id: t.curId, amount: t.amount, rate: t.rate, against_id: t.againstId, total: t.total, partner_id: t.partnerId, status: t.status, paid_at: t.paidAt, profit: t.profit, profit_cur_id: t.profitCurId, note: t.note || null, date: t.date, edited: !!t.edited, deleted: !!t.deleted };
+      buy_rate: t.buyRate ?? null, buy_total: t.buyTotal ?? null, cp_id: t.cpId, cp_name: t.cpName, cur_id: t.curId, amount: t.amount, rate: t.rate, against_id: t.againstId, total: t.total, partner_id: t.partnerId, partner_fee: t.partnerFee ?? null, status: t.status, paid_at: t.paidAt, profit: t.profit, profit_cur_id: t.profitCurId, note: t.note || null, date: t.date, edited: !!t.edited, deleted: !!t.deleted };
   };
 
   // One key per intent, kept until the outcome is actually known. A key minted fresh on each
@@ -2106,6 +2106,17 @@ export default function App() {
     // دراوی دەرەوە: دەبێت لای تەرەفێک بێت
     if (cur(f.curId).external && !f.partnerId) { flash(`${cur(f.curId).name} دەبێت لای تەرەفێک دابنرێت`); return false; }
 
+    // عمولەی هاوبەش — «بڕەکە خۆم دایدەنێم». Left empty, the partner's stored rate decides on the
+    // server. Typed, it is the commission, and it is checked here so the owner is told before
+    // they press rather than refused after. The server checks it again and is the authority.
+    const commissionText = String(f.partnerFee ?? "").trim();
+    if (commissionText !== "" && f.partnerId && f.type === "buy") {
+      const asked = Number(commissionText);
+      if (!Number.isFinite(asked)) { flash(tr("عمولەکە ژمارەیەکی دروست نییە")); return false; }
+      if (asked < 0) { flash(tr("عمولە ناتوانێت کەمتر لە سفر بێت")); return false; }
+      if (asked > amount) { flash(tr("عمولە ناتوانێت لە بڕی مامەڵەکە زیاتر بێت")); return false; }
+    }
+
     // The transaction's identity is fixed before the first attempt, so a retry after a lost
     // response saves the same transaction rather than a second one.
     const txId = uid();
@@ -2140,6 +2151,9 @@ export default function App() {
         curId: f.curId, amount, rate, againstId: f.againstId, total,
         buyRate: bookBuyRate, buyTotal: bookBuyTotal,
         partnerId: f.partnerId || null, direct: false, status: f.status || "completed",
+        // Sent as the text the owner typed. Rounding a commission in the browser and then
+        // letting the server round it again is two answers to one question.
+        partnerFee: f.partnerId && f.type === "buy" && commissionText !== "" ? commissionText : null,
         paidAt: null, profit, profitCurId, note: f.note || "",
         date: txDate, edited: false,
       };
@@ -4959,6 +4973,9 @@ function TxForm({ data, cur, calc, usr, avgRate, inventoryPosition, usdValueAt, 
     cpId: e ? e.cpId || "" : (lockCp || batch?.customer_id || ""),
     cpName: e ? e.cpName || "" : "",
     partnerId: e ? e.partnerId || "" : (batch?.partner_id || ""),
+    // «بڕەکە خۆم دایدەنێم، ئیتر جاری وایە دەیگۆڕم، واتا ڕێکەوتن نییە.» Empty means the partner's
+    // stored rate decides; anything typed here is the commission for this one purchase.
+    partnerFee: "",
     direct: e ? !!e.direct : false,
     buyQuote: e && e.direct && e.buyRate ? storedRateToDisplay(e.buyRate, initialCurId, initialAgainstId, initialRateBaseId) : "",
     sellQuote: e && e.direct && e.rate ? storedRateToDisplay(e.rate, initialCurId, initialAgainstId, initialRateBaseId) : "",
@@ -5094,6 +5111,19 @@ function TxForm({ data, cur, calc, usr, avgRate, inventoryPosition, usdValueAt, 
   const inventoryRefuses = (shortOfStock || costBasisMissing) && pos?.fromServer === true;
   const inventoryDoubts = (shortOfStock || costBasisMissing) && pos?.fromServer !== true;
   const feeRate = f.partnerId ? (usr(f.partnerId).rate || 0) : 0;
+  // The commission for this one purchase. «بڕەکە خۆم دایدەنێم» — the stored rate fills the box
+  // in, and whatever is left in it is what the partner is paid. The number that reaches the
+  // server is the string as typed: the arithmetic that decides money is the server's, and this
+  // side only has to show the owner what they are about to agree to.
+  const commissionOffered = f.partnerId && f.type === "buy" && amtR > 0
+    ? roundMoney(data, amtR * feeRate / 100, f.curId) : 0;
+  const commissionTyped = String(f.partnerFee ?? "").trim();
+  const commissionAsked = commissionTyped === "" ? commissionOffered : Number(commissionTyped);
+  const commissionObjection = commissionTyped === "" ? null
+    : !Number.isFinite(commissionAsked) ? tr("عمولەکە ژمارەیەکی دروست نییە")
+    : commissionAsked < 0 ? tr("عمولە ناتوانێت کەمتر لە سفر بێت")
+    : amtR > 0 && commissionAsked > amtR ? tr("عمولە ناتوانێت لە بڕی مامەڵەکە زیاتر بێت")
+    : null;
   const rateQuoteId = oppositePairId(f.curId, f.againstId, f.rateBaseId);
 
   const setPair = (nextCurId, nextAgainstId) => {
@@ -5133,6 +5163,7 @@ function TxForm({ data, cur, calc, usr, avgRate, inventoryPosition, usdValueAt, 
       buyQuote: "",
       sellQuote: "",
       partnerId: "",
+      partnerFee: "",
     }));
   };
 
@@ -5151,7 +5182,7 @@ function TxForm({ data, cur, calc, usr, avgRate, inventoryPosition, usdValueAt, 
   const blank = {
     type: f.type, curId: f.curId, amount: "", againstId: f.againstId, rateBaseId: f.rateBaseId, quote: f.quote,
     manualRate: f.manualRate, cpMode: "acc", cpId: lockCp || "", cpName: "",
-    partnerId: "", status: "completed", officeId: "", note: "",
+    partnerId: "", partnerFee: "", status: "completed", officeId: "", note: "",
     direct: f.direct, buyQuote: f.buyQuote, sellQuote: f.sellQuote,
   };
 
@@ -5169,6 +5200,9 @@ function TxForm({ data, cur, calc, usr, avgRate, inventoryPosition, usdValueAt, 
       flash?.(tr("دراوی مامەڵە و دراوی بەرامبەر ناکرێت هەمان بن"), "error");
       return;
     }
+    // The commission box is already showing why it is wrong; saying it again as a flash is what
+    // turns a note into a refusal the owner can act on.
+    if (commissionObjection) { flash?.(commissionObjection, "error"); return; }
     setSending(true);
     try {
       const ok = await onSave({ ...f, rate, batchId: batch?.id, receiptIds: batch?.receipt_ids || [] }, e);
@@ -5278,6 +5312,7 @@ function TxForm({ data, cur, calc, usr, avgRate, inventoryPosition, usdValueAt, 
             ...f,
             direct: next,
             partnerId: "",
+            partnerFee: "",
             buyQuote: next && directBuyAuto ? Number(directBuyAuto.toPrecision(10)) : f.buyQuote,
             sellQuote: next && directSellAuto ? Number(directSellAuto.toPrecision(10)) : f.sellQuote,
           });
@@ -5542,9 +5577,26 @@ function TxForm({ data, cur, calc, usr, avgRate, inventoryPosition, usdValueAt, 
                   {tr("فیشەکانیش هەر بەم لێدانە دەچنە لای ئەم هاوبەشە")}
                 </div>
               )}
-              {feeRate > 0 && f.type === "buy" && amtR > 0 && (
-                <div className="text-[11.5px] mt-2" style={{ color: "var(--warn)" }}>
-                  {tr("عمولە")} {feeRate}{tr("٪")} = <b style={num}>{fmtMoney(data, roundMoney(data, amtR * feeRate / 100, f.curId), f.curId)}</b> · {tr("باڵانسی دوایی")} <b style={num}>{fmtMoney(data, amtR - roundMoney(data, amtR * feeRate / 100, f.curId), f.curId)}</b>
+              {f.partnerId && f.type === "buy" && amtR > 0 && (
+                <div className="mt-2.5 rounded-[var(--r-sm)] p-2.5 space-y-2"
+                     style={{ background: "var(--surf-2)", border: "1px solid var(--line)" }}>
+                  <Lbl>{tr("عمولەی هاوبەش")}</Lbl>
+                  <Inp value={f.partnerFee} inputMode="decimal"
+                       placeholder={String(commissionOffered)}
+                       onChange={(ev) => setF({ ...f, partnerFee: ev.target.value })} />
+                  <div className="text-[11.5px]" style={{ color: "var(--txt-2)" }}>
+                    {feeRate > 0
+                      ? `${tr("ڕێژەی تۆمارکراوی ئەم هاوبەشە")} ${feeRate}${tr("٪")} = ${fmtMoney(data, commissionOffered, f.curId)}`
+                      : tr("ڕێژەیەکی تۆمارکراو نییە بۆ ئەم هاوبەشە")}
+                  </div>
+                  {commissionObjection
+                    ? <div className="text-[11.5px]" style={{ color: "var(--neg)" }}>{commissionObjection}</div>
+                    : (
+                      <div className="text-[11.5px]" style={{ color: "var(--warn)" }}>
+                        {tr("وەردەگرێت")} <b style={num}>{fmtMoney(data, commissionAsked, f.curId)}</b>
+                        {" · "}{tr("باڵانسی دوایی")} <b style={num}>{fmtMoney(data, amtR - commissionAsked, f.curId)}</b>
+                      </div>
+                    )}
                 </div>
               )}
               {cur(f.curId).external && !f.partnerId && (

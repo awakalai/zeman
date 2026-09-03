@@ -3838,6 +3838,143 @@ try {
   };
   customerMoneyChecks();
 
+  // ── «بڕەکە خۆم دایدەنێم، ئیتر جاری وایە دەیگۆڕم، واتا ڕێکەوتن نییە» ────────────────────────
+  //
+  // The commission a partner is paid for holding money was one stored percentage applied to
+  // every purchase. There is no agreed percentage: the owner names an amount, and changes it.
+  // The stored rate is now a default, and `partner_fee` on the transaction is the decision.
+  //
+  // What matters is that the number the owner typed is the number in every place the system
+  // records a commission — the ledger row that moves it and the snapshot that reports it.
+  const partnerCommissionChecks = () => {
+    asAdmin();
+    psql(`insert into public.app_users(id,name,role,rate,tenant_id)
+          values ('p-comm','Commission Partner','partner',2,'t-sarkhel')
+          on conflict (id) do update set rate = excluded.rate`);
+    // A purchase pays dollars out of the main safe. Without them the command refuses for a
+    // reason that has nothing to do with commissions.
+    psql(`insert into public.ledger(id,type,cur_id,amount,date,tenant_id)
+          values ('led-comm-fund','deposit','usd',5000,now(),'t-sarkhel')`);
+
+    const buy = (id, amount, extra = "") => psql(`select public.sarraf_commit_transactions(
+      jsonb_build_array(jsonb_build_object('id','${id}','type','buy','cp_id','cust-1',
+        'cur_id','cny','amount',${amount},'rate',0.14,'against_id','usd',
+        'total',${(amount * 0.14).toFixed(2)},'status','completed','partner_id','p-comm'${extra})),
+      '[]'::jsonb, null, 'cmd-${id}', 'کڕین', 'commission')`);
+
+    const feeRow = (txId) => psql(`select coalesce(sum(amount),0)::text from public.ledger
+                                    where tx_id='${txId}' and type='partner_fee'`).trim();
+    const snapshot = (txId) => psql(`select coalesce(partner_fee_snapshot,-1)::text||'/'||
+                                      coalesce(partner_rate_snapshot,-1)::text
+                                     from public.txs where id='${txId}'`).trim();
+
+    check("with no amount named, the partner's stored rate is still what applies", () => {
+      buy("tx-comm-default", 1000);
+      if (Number(feeRow("tx-comm-default")) !== -20) {
+        throw new Error(`the ledger took ${feeRow("tx-comm-default")}, expected -20`);
+      }
+      const [fee, rate] = snapshot("tx-comm-default").split("/").map(Number);
+      if (fee !== 20 || rate !== 2) throw new Error(`the snapshot reads ${fee} at ${rate}%`);
+    });
+
+    check("the amount the owner names is the amount the partner is paid", () => {
+      buy("tx-comm-named", 1000, ",'partner_fee',50");
+      if (Number(feeRow("tx-comm-named")) !== -50) {
+        throw new Error(`the ledger took ${feeRow("tx-comm-named")}, expected -50`);
+      }
+      if (Number(snapshot("tx-comm-named").split("/")[0]) !== 50) {
+        throw new Error(`the snapshot reads ${snapshot("tx-comm-named")}`);
+      }
+    });
+
+    check("the snapshot never names a rate that was not charged", () => {
+      // A report multiplying amount by partner_rate_snapshot must land on partner_fee_snapshot.
+      // A snapshot saying 2% next to a fee of 50 on 1000 is a number nobody can reconcile.
+      const [fee, rate] = snapshot("tx-comm-named").split("/").map(Number);
+      if (Math.abs(1000 * rate / 100 - fee) > 1e-8) {
+        throw new Error(`1000 at ${rate}% is not ${fee}`);
+      }
+    });
+
+    check("naming nothing at all means the partner is paid nothing", () => {
+      // «جاری وایە دەیگۆڕم» includes changing it to none. Zero must mean zero, not "use the
+      // stored rate" — a falsy override quietly falling back to 2% would pay a commission the
+      // owner deliberately declined.
+      buy("tx-comm-zero", 1000, ",'partner_fee',0");
+      if (Number(feeRow("tx-comm-zero")) !== 0) {
+        throw new Error(`the ledger took ${feeRow("tx-comm-zero")} on a zero commission`);
+      }
+      const rows = psql(`select count(*)::text from public.ledger
+                          where tx_id='tx-comm-zero' and type='partner_fee'`).trim();
+      if (rows !== "0") throw new Error(`${rows} commission row(s) were written for nothing`);
+    });
+
+    check("the partner ends up holding the money less the commission", () => {
+      // The whole reason the number matters: «بڕەکە هەر لەو پارەیە دەبردڕێ».
+      const held = Number(psql(
+        `select public.sarraf_locked_cash_balance('cny','p-comm')::text`).trim());
+      // 1000-20, 1000-50 and 1000-0 across the three purchases above.
+      if (Math.abs(held - 2930) > 1e-8) throw new Error(`the partner holds ${held}, expected 2930`);
+    });
+
+    mustFail("a commission below zero is refused",
+      `select public.sarraf_commit_transactions(
+        jsonb_build_array(jsonb_build_object('id','tx-comm-neg','type','buy','cp_id','cust-1',
+          'cur_id','cny','amount',1000,'rate',0.14,'against_id','usd','total',140,
+          'status','completed','partner_id','p-comm','partner_fee',-5)),
+        '[]'::jsonb, null, 'cmd-tx-comm-neg', 'کڕین', 'commission')`);
+
+    mustFail("a commission larger than the money it comes out of is refused",
+      `select public.sarraf_commit_transactions(
+        jsonb_build_array(jsonb_build_object('id','tx-comm-over','type','buy','cp_id','cust-1',
+          'cur_id','cny','amount',1000,'rate',0.14,'against_id','usd','total',140,
+          'status','completed','partner_id','p-comm','partner_fee',1001)),
+        '[]'::jsonb, null, 'cmd-tx-comm-over', 'کڕین', 'commission')`);
+
+    mustFail("a commission that is not a number is refused",
+      `select public.sarraf_commit_transactions(
+        jsonb_build_array(jsonb_build_object('id','tx-comm-junk','type','buy','cp_id','cust-1',
+          'cur_id','cny','amount',1000,'rate',0.14,'against_id','usd','total',140,
+          'status','completed','partner_id','p-comm','partner_fee','بیست')),
+        '[]'::jsonb, null, 'cmd-tx-comm-junk', 'کڕین', 'commission')`);
+
+    check("a refused commission writes nothing at all", () => {
+      const left = psql(`select count(*)::text from public.txs
+                          where id in ('tx-comm-neg','tx-comm-over','tx-comm-junk')`).trim();
+      if (left !== "0") throw new Error(`${left} transaction(s) survived a refused commission`);
+    });
+
+    check("the commission of a sale is nothing, asked directly", () => {
+      // The end-to-end check below proves no commission row is written for a sale, but the
+      // commit command guards that separately — so the guard inside the function itself would
+      // be measured by nothing and could rot. This asks the function, where the guard lives.
+      const onSale = psql(`select public.sarraf_partner_commission(
+        jsonb_build_object('type','sell','partner_id','p-comm','amount',500,'partner_fee',40))::text`).trim();
+      if (Number(onSale) !== 0) throw new Error(`a sale was priced at ${onSale} in commission`);
+      const onOwn = psql(`select public.sarraf_partner_commission(
+        jsonb_build_object('type','buy','partner_id','p-comm','amount',500,'direct',true))::text`).trim();
+      if (Number(onOwn) !== 0) throw new Error(`the owner's own trade was priced at ${onOwn}`);
+    });
+
+    check("a sale pays no commission, whatever amount is named on it", () => {
+      // A sale takes money out of the partner's account rather than putting it in, so there is
+      // nothing to pay them for. Without this, `partner_fee` on a sale would be a second way to
+      // move money out of a partner's custody with no purchase behind it.
+      psql(`select public.sarraf_commit_transactions(
+        jsonb_build_array(jsonb_build_object('id','tx-comm-sale','type','sell','cp_id','cust-1',
+          'cur_id','cny','amount',500,'rate',0.15,'against_id','usd','total',75,
+          'status','completed','partner_id','p-comm','partner_fee',40)),
+        '[]'::jsonb, null, 'cmd-tx-comm-sale', 'فرۆشتن', 'commission')`);
+      if (Number(feeRow("tx-comm-sale")) !== 0) {
+        throw new Error(`a sale paid ${feeRow("tx-comm-sale")} in commission`);
+      }
+      // And the partner's standing rate is still what the sale's snapshot records, unchanged.
+      const rate = Number(snapshot("tx-comm-sale").split("/")[1]);
+      if (rate !== 2) throw new Error(`the sale's rate snapshot reads ${rate}`);
+    });
+  };
+  partnerCommissionChecks();
+
   check("a second reset cannot empty a system that has since gone live", () => {
     const out = JSON.parse(psql("select public.sarraf_reset_installation()::text"));
     if (out.done !== false) throw new Error(JSON.stringify(out));
