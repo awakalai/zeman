@@ -3920,6 +3920,117 @@ try {
         throw new Error(`the drawer holds ${inDrawer} and the owner may spend ${mine} — the customers' 550 is not being held back`);
       }
     });
+
+    // ── «کاتێک شتی لە من کڕی ئۆتۆماتیکی پارەکە لەو بەشەی خۆی ببات» ────────────────────────────
+    //
+    // The other half. Their money is in the safe and is theirs; when they buy, it becomes the
+    // owner's without anybody pressing anything, and the drawer never moves — because nothing
+    // is carried in or out of it.
+    const vaultOf = (id, cur) => Number(psql(
+      `select coalesce(available,0)::text from public.customer_vaults
+        where customer_id='${id}' and currency='${cur}'`).trim() || 0);
+    const drawer = (cur) => Number(psql(
+      `select coalesce(sum(amount),0)::text from public.ledger where cur_id='${cur}'`).trim());
+    const cashInBooksNow = () => Number(psql(
+      `select coalesce(round(sum(case when l.side='debit' then l.amount else -l.amount end),2),0)::text
+         from public.journal_lines l join public.journal_entries e on e.id=l.entry_id
+        where l.account_id='acc-1000' and l.currency='USD' and e.status='posted'`).trim());
+
+    // Dinars, not yuan: an external currency has to name a custody partner even on a sale, and
+    // this is a check about vaults, not about custody.
+    const sellTo = (id, who, amount, total) => psql(`select public.sarraf_commit_transactions(
+      jsonb_build_array(jsonb_build_object('id','${id}','type','sell','cp_id','${who}',
+        'cur_id','iqd','amount',${amount},'rate',${(total / amount).toFixed(10)},
+        'against_id','usd','total',${total},'status','completed')),
+      '[]'::jsonb, null, 'cmd-${id}', 'فرۆشتن', 'vault settlement')`);
+
+    check("a customer buying pays from their own money without being asked", () => {
+      // The main safe has to hold the yuan being sold, or the command refuses for a reason
+      // that has nothing to do with vaults.
+      psql(`insert into public.ledger(id,type,cur_id,amount,date,tenant_id)
+            values ('led-vault-stock','buy','iqd',90000000,now(),'t-sarkhel')`);
+      // cust-safe holds 550 from the deposits above. They buy something for 200.
+      const heldBefore = vaultOf("cust-safe", "USD");
+      const mineBefore = ownSafe("usd");
+      const drawerBefore = drawer("usd");
+      if (heldBefore < 200) throw new Error(`they hold ${heldBefore}, the check needs at least 200`);
+
+      sellTo("tx-vault-pay", "cust-safe", 1000, 200);
+
+      if (vaultOf("cust-safe", "USD") !== heldBefore - 200) {
+        throw new Error(`their money went from ${heldBefore} to ${vaultOf("cust-safe", "USD")}`);
+      }
+      // The owner is 200 better off, and the drawer is exactly where it was: the notes never
+      // moved, only whose they are.
+      if (ownSafe("usd") - mineBefore !== 200) {
+        throw new Error(`the owner's safe moved by ${ownSafe("usd") - mineBefore}, expected 200`);
+      }
+      if (drawer("usd") !== drawerBefore) {
+        throw new Error(`the drawer moved by ${drawer("usd") - drawerBefore} when nothing was carried in or out`);
+      }
+    });
+
+    check("and the books do not count cash that never arrived", () => {
+      // The sale's own entry debits acc-1000 for the whole total because money ordinarily
+      // arrives. Here it did not — it has been in the drawer since they deposited it. Without
+      // the offsetting credit the books would hold 200 of cash that does not exist.
+      //
+      // Measured as the CHANGE across one sale. The absolute figures cannot be compared in this
+      // database: most fixtures above write ledger rows straight in without a journal entry, so
+      // the two have never been equal here and never claimed to be.
+      const cashBefore = cashInBooksNow();
+      const drawerBefore = drawer("usd");
+      psql(`select public.sarraf_customer_vault_move('cust-safe','USD',300,'in',1,
+              'پارەی زیاتر','vault:before-the-books-check')`);
+      sellTo("tx-vault-books", "cust-safe", 1500, 300);
+      // Their 300 paid the whole sale, so no cash arrived and none should be recorded. The
+      // deposit itself did bring 300 in, which is the only movement either side should show.
+      const cashMoved = cashInBooksNow() - cashBefore;
+      const drawerMoved = drawer("usd") - drawerBefore;
+      if (Math.abs(cashMoved - 300) > 1e-6) {
+        throw new Error(`the books recorded ${cashMoved} of cash across a deposit of 300 and a sale paid from it`);
+      }
+      if (Math.abs(drawerMoved - 300) > 1e-6) {
+        throw new Error(`the drawer moved by ${drawerMoved}, expected 300`);
+      }
+    });
+
+    check("it takes what they have and never more", () => {
+      // 350 left, and they buy something for 900. They pay 350; the rest is not their money to
+      // pay with, and a vault must never be overdrawn into a debt nobody agreed to.
+      const held = vaultOf("cust-safe", "USD");
+      sellTo("tx-vault-over", "cust-safe", 4500, 900);
+      const after = vaultOf("cust-safe", "USD");
+      if (after !== 0) throw new Error(`they were left holding ${after}, expected 0`);
+      if (held <= 0) throw new Error("they had nothing to pay with, so this proves nothing");
+    });
+
+    check("a customer with no money of theirs is settled the way they always were", () => {
+      const mineBefore = ownSafe("usd");
+      sellTo("tx-vault-none", "cust-2", 500, 100);
+      if (ownSafe("usd") - mineBefore !== 100) {
+        throw new Error(`the owner's safe moved by ${ownSafe("usd") - mineBefore}, expected 100`);
+      }
+      const touched = Number(psql(`select count(*)::text from public.ledger
+                                    where tx_id='tx-vault-none' and customer_id is not null`).trim());
+      if (touched !== 0) throw new Error("a vault was touched for somebody who has none");
+    });
+
+    check("buying FROM a customer does not reach into their money", () => {
+      // «کاتێک شتی لە من کڕی» is a sale. Money the owner pays out is a different question, and
+      // helping himself to their balance to fund it would be the worst answer to it.
+      psql(`select public.sarraf_customer_vault_move('cust-safe','USD',500,'in',1,
+              'پارەی نوێ','vault:before-a-purchase')`);
+      const held = vaultOf("cust-safe", "USD");
+      psql(`select public.sarraf_commit_transactions(
+        jsonb_build_array(jsonb_build_object('id','tx-vault-buy','type','buy','cp_id','cust-safe',
+          'cur_id','iqd','amount',140000,'rate',0.001,'against_id','usd','total',140,
+          'status','completed')),
+        '[]'::jsonb, null, 'cmd-tx-vault-buy', 'کڕین', 'not a sale')`);
+      if (vaultOf("cust-safe", "USD") !== held) {
+        throw new Error(`their money moved by ${vaultOf("cust-safe", "USD") - held} on a purchase`);
+      }
+    });
   };
   customerMoneyChecks();
 
