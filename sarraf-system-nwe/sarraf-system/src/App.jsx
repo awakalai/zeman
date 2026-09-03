@@ -8468,6 +8468,23 @@ function BatchDetail({ id, back, usr, data, profile, onMakeTx, flash, reloadBatc
   const [pick, setPick] = useState({});        // {receiptId: partnerId|""}
   const [saving, setSaving] = useState(false);
   const [allocationReason, setAllocationReason] = useState("دابەشکردنی فیش بەپێی شوێنی پارە");
+  // ── «٣ دانەیان هەڵدەبژێرم و مامەڵەیەکی لێوە درووست ئەکەم» ────────────────────────────────
+  //
+  // The server has taken an arbitrary list of receipt ids since 202608110001 — it checks they
+  // are accepted, unused, one currency and at most one partner, and leaves the batch open when
+  // some are left. What was missing was the way to say which ones. The amount still comes from
+  // the receipts and still cannot be typed over.
+  //
+  // Declared up here with the other hooks on purpose: the first version sat below the loading
+  // return, so it ran on some renders and not others. React counts hooks, and verify:journey
+  // caught the whole screen collapsing with "Rendered more hooks than during the previous
+  // render" before this reached anywhere real.
+  const [chosen, setChosen] = useState(() => new Set());
+  const pickOne = (id) => setChosen((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
   const matchCommandRef = useRef(null);
   const decisionCommandRef = useRef(null);
   const finalizationCommandRef = useRef(null);
@@ -8543,6 +8560,18 @@ function BatchDetail({ id, back, usr, data, profile, onMakeTx, flash, reloadBatc
     conversionGroups[key].n += 1;
   });
   const conversionGroupKeys = Object.keys(conversionGroups);
+
+  // A receipt converted in another press is gone from convertibleReceipts, so a stale id in the
+  // set would silently shrink the total. The selection is always read through what is still there.
+  const selected = convertibleReceipts.filter((r) => chosen.has(r.id));
+  const selectedTotal = selected.reduce((sum, r) => sum + (Number(r.net_amount ?? r.amount) || 0), 0);
+  const selectedCurrencies = [...new Set(selected.map((r) => r.currency))];
+  const selectedPartners = [...new Set(selected.map((r) => r.partner_id || ""))];
+  // The same three rules the server enforces, said here instead of after the press.
+  const selectionObjection = selected.length === 0 ? null
+    : selectedCurrencies.length > 1 ? tr("فیشە هەڵبژێردراوەکان یەک دراو نین")
+    : selectedPartners.length > 1 ? tr("فیشە هەڵبژێردراوەکان لای یەک هاوبەش نین")
+    : null;
   const remainingTotal = convertibleReceipts.reduce((sum, receipt) => sum + (Number(receipt.net_amount ?? receipt.amount) || 0), 0);
   const remainingCurrency = convertibleReceipts[0]?.currency || b.currency;
 
@@ -8881,6 +8910,76 @@ function BatchDetail({ id, back, usr, data, profile, onMakeTx, flash, reloadBatc
                   placeholder={tr("بۆ نموونە: پارەکە لای ئەم هاوبەشە دانرا")} />
               </div>
               <Btn className="w-full" onClick={saveSplit} disabled={saving}>{saving ? tr("جێبەجێکردن…") : tr("پاشەکەوتکردنی دابەشکردن")}</Btn>
+            </div>
+          )}
+        </Card>
+      )}
+
+      {/* Choosing which receipts, one by one. «٣ دانەیان هەڵدەبژێرم و مامەڵەیەکی لێوە درووست
+        * ئەکەم ، لە بڕەکە بڕی ئەو ٣ فیشە دابنێ ، ئەوانی تریش بە هەمان شێواز.» */}
+      {canCreateTransaction && (
+        <Card className="p-5">
+          <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
+            <SecLbl>{tr("هەڵبژاردنی فیشەکان")}</SecLbl>
+            <div className="flex gap-1.5">
+              <button type="button" onClick={() => setChosen(new Set(convertibleReceipts.map((r) => r.id)))}
+                className="px-2.5 py-1 rounded-lg text-xs font-semibold"
+                style={{ background: "var(--line)", color: "var(--txt-2)" }}>{tr("هەموویان")}</button>
+              <button type="button" onClick={() => setChosen(new Set())}
+                className="px-2.5 py-1 rounded-lg text-xs font-semibold"
+                style={{ background: "var(--line)", color: "var(--txt-2)" }}>{tr("پاککردنەوەی هەڵبژاردن")}</button>
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            {convertibleReceipts.map((r, i) => {
+              const on = chosen.has(r.id);
+              return (
+                <label key={r.id}
+                  className="flex items-center gap-2.5 p-2.5 rounded-[var(--r-sm)] cursor-pointer tap"
+                  style={on
+                    ? { background: "var(--ac-bg)", border: "1px solid color-mix(in srgb, var(--ac) 34%, transparent)" }
+                    : { background: "var(--surf-2)", border: "1px solid var(--line)" }}>
+                  <input type="checkbox" checked={on} onChange={() => pickOne(r.id)}
+                    className="w-4 h-4 accent-[var(--ac)] shrink-0"
+                    aria-label={`${tr("فیش")} ${i + 1} — ${fmtMoney(data, r.net_amount ?? r.amount, r.currency)} ${r.currency}`} />
+                  <span className="text-xs text-[var(--txt-3)] w-5" style={num}>{i + 1}</span>
+                  {r.image_path && <ReceiptImg path={r.image_path} className="w-9 h-9 object-cover rounded-lg border border-[var(--line)] shrink-0" />}
+                  <span className="min-w-0 flex-1">
+                    <span className="text-sm font-bold text-[var(--txt)] block" style={num}>
+                      {fmtMoney(data, r.net_amount ?? r.amount, r.currency)}
+                      <span className="text-xs font-normal text-[var(--txt-2)]"> {r.currency}</span>
+                    </span>
+                    <span className="text-[11px] text-[var(--txt-3)] truncate block">
+                      {r.receiver || "—"}{r.partner_id ? ` · ${tr("لای")} ${usr(r.partner_id).name}` : ""}
+                    </span>
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+
+          {selected.length > 0 && (
+            <div className="mt-3 pt-3 border-t border-[var(--line)]">
+              <div className="flex items-center justify-between gap-3 mb-2 flex-wrap">
+                <span className="text-sm text-[var(--txt-2)]">
+                  <b style={num}>{selected.length}</b> {tr("فیش هەڵبژێردراوە")}
+                </span>
+                <span className="text-lg font-bold" style={{ ...num, color: "var(--pos)" }}>
+                  {fmtMoney(data, selectedTotal, selectedCurrencies[0])} {selectedCurrencies[0]}
+                </span>
+              </div>
+              {selectionObjection
+                ? <div className="text-[12px] mb-2" style={{ color: "var(--neg)" }}>{selectionObjection}</div>
+                : null}
+              <Btn kind={isOut ? "danger" : "primary"} className="w-full" disabled={!!selectionObjection}
+                onClick={() => onMakeTx({ ...b, total_net: selectedTotal, currency: selectedCurrencies[0],
+                  n: selected.length, partner_id: selected[0]?.partner_id || null,
+                  receipt_ids: selected.map((r) => r.id) })}>
+                {isOut
+                  ? tr("درووستکردنی فرۆشتن لەم فیشە هەڵبژێردراوانە")
+                  : tr("درووستکردنی کڕین لەم فیشە هەڵبژێردراوانە")}
+              </Btn>
             </div>
           )}
         </Card>
