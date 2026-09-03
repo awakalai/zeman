@@ -143,9 +143,20 @@ test("a line with nothing waiting behind it is not drawn", () => {
 
 // Every count comes from the same data the screen it links to reads, so a summary saying four
 // cannot lead to a list showing three.
+//
+// This used to assert that the hub derived a batch's stage inline — which was the shape of the
+// code, not the property being protected. It was satisfied while the receipts screen kept its
+// OWN copy of that derivation, which is the exact disagreement the test is named after. The
+// property is that there is one counter, and both screens call it.
 test("the counts are read, not stored", () => {
-  assert.match(hub, /const stageOf = \(b\) =>/, "the screen no longer derives the batch stage itself");
+  assert.match(hub, /todaysWork\(\{/, "the hub counts the day itself instead of calling the counter");
+  assert.doesNotMatch(hub, /receipt_stage \|\|/, "the hub still derives a batch stage of its own");
   assert.match(hub, /unpricedCurrencies\(data\?\.currencies \|\| \[\]\)/, "the rates check is not the one the rest of the app uses");
+  // And the screen the hub's receipt counts link to reads a stage the same way, from the same
+  // place, rather than from a second copy that can drift away from it.
+  assert.match(source, /const lifecycleOf = batchStage;/, "the receipts screen derives the stage itself again");
+  assert.equal((source.match(/receipt_stage \|\| \(b\.tx_id/g) || []).length, 0,
+    "a copy of the stage derivation has come back into the app");
 });
 
 // The guarantee this has always protected is that none of these screens becomes unreachable. It

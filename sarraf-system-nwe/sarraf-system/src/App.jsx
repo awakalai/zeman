@@ -29,6 +29,7 @@ import { revokeAllUrls, revokeDroppedUrls } from "./services/objectUrls";
 import { unrealizedPnl, unrealizedReasonText } from "./services/unrealizedPnl";
 import { EARNING_KINDS, earningsByKind } from "./services/earningsByKind";
 import { capitalEventsFrom, investorShare, investorsTotalByCurrency, profitEventsFrom, sharedCostEventsFrom } from "./services/investorShare";
+import { batchStage, todaysWork } from "./services/todaysWork.js";
 import { crossRate, fromUsdAsOf, rateAsOf, rateErrorText, rateOf, unpricedCurrencies, usdFromAsOf, validateRate } from "./services/currencyRate";
 import {
   DIRECTION_REFUSED, mayEditExtraction, mayUploadDirection,
@@ -757,29 +758,23 @@ function AdminCenterHub({ lang = "ku", onNavigate, data, calc, cur, batches }) {
 
   // ── the receipts, which is most of the day ───────────────────────────────
   //
-  // Read the same way the receipts screen reads them, from the same helper, so the count here and
-  // the list there can never disagree — a summary that says four when the list shows three is
-  // worse than no summary.
-  const stageOf = (b) => b.receipt_stage || (b.tx_id ? "matched" : b.status === "new" ? "needs_review" : "verified");
-  const rows = batches || [];
-  const waiting = rows.filter((b) => ["received", "reading", "needs_review", "verified"].includes(stageOf(b)));
-  const waitingReceipts = waiting.reduce((sum, b) => sum + (Number(b.n) || 0), 0);
-  const needsPerson = rows.filter((b) => stageOf(b) === "needs_review").length;
-  const refused = rows.reduce((sum, b) => sum + (Number(b.rejected_n) || 0), 0);
-  const duplicates = rows.reduce((sum, b) => sum + (Number(b.dup_n) || 0), 0);
-
-  // ── the rates, without which nothing can be valued ───────────────────────
-  const unpriced = unpricedCurrencies(data?.currencies || []);
-
-  // ── what is waiting on a decision ────────────────────────────────────────
-  const approvals = (data?.approvals || []).filter((r) => r.status === "pending").length;
-  const unpaid = (data?.txs || []).filter((t) => !t.deleted && t.status === "pending").length;
-  const officesOwed = (data?.users || [])
-    .filter((u) => u.role === "office" && !u.deleted)
-    .map((u) => ({ u, owed: Object.entries(calc?.acctCash?.[u.id] || {}).filter(([, v]) => v > 0) }))
-    .filter((x) => x.owed.length);
-
-  const attention = waiting.length + unpriced.length + approvals + unpaid + officesOwed.length;
+  // Counted in services/todaysWork.js, with its own tests, rather than inline here. These are
+  // the numbers the owner reads before deciding what to do with the morning, and arithmetic
+  // that decides something belongs where it can be tested — the same reason the money maths
+  // left this file.
+  const today = todaysWork({
+    batches,
+    txs: data?.txs,
+    users: data?.users,
+    approvals: data?.approvals,
+    unpricedCurrencies: unpricedCurrencies(data?.currencies || []),
+    officeCash: calc?.acctCash,
+  });
+  const { waitingReceipts, needsPerson, refused, duplicates, unpaid, officesOwed } = today;
+  const waiting = { length: today.waitingBatches };
+  const unpriced = today.unpriced;
+  const approvals = today.approvals;
+  const attention = today.total;
 
   return (
     <div className="space-y-6">
@@ -855,10 +850,11 @@ function AdminCenterHub({ lang = "ku", onNavigate, data, calc, cur, batches }) {
               detail={label("کڕیارەکە هێشتا پارەکەی وەرنەگرتووە", "The customer has not been paid yet", "لم يستلم الزبون المبلغ بعد")}
               count={unpaid} action={label("بینین", "View", "عرض")} onClick={go("txs")} />
           )}
-          {officesOwed.map(({ u, owed }) => (
-            <TodayLine key={u.id} icon={Building2} tone="warn"
-              title={`${label("قەرزی ZEMAN بۆ", "ZEMAN owes", "زيمان مدين لـ")} ${u.name}`}
-              detail={owed.map(([cid, v]) => `${fmt(v, cur(cid).dec ?? 0)} ${cur(cid).code}`).join(" · ")}
+          {officesOwed.map((office) => (
+            <TodayLine key={office.id} icon={Building2} tone="warn"
+              title={`${label("قەرزی ZEMAN بۆ", "ZEMAN owes", "زيمان مدين لـ")} ${office.name}`}
+              detail={office.owed.map(({ curId, amount }) =>
+                `${fmt(amount, cur(curId).dec ?? 0)} ${cur(curId).code}`).join(" · ")}
               action={label("حساب بدەوە", "Settle", "سوِّ الحساب")} onClick={go("office-payments")} />
           ))}
         </section>
@@ -8041,7 +8037,10 @@ function ReceiptsHub({ data, usr, batches, batchLoadError, reloadBatches, flash,
     && (tx.type === "buy" || (tx.type === "sell" && tx.partnerId)));
   const u = usdConv(data);
 
-  const lifecycleOf = (b) => b.receipt_stage || (b.tx_id ? "matched" : b.status === "new" ? "needs_review" : "verified");
+  // The same helper «کاری ئەمڕۆ» counts with. The comment there used to claim these two read a
+  // batch's stage the same way; they did not — each had its own copy of the derivation, and two
+  // copies is how a summary comes to say four while the list under it shows three.
+  const lifecycleOf = batchStage;
   const lifecycleTone = (stage) => stage === "matched" || stage === "finalized" ? "green" : stage === "rejected" ? "red" : stage === "archived" ? "slate" : "amber";
   const lifecycleLabel = (stage) => ({ received: l10n("وەرگیرا", "Received", "مستلم"), reading: l10n("دەخوێندرێتەوە", "Reading", "قيد القراءة"), needs_review: l10n("پشکنین پێویستە", "Needs review", "بحاجة إلى مراجعة"), verified: l10n("پشتڕاستکراو", "Verified", "موثّق"), matched: l10n("بەستراو", "Matched", "مرتبط"), rejected: l10n("ڕەتکراو", "Rejected", "مرفوض"), finalized: l10n("کۆتایی‌هاتوو", "Finalized", "مغلق نهائياً"), archived: l10n("ئەرشیفکراو", "Archived", "مؤرشف") }[stage] || stage);
   // ── Two sections, because there are two ────────────────────────────────────────────────────
