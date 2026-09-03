@@ -143,9 +143,20 @@ test("a line with nothing waiting behind it is not drawn", () => {
 
 // Every count comes from the same data the screen it links to reads, so a summary saying four
 // cannot lead to a list showing three.
+//
+// This used to assert that the hub derived a batch's stage inline — which was the shape of the
+// code, not the property being protected. It was satisfied while the receipts screen kept its
+// OWN copy of that derivation, which is the exact disagreement the test is named after. The
+// property is that there is one counter, and both screens call it.
 test("the counts are read, not stored", () => {
-  assert.match(hub, /const stageOf = \(b\) =>/, "the screen no longer derives the batch stage itself");
+  assert.match(hub, /todaysWork\(\{/, "the hub counts the day itself instead of calling the counter");
+  assert.doesNotMatch(hub, /receipt_stage \|\|/, "the hub still derives a batch stage of its own");
   assert.match(hub, /unpricedCurrencies\(data\?\.currencies \|\| \[\]\)/, "the rates check is not the one the rest of the app uses");
+  // And the screen the hub's receipt counts link to reads a stage the same way, from the same
+  // place, rather than from a second copy that can drift away from it.
+  assert.match(source, /const lifecycleOf = batchStage;/, "the receipts screen derives the stage itself again");
+  assert.equal((source.match(/receipt_stage \|\| \(b\.tx_id/g) || []).length, 0,
+    "a copy of the stage derivation has come back into the app");
 });
 
 // The guarantee this has always protected is that none of these screens becomes unreachable. It
@@ -153,12 +164,36 @@ test("the counts are read, not stored", () => {
 // naming them. So it reads the whole file rather than the hub — and it earned its keep the moment
 // the drawer was deleted, when action-inbox was left reachable from nowhere at all.
 test("every screen the admin centre used to offer is still one press away", () => {
-  for (const id of ["action-inbox", "approvals", "close", "receipt-review", "receipt-forwarding",
+  // «ئینباکسی کارەکان» is not in this list any more: it is no longer a destination, it renders
+  // inside «کاری ئەمڕۆ». adminCenterNavigation.test.js asserts that merge, so the feature is
+  // still protected — by a test of what it became rather than of a door it no longer needs.
+  //
+  // Four have joined it that had no door at all while this test was passing: safes, rates and
+  // close were reachable only by noticing a button on another screen, and «خێر بە وردی» could
+  // not be opened from anywhere in the application. This list only ever covered what the admin
+  // centre used to offer, which is why it never noticed them.
+  for (const id of ["approvals", "close", "receipt-review", "receipt-forwarding",
                     "partner-holdings", "debt-center", "cashbox", "partner-accounts",
-                    "office-payments", "insights", "integrity", "audit", "export-audit", "backup"]) {
+                    "office-payments", "insights", "integrity", "audit", "export-audit", "backup",
+                    "safes", "rates", "profit"]) {
     const listed = new RegExp(`\\["${id}"`).test(source);
     const pressed = new RegExp(`go\\("${id}"\\)`).test(source);
     assert.ok(listed || pressed, `${id} is reachable from nowhere`);
+  }
+});
+
+// «reachable from nowhere» was too weak a bar, and it is why three of the screens above hid for
+// so long: قاسە, نرخی ڕۆژ and بەستنی ڕۆژ each had a button on some other screen, so `pressed`
+// was true and the test was satisfied while none of them had a door of its own. A person who
+// does not already know the button is there cannot find the screen at all.
+//
+// These are the screens the business is run from every day. For them, a button somewhere else
+// is not enough: they must be in the navigation.
+test("the screens the day runs on are in the navigation, not only behind a button", () => {
+  for (const id of ["dash", "admin-center", "newtx", "txs", "rates", "receipts", "receipt-review",
+                    "safes", "debt-center", "office-payments", "partner-holdings", "close",
+                    "people", "cashbox", "partner-accounts", "report", "profit"]) {
+    assert.ok(new RegExp(`\\["${id}",`).test(source), `${id} has no navigation entry of its own`);
   }
 });
 

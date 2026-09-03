@@ -4247,6 +4247,111 @@ try {
   };
   commissionBalanceCheck();
 
+  // ── «گەر دوای هەفتەیەک جواب نەبوو، ئۆتۆماتیکی بیکات» ──────────────────────────────────────
+  //
+  // The manual reminder was built and the automatic half was not, and was reported as done.
+  // These are what "automatic" has to mean before it can be claimed again: it finds the right
+  // debts on its own, it cannot tell somebody something untrue, and it cannot say it twice.
+  const autoReminderChecks = () => {
+    asAdmin();
+    const due = () => psql(`select coalesce(string_agg(debt_id, ',' order by debt_id),'none')
+                              from public.sarraf_debts_due_a_reminder(7)`).trim();
+    const told = (id) => Number(psql(`select count(*)::text from public.zeman_notifications
+                                       where subject_kind='debt' and subject_id='${id}'
+                                         and kind='debt_reminder'`).trim());
+    const debt = (id, days, extra = "") => psql(
+      `insert into public.debts(id,debtor_type,debtor_id,creditor_type,creditor_id,currency,
+         original_principal,outstanding_principal,source_type,reason,created_by,opened_at${extra ? ",status" : ""})
+       values ('${id}','customer','cust-1','zeman',null,'IQD',50000,50000,
+               'unpaid_transaction','مامەڵەی نەدراوە','u-a',
+               statement_timestamp() - make_interval(days => ${days})${extra})`);
+
+    check("a debt nobody has answered for a week is found on its own", () => {
+      debt("d-auto-old", 9);
+      debt("d-auto-fresh", 2);
+      const list = due();
+      if (!list.includes("d-auto-old")) throw new Error(`the week-old debt is not in ${list}`);
+      if (list.includes("d-auto-fresh")) throw new Error(`a two-day-old debt is in ${list}`);
+    });
+
+    check("a debt already settled is never chased", () => {
+      // Telling somebody they owe money they have paid is worse than telling them nothing.
+      debt("d-auto-paid", 30, ",'settled'");
+      if (due().includes("d-auto-paid")) throw new Error("a settled debt was queued for a reminder");
+    });
+
+    check("a debt the business itself owes is never chased", () => {
+      psql(`insert into public.debts(id,debtor_type,debtor_id,creditor_type,creditor_id,currency,
+              original_principal,outstanding_principal,source_type,reason,created_by,opened_at)
+            values ('d-auto-ours','zeman',null,'customer','cust-1','IQD',9000,9000,
+                    'unpaid_transaction','ئێمە قەرزارین','u-a',
+                    statement_timestamp() - make_interval(days => 40))`);
+      if (due().includes("d-auto-ours")) throw new Error("we queued a reminder to ourselves");
+    });
+
+    check("a debtor with no account is not queued, because nothing would reach them", () => {
+      psql(`insert into public.debts(id,debtor_type,debtor_id,creditor_type,creditor_id,currency,
+              original_principal,outstanding_principal,source_type,reason,created_by,opened_at)
+            values ('d-auto-ghost','customer','nobody-at-all','zeman',null,'IQD',700,700,
+                    'unpaid_transaction','کەسێکی نەناسراو','u-a',
+                    statement_timestamp() - make_interval(days => 40))`);
+      if (due().includes("d-auto-ghost")) throw new Error("a reminder was queued for nobody");
+    });
+
+    check("running it sends the reminder", () => {
+      const before = told("d-auto-old");
+      const out = JSON.parse(psql("select public.sarraf_send_due_debt_reminders(7)::text"));
+      if (!(out.sent >= 1)) throw new Error(`it sent ${out.sent}`);
+      if (told("d-auto-old") !== before + 1) {
+        throw new Error(`the debt was told ${told("d-auto-old")} times, expected ${before + 1}`);
+      }
+    });
+
+    check("running it again the same week sends nothing more", () => {
+      // The whole hazard of an unattended sender: an administrator opening the app three times
+      // must not be three messages to somebody who has already been told once.
+      const before = told("d-auto-old");
+      psql("select public.sarraf_send_due_debt_reminders(7)");
+      psql("select public.sarraf_send_due_debt_reminders(7)");
+      if (told("d-auto-old") !== before) {
+        throw new Error(`it went from ${before} to ${told("d-auto-old")}`);
+      }
+    });
+
+    check("and having been told, the debt leaves the queue until the next week", () => {
+      if (due().includes("d-auto-old")) {
+        throw new Error("a debt reminded today is still queued for a reminder today");
+      }
+    });
+
+    check("a debtor whose account is closed drops out and the others are still told", () => {
+      // This runs unattended, so one debt that cannot be reminded must not mean every debt
+      // after it is silently never chased. The first attempt at this check tried to break a
+      // debt by pointing it at a person who does not exist — and could not, because a debt's
+      // identity is immutable, which is a protection doing its job. Closing the person's
+      // account is the way this actually happens.
+      psql(`insert into public.app_users(id,name,role,tenant_id)
+            values ('cust-closing','Leaving Customer','customer','t-sarkhel')
+            on conflict (id) do update set deleted = false`);
+      psql(`insert into public.debts(id,debtor_type,debtor_id,creditor_type,creditor_id,currency,
+              original_principal,outstanding_principal,source_type,reason,created_by,opened_at)
+            values ('d-auto-closed','customer','cust-closing','zeman',null,'IQD',400,400,
+                    'unpaid_transaction','قەرزی کەسێکی ڕۆیشتوو','u-a',
+                    statement_timestamp() - make_interval(days => 20))`);
+      debt("d-auto-b", 20);
+      // Queued while they still had an account, then the account is closed.
+      if (!due().includes("d-auto-closed")) throw new Error("the debt was never queued to begin with");
+      psql(`update public.app_users set deleted = true where id='cust-closing'`);
+      if (due().includes("d-auto-closed")) throw new Error("a closed account is still queued");
+
+      const out = JSON.parse(psql("select public.sarraf_send_due_debt_reminders(7)::text"));
+      if (told("d-auto-closed") !== 0) throw new Error("a closed account was sent a reminder");
+      if (told("d-auto-b") < 1) throw new Error("the other debt was never reminded");
+      if (!Number.isFinite(out.sent)) throw new Error(JSON.stringify(out));
+    });
+  };
+  autoReminderChecks();
+
   check("a second reset cannot empty a system that has since gone live", () => {
     const out = JSON.parse(psql("select public.sarraf_reset_installation()::text"));
     if (out.done !== false) throw new Error(JSON.stringify(out));

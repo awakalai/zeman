@@ -344,6 +344,17 @@ inferred from a diff.
   13,930: seventy dollars that do not exist. So the arithmetic stands unchanged and only the
   presentation was fixed — the safes screen now says in one sentence what a minus sign there
   means, because a right number with no explanation beside it gets reported as a bug.
+- **`202609020012` — a debt a week without an answer reminds itself.** «گەر دوای هەفتەیەک جواب
+  نەبوو، ئۆتۆماتیکی بیکات.» `202609020007` built the half the owner presses and the automatic
+  half was never built — and was reported as done. `sarraf_send_due_debt_reminders` is that
+  half: it finds every open debt somebody else owes where seven days have passed since the last
+  reminder, or since the debt opened if there has been none, and reminds each one through the
+  same command the button uses, so it can never send something the manual path would refuse.
+  The key it mints carries the debt and the week, so asking it ten times in one day sends one
+  message. **It is called when an administrator opens the app, not on a schedule**, because
+  this project cannot verify whether `pg_cron` is on the Supabase plan — and a schedule that
+  silently never fires is worse than none, since the owner would believe reminders were going
+  out. The rule is one server function, so scheduling it later changes nothing else.
 - **A direct trade and a commission trade say when they exceed the owner's own money.** «تەنها
   مامەڵەی ئاسایی پارەکەی لە قاسەی گشتییەوەیە، ئەوانی دیکە هی خۆمە تەنها.» The sufficiency check
   can never catch this: a direct pair buys and sells in one command, so its net effect on the

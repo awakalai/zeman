@@ -4,8 +4,11 @@ import fs from "node:fs";
 
 const app = fs.readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8");
 
+// «ئینباکسی کارەکان» is deliberately not here any more. It was a second screen answering the
+// same question «کاری ئەمڕۆ» answers — what is waiting — from the server while the hub answered
+// from the browser. Its content did not go anywhere; it renders inside the hub now, which the
+// test below asserts. A destination that no longer exists must not be required to have a door.
 const adminPages = [
-  "action-inbox",
   "approvals",
   "close",
   "insights",
@@ -20,6 +23,16 @@ const adminPages = [
 test("the sidebar exposes one admin center instead of hiding admin features", () => {
   assert.match(app, /\["admin-center", navSectionLabel\("کاری ئەمڕۆ"/);
   assert.match(app, /function AdminCenterHub/);
+  // The inbox merged rather than vanished: the hub renders the server's own list of what is
+  // waiting. Without this, deleting the entry would look identical to deleting the feature.
+  // Matched on the render itself, not on the page test. The first version of this assertion
+  // looked for `page === "admin-center" || page === "action-inbox"` and was satisfied by
+  // isNavActive, which contains the same words for an unrelated reason — so it passed with the
+  // inbox's render deleted. The condition and the component have to appear together.
+  assert.match(app, /page === "admin-center" \|\| page === "action-inbox"\)[^]{0,200}<ActionInbox/,
+    "the action inbox no longer renders on «کاری ئەمڕۆ»");
+  // And it is not offered as a separate door, which is what made it two answers to one question.
+  assert.ok(!/\["action-inbox"/.test(app), "the inbox is a separate destination again");
   // Reachable, and now by name rather than out of a drawer: each is either an entry in one of
   // the six sections or a line on a screen with a press of its own.
   for (const page of adminPages) {

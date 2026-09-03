@@ -29,6 +29,8 @@ import { revokeAllUrls, revokeDroppedUrls } from "./services/objectUrls";
 import { unrealizedPnl, unrealizedReasonText } from "./services/unrealizedPnl";
 import { EARNING_KINDS, earningsByKind } from "./services/earningsByKind";
 import { capitalEventsFrom, investorShare, investorsTotalByCurrency, profitEventsFrom, sharedCostEventsFrom } from "./services/investorShare";
+import { batchStage, todaysWork } from "./services/todaysWork.js";
+import { sendDueDebtReminders } from "./services/debtRegister.js";
 import { crossRate, fromUsdAsOf, rateAsOf, rateErrorText, rateOf, unpricedCurrencies, usdFromAsOf, validateRate } from "./services/currencyRate";
 import {
   DIRECTION_REFUSED, mayEditExtraction, mayUploadDirection,
@@ -757,29 +759,23 @@ function AdminCenterHub({ lang = "ku", onNavigate, data, calc, cur, batches }) {
 
   // ── the receipts, which is most of the day ───────────────────────────────
   //
-  // Read the same way the receipts screen reads them, from the same helper, so the count here and
-  // the list there can never disagree — a summary that says four when the list shows three is
-  // worse than no summary.
-  const stageOf = (b) => b.receipt_stage || (b.tx_id ? "matched" : b.status === "new" ? "needs_review" : "verified");
-  const rows = batches || [];
-  const waiting = rows.filter((b) => ["received", "reading", "needs_review", "verified"].includes(stageOf(b)));
-  const waitingReceipts = waiting.reduce((sum, b) => sum + (Number(b.n) || 0), 0);
-  const needsPerson = rows.filter((b) => stageOf(b) === "needs_review").length;
-  const refused = rows.reduce((sum, b) => sum + (Number(b.rejected_n) || 0), 0);
-  const duplicates = rows.reduce((sum, b) => sum + (Number(b.dup_n) || 0), 0);
-
-  // ── the rates, without which nothing can be valued ───────────────────────
-  const unpriced = unpricedCurrencies(data?.currencies || []);
-
-  // ── what is waiting on a decision ────────────────────────────────────────
-  const approvals = (data?.approvals || []).filter((r) => r.status === "pending").length;
-  const unpaid = (data?.txs || []).filter((t) => !t.deleted && t.status === "pending").length;
-  const officesOwed = (data?.users || [])
-    .filter((u) => u.role === "office" && !u.deleted)
-    .map((u) => ({ u, owed: Object.entries(calc?.acctCash?.[u.id] || {}).filter(([, v]) => v > 0) }))
-    .filter((x) => x.owed.length);
-
-  const attention = waiting.length + unpriced.length + approvals + unpaid + officesOwed.length;
+  // Counted in services/todaysWork.js, with its own tests, rather than inline here. These are
+  // the numbers the owner reads before deciding what to do with the morning, and arithmetic
+  // that decides something belongs where it can be tested — the same reason the money maths
+  // left this file.
+  const today = todaysWork({
+    batches,
+    txs: data?.txs,
+    users: data?.users,
+    approvals: data?.approvals,
+    unpricedCurrencies: unpricedCurrencies(data?.currencies || []),
+    officeCash: calc?.acctCash,
+  });
+  const { waitingReceipts, needsPerson, refused, duplicates, unpaid, officesOwed } = today;
+  const waiting = { length: today.waitingBatches };
+  const unpriced = today.unpriced;
+  const approvals = today.approvals;
+  const attention = today.total;
 
   return (
     <div className="space-y-6">
@@ -855,10 +851,11 @@ function AdminCenterHub({ lang = "ku", onNavigate, data, calc, cur, batches }) {
               detail={label("کڕیارەکە هێشتا پارەکەی وەرنەگرتووە", "The customer has not been paid yet", "لم يستلم الزبون المبلغ بعد")}
               count={unpaid} action={label("بینین", "View", "عرض")} onClick={go("txs")} />
           )}
-          {officesOwed.map(({ u, owed }) => (
-            <TodayLine key={u.id} icon={Building2} tone="warn"
-              title={`${label("قەرزی ZEMAN بۆ", "ZEMAN owes", "زيمان مدين لـ")} ${u.name}`}
-              detail={owed.map(([cid, v]) => `${fmt(v, cur(cid).dec ?? 0)} ${cur(cid).code}`).join(" · ")}
+          {officesOwed.map((office) => (
+            <TodayLine key={office.id} icon={Building2} tone="warn"
+              title={`${label("قەرزی ZEMAN بۆ", "ZEMAN owes", "زيمان مدين لـ")} ${office.name}`}
+              detail={office.owed.map(({ curId, amount }) =>
+                `${fmt(amount, cur(curId).dec ?? 0)} ${cur(curId).code}`).join(" · ")}
               action={label("حساب بدەوە", "Settle", "سوِّ الحساب")} onClick={go("office-payments")} />
           ))}
         </section>
@@ -1345,12 +1342,24 @@ export default function App() {
     return { data: result.data, error: result.error };
   };
 
+  // «گەر دوای هەفتەیەک جواب نەبوو، ئۆتۆماتیکی بیکات.» Asked once per session rather than on
+  // every refresh: the server will not send twice in a week whatever it is asked, but there is
+  // no reason to ask it forty times a day either. Failures are swallowed on purpose — a
+  // reminder that could not go out must never be the reason the app does not open.
+  const remindersAsked = useRef(false);
+
   const loadAll = async (activeProfile = profile) => {
     const sequence = ++loadSequence.current;
     setRefreshing(true);
     try {
       reloadBatches();
       const adminMode = activeProfile?.role === "admin";
+      if (adminMode && !remindersAsked.current) {
+        remindersAsked.current = true;
+        sendDueDebtReminders(supabase).catch((error) => {
+          console.warn("overdue debt reminders could not be sent", error);
+        });
+      }
       const noQuery = Promise.resolve({ data: [], error: null });
       const [c, u, l, t, a, ac, rh, apr, ape, tv, ctrl, rm, rt] = await Promise.all([
         // Not the currencies table. That row's rate belongs to the installation, and reading it
@@ -3068,16 +3077,28 @@ export default function App() {
   //
   // Nothing was removed. What changed is that a screen is now found by asking what it is for
   // rather than by remembering where it was put.
+  // ── The sections, ordered by the day rather than by the code ────────────────────────────────
+  //
+  //   «ئەو بەشانەی کە ئیشم پێێ نییە لایببیەیت.»
+  //
+  // Four screens the business cannot run without had no entry here at all: قاسە, where money
+  // goes in and out and expenses are recorded; نرخی ڕۆژ, which the owner sets every day and
+  // without which nothing can be valued; بەستنی ڕۆژ, the count against the books; and «خێر بە
+  // وردی», which could not be opened from anywhere in the application — a finished screen that
+  // nothing could reach. Meanwhile five administrative tools sat in the reports group as though
+  // they were part of the day.
+  //
+  // Only one entry is actually gone: «ئینباکسی کارەکان» is the same question «کاری ئەمڕۆ» asks,
+  // so it is one door now. Nothing else was deleted, deliberately — the change log and the
+  // export exist for the day somebody has to prove what happened, and losing that is not
+  // something the owner can undo. They are grouped away from the work instead, under a heading
+  // that says what they are.
   const NAV_GROUPS = isSystemManager ? MANAGER_NAV_GROUPS : [
     {
       label: navSectionLabel("ئەمڕۆ", "Today", "اليوم"),
       items: [
         ["dash", tr("داشبۆرد"), LayoutDashboard],
         ["admin-center", navSectionLabel("کاری ئەمڕۆ", "Today's work", "عمل اليوم"), Inbox],
-        // Deleting the tools drawer took the action inbox's only route with it — nav:0 press:0 —
-        // and the navigation test caught it before this was pushed anywhere real. It belongs
-        // here: it is the list of what is waiting, which is what «ئەمڕۆ» is for.
-        ["action-inbox", navSectionLabel("ئینباکسی کارەکان", "Action inbox", "صندوق الإجراءات"), ClipboardCheck],
         ["approvals", navSectionLabel("پەسەندکردن", "Approvals", "الموافقات"), ShieldCheck],
       ],
     },
@@ -3086,31 +3107,38 @@ export default function App() {
       items: [
         ["newtx", tr("مامەڵەی نوێ"), ArrowLeftRight],
         ["txs", tr("مامەڵەکان"), ListOrdered],
+        // «من نرخی ڕۆژ دادەنێم هەمیشە» — set daily, and nothing can be valued until it is. It
+        // was reachable only by noticing a warning on the dashboard.
+        ["rates", navSectionLabel("نرخی ڕۆژ", "Today's rates", "أسعار اليوم"), TrendingUp],
       ],
     },
     {
-      // All receipt work together, and only the work.
+      // «تەنها دوو بەش هەیە کە پەیوەندی بە فیشەوە هەبێت. یەکەم ئەو فیشانەی کە یووسەرەکان
+      // ناردوویانە و دووەم ئەوانەی کە ئەوان ناردوویانە بەس پشکنینیان دەوێت.»
       //
-      //   «تەنها دوو بەش هەیە کە پەیوەندی بە فیشەوە هەبێت. یەکەم ئەو فیشانەی کە یووسەرەکان
-      //    ناردوویانە و دووەم ئەوانەی کە ئەوان ناردوویانە بەس پشکنینیان دەوێت.»
-      //
-      // «فیشەکان» is those two, as the two sections of one screen. «پشکنین» is where the one
-      // that needs looking at is actually looked at. Forwarding is neither: the owner keeps it
-      // «بۆ بینینی ئەوەی فۆرۆرد کراوە» — a record of what went where, so it says so.
+      // Two, and only these two. «فۆرواردکراوەکان» used to sit here as a third: it is not
+      // receipt work, it is the record of which partner was sent which receipts, so it has
+      // moved to «پارە» beside «لای هاوبەشان», which is the same question about the same
+      // people. Nothing was removed — it changed neighbours.
       label: navSectionLabel("فیش", "Receipts", "الإيصالات"),
       items: [
         ["receipts", navSectionLabel("فیشەکان", "Receipts", "الإيصالات"), ScanLine],
         ["receipt-review", navSectionLabel("پشکنین", "Review", "المراجعة"), ClipboardCheck],
-        ["receipt-forwarding", navSectionLabel("فۆرواردکراوەکان", "Forwarded", "المُحوَّلة"), Send],
       ],
     },
     {
       label: navSectionLabel("پارە", "Money", "المال"),
       items: [
+        // The screen the money actually moves through. It had two buttons on the dashboard and
+        // no entry of its own.
+        ["safes", navSectionLabel("قاسە", "Safes", "الخزائن"), Wallet],
         ["debt-center", navSectionLabel("قەرز و قاسە", "Debt & cashbox", "الديون والخزنة"), Scale],
         ["office-payments", navSectionLabel("نووسینگە", "Offices", "المكاتب"), Building2],
         ["partner-holdings", navSectionLabel("لای هاوبەشان", "With partners", "لدى الشركاء"), Boxes],
-        ["explain-balance", navSectionLabel("شیکردنەوەی باڵانس", "Explain a balance", "تفسير الرصيد"), Search],
+        // «بۆ بینینی ئەوەی فۆرۆرد کراوە» — which partner was sent which receipts. The same
+        // people as the line above it, which is why it reads better here than under «فیش».
+        ["receipt-forwarding", navSectionLabel("فۆرواردکراوەکان", "Forwarded", "المُحوَّلة"), Send],
+        ["close", navSectionLabel("بەستنی ڕۆژ", "Close the day", "إقفال اليوم"), ClipboardCheck],
       ],
     },
     {
@@ -3122,10 +3150,22 @@ export default function App() {
       ],
     },
     {
+      // Named «ڕاپۆرت» because that is the name the owner asked for and verify:roles holds it.
+      // «خێر بە وردی» joins what is inside it; renaming the heading was not asked for.
       label: navSectionLabel("ڕاپۆرت", "Reports", "التقارير"),
       items: [
         ["report", tr("ڕاپۆرت"), PieChart],
+        // Built, finished, and unreachable from anywhere in the application until now.
+        ["profit", navSectionLabel("خێر بە وردی", "Earnings in detail", "الأرباح بالتفصيل"), TrendingUp],
         ["insights", navSectionLabel("ڕەوت و شیکاری", "Trends", "الاتجاهات"), TrendingUp],
+      ],
+    },
+    {
+      // Not the day's work. Kept, because the day somebody has to prove what happened is the
+      // day these matter, and grouped here so they are not in the way until then.
+      label: navSectionLabel("سیستەم", "System", "النظام"),
+      items: [
+        ["explain-balance", navSectionLabel("شیکردنەوەی باڵانس", "Explain a balance", "تفسير الرصيد"), Search],
         ["integrity", navSectionLabel("یەکپارچەیی", "Integrity", "السلامة"), ShieldAlert],
         ["audit", navSectionLabel("تۆماری گۆڕانکاری", "Change log", "سجل التغييرات"), History],
         ["export-audit", navSectionLabel("هەناردە", "Export", "التصدير"), FileCheck2],
@@ -3153,7 +3193,11 @@ export default function App() {
   // written and is why the bar read داشبۆرد · کاری ئەمڕۆ · ئینباکس · پەسەندکردن — four entries
   // that happened to be adjacent in a list, not the four a person reaches for. A named list
   // also cannot drift when a group is reordered.
-  const PHONE_BAR_IDS = ["dash", "admin-center", "people", "txs"];
+  // The four a person reaches for on a phone, which is not the four that happen to be first in
+  // a list. The owner's day is: see what is waiting, record a trade, deal with the receipts —
+  // «ئەمە زۆرترین کاری ڕۆژە». «بەکارهێنەران» and «مامەڵەکان» are opened when something needs
+  // looking up, which is what the sheet is for, and both keep their entry there.
+  const PHONE_BAR_IDS = ["dash", "admin-center", "newtx", "receipts"];
   const BAR_NAV = PHONE_BAR_IDS
     .map((id) => NAV_GROUPS.flatMap((g) => g.items).find(([itemId]) => itemId === id))
     .filter(Boolean);
@@ -3477,7 +3521,17 @@ export default function App() {
                       ? navSectionLabel("گەڕانەوە بۆ سەرخێڵەکان", "Back to Businesses", "العودة إلى الأعمال")
                       : navSectionLabel("گەڕانەوە بۆ ناوەندی بەڕێوەبردن", "Back to Admin Center", "العودة إلى مركز الإدارة")} />
             )}
-            {page === "action-inbox" && <DeferredPanel><ActionInbox client={supabase} lang={lang} onNavigate={(path) => setPage(path.slice(2))} /></DeferredPanel>}
+            {/* «ئینباکسی کارەکان» is not a second screen any more. It asked the same question
+              * «کاری ئەمڕۆ» asks — what is waiting — and answered it from the server while the
+              * hub answered it from the browser. Two answers to one question, which could
+              * disagree and which the owner had to check twice. The server's list now sits at
+              * the foot of the hub, under the counts, and the route stays so an old link still
+              * lands somewhere real.
+              */}
+            {(page === "admin-center" || page === "action-inbox") && !isSystemManager && (
+              <div className="mt-6"><DeferredPanel><ActionInbox client={supabase} lang={lang}
+                onNavigate={(path) => setPage(path.slice(2))} /></DeferredPanel></div>
+            )}
             {page === "integrity" && <DeferredPanel><IntegrityCenter client={supabase} lang={lang} onNavigate={(path) => setPage(path.slice(2))} /></DeferredPanel>}
             {/* Two records of the same money are only safe while they agree. */}
             {page === "integrity" && <div className="mt-4"><DeferredPanel><BooksReconciliation client={supabase} lang={lang} flash={flash} /></DeferredPanel></div>}
@@ -8041,7 +8095,10 @@ function ReceiptsHub({ data, usr, batches, batchLoadError, reloadBatches, flash,
     && (tx.type === "buy" || (tx.type === "sell" && tx.partnerId)));
   const u = usdConv(data);
 
-  const lifecycleOf = (b) => b.receipt_stage || (b.tx_id ? "matched" : b.status === "new" ? "needs_review" : "verified");
+  // The same helper «کاری ئەمڕۆ» counts with. The comment there used to claim these two read a
+  // batch's stage the same way; they did not — each had its own copy of the derivation, and two
+  // copies is how a summary comes to say four while the list under it shows three.
+  const lifecycleOf = batchStage;
   const lifecycleTone = (stage) => stage === "matched" || stage === "finalized" ? "green" : stage === "rejected" ? "red" : stage === "archived" ? "slate" : "amber";
   const lifecycleLabel = (stage) => ({ received: l10n("وەرگیرا", "Received", "مستلم"), reading: l10n("دەخوێندرێتەوە", "Reading", "قيد القراءة"), needs_review: l10n("پشکنین پێویستە", "Needs review", "بحاجة إلى مراجعة"), verified: l10n("پشتڕاستکراو", "Verified", "موثّق"), matched: l10n("بەستراو", "Matched", "مرتبط"), rejected: l10n("ڕەتکراو", "Rejected", "مرفوض"), finalized: l10n("کۆتایی‌هاتوو", "Finalized", "مغلق نهائياً"), archived: l10n("ئەرشیفکراو", "Archived", "مؤرشف") }[stage] || stage);
   // ── Two sections, because there are two ────────────────────────────────────────────────────
