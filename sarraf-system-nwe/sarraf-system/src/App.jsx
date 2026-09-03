@@ -1657,6 +1657,10 @@ export default function App() {
       // and the figure a screen shows are the same number. verify:accounting runs a scenario
       // through both this and the browser's own derivation below and refuses to pass unless
       // they agree to the last unit.
+      // «لە وردەکاری قاسەی گشتیدا ئاماژەی پێبدات کە لای ئەوە و پارەی ئەوە.» In the drawer,
+      // counted in the total, and not the owner's to move.
+      const customerHeld = Object.fromEntries(
+        Object.entries(rm.customer_held_by_currency || {}).map(([k, v]) => [k, Number(v) || 0]));
       const ownMoney = rm.own_money_by_currency
         ? Object.fromEntries(Object.entries(rm.own_money_by_currency).map(([k,v]) => [k, Number(v) || 0]))
         : null;
@@ -1743,7 +1747,7 @@ export default function App() {
         cashAccounts[x.cash_account_id][x.cur_id] = Number(x.amount) || 0;
       }
 
-      return { phys, partner, office, cashAccounts, atMe, invCap, invTotal, selfCap, ownMoney, invPaid, expenses, fees, cust, pending: cust, acctCash, acctDebt };
+      return { phys, partner, office, cashAccounts, atMe, invCap, invTotal, selfCap, ownMoney, customerHeld, invPaid, expenses, fees, cust, pending: cust, acctCash, acctDebt };
     }
 
     const phys = {}, partner = {}, invCap = {}, selfCap = {}, invPaid = {}, expenses = {}, fees = {};
@@ -1799,7 +1803,7 @@ export default function App() {
       const sign = t.type === "buy" ? +1 : -1;   // کڕین = قەرزاری ئەوم | فرۆشتن = ئەو قەرزارە
       acctDebt[t.cpId][t.againstId] = (acctDebt[t.cpId][t.againstId] || 0) + sign * t.total;
     }
-    return { phys, partner, atMe, invCap, invTotal, selfCap, ownMoney: null, invPaid, expenses, fees, cust, pending: cust, acctCash, acctDebt };
+    return { phys, partner, atMe, invCap, invTotal, selfCap, ownMoney: null, customerHeld: {}, invPaid, expenses, fees, cust, pending: cust, acctCash, acctDebt };
   }, [data]);
 
   const cur = (id) => data?.currencies.find((c) => c.id === id) || {};
@@ -4350,6 +4354,20 @@ function CurrencyBreakdown({ curId, data, calc, cur, owners, ratesReady }) {
           })}
           {partners.every((p) => !((calc.partner[p.id] || {})[curId])) && (
             <div className="text-xs text-[var(--txt-3)] py-2">{tr("هیچی لای هاوبەشەکان نییە")}</div>
+          )}
+          {/* «لە وردەکاری قاسەی گشتیدا ئاماژەی پێبدات کە لای ئەوە و پارەی ئەوە و من نەتوانم
+            * مامەڵەی پێوە بکەم.» It is in the drawer and it counts towards the total below —
+            * the day's count has to agree with it — and it is not the owner's to trade with.
+            * A rise in the safe with nothing naming it is worse than no rise at all, because
+            * it would be counted as his.
+            */}
+          {(calc.customerHeld?.[curId] || 0) !== 0 && (
+            <div className="flex justify-between items-center py-2.5 border-b border-[var(--line)]">
+              <span className="text-sm" style={{ color: "var(--warn)" }}>
+                {tr("پارەی کڕیاران — ناکرێت مامەڵەی پێ بکرێت")}
+              </span>
+              <Money v={calc.customerHeld[curId]} dec={0} />
+            </div>
           )}
           <div className="flex justify-between items-center pt-3 font-bold">
             <span className="text-sm">{tr("کۆی گشتی")}</span><Money v={bal} dec={0} />

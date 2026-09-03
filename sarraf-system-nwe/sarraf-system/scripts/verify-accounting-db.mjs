@@ -3783,10 +3783,14 @@ try {
   // while «قاسەی گشتی» says the owner's own money did not move. Confusing the two is how a
   // business spends a customer's deposit believing it is theirs, so it is pinned.
   const customerMoneyChecks = () => {
+    // Mirrors owner_safe_by_currency exactly, including the line that keeps a customer's money
+    // out of it. A customer row names no partner, no office and no account either, so without
+    // that line their deposit reads as the owner's own — which is the whole thing these checks
+    // are here to catch.
     const ownSafe = (cur) => Number(psql(
       `select coalesce(sum(amount),0)::text from public.ledger
         where cur_id='${cur}' and partner_id is null and office_id is null
-          and cash_account_id is null`).trim());
+          and cash_account_id is null and customer_id is null`).trim());
     const cashInBooks = () => Number(psql(
       `select coalesce(round(sum(case when l.side='debit' then l.amount else -l.amount end),2),0)::text
          from public.journal_lines l join public.journal_entries e on e.id=l.entry_id
@@ -3837,6 +3841,84 @@ try {
                 'زۆرتر لەوەی هەیەتی','vault:more-than-they-ever-had')`);
       } catch { refused = true; }
       if (!refused) throw new Error("a customer withdrew money they never deposited");
+    });
+
+    // «دەبێت پارەکە بۆ قاسەی گشتیش زیاد ببێت و بۆ قاسەی ئەویش.»
+    //
+    // Measured before anything was built on the assumption. The general safe every screen shows
+    // is the sum of public.ledger; a customer's deposit posts a journal entry and writes no
+    // ledger row at all. So the cash is physically in the drawer, the books know it, and the
+    // figure the owner reads does not.
+    check("a customer's deposit reaches the general safe the owner actually looks at", () => {
+      const generalSafe = () => Number(psql(
+        `select coalesce(sum(amount),0)::text from public.ledger where cur_id='usd'`).trim());
+      const vaultOf = (id) => Number(psql(
+        `select coalesce(available,0)::text from public.customer_vaults
+          where customer_id='${id}' and currency='USD'`).trim() || 0);
+      // A customer of its own: the check below reads a cumulative total of what is owed, and
+      // depositing for cust-1 here moved it from 1000 to 1250 and failed a check that was
+      // measuring something else entirely.
+      psql(`insert into public.app_users(id,name,role,tenant_id)
+            values ('cust-safe','Safe Customer','customer','t-sarkhel') on conflict do nothing`);
+      const before = generalSafe(), heldBefore = vaultOf("cust-safe");
+      psql(`select public.sarraf_customer_vault_move('cust-safe','USD',250,'in',1,
+              'کڕیارەکە پارەی هێنا','vault:it-must-show-in-the-general-safe')`);
+      if (vaultOf("cust-safe") - heldBefore !== 250) {
+        throw new Error(`their own safe moved by ${vaultOf("cust-safe") - heldBefore}, expected 250`);
+      }
+      if (generalSafe() - before !== 250) {
+        throw new Error(`the general safe moved by ${generalSafe() - before}, expected 250`);
+      }
+    });
+
+    check("and it is named as theirs, not left as an unexplained rise", () => {
+      // «لە وردەکاری قاسەی گشتیدا ئاماژەی پێبدات کە لای ئەوە و پارەی ئەوە.» A safe that went up
+      // by 250 with nothing saying why is worse than one that did not move: the owner would
+      // count it as theirs.
+      const snap = JSON.parse(psql("select public.sarraf_read_model_snapshot(3650)::text"));
+      const held = Number(snap.customer_held_by_currency?.usd || 0);
+      if (held < 250) throw new Error(`the snapshot says customers hold ${held}, expected at least 250`);
+      const owed = Number(psql(`select coalesce(sum(available),0)::text
+                                  from public.customer_vaults where currency='USD'`).trim());
+      if (Math.abs(held - owed) > 1e-8) {
+        throw new Error(`the safe says ${held} is theirs but their vaults hold ${owed}`);
+      }
+    });
+
+    check("the owner's own safe does not rise by a customer's deposit", () => {
+      // The same money, asked the other way. It is in the drawer and it is not his.
+      const mine = ownSafe("usd");
+      psql(`select public.sarraf_customer_vault_move('cust-safe','USD',300,'in',1,
+              'دووەم جار','vault:still-not-the-owners')`);
+      if (ownSafe("usd") !== mine) {
+        throw new Error(`the owner's safe moved by ${ownSafe("usd") - mine}`);
+      }
+    });
+
+    check("the snapshot's own owner-safe figure leaves the customers' money out too", () => {
+      // ownSafe() above re-implements owner_safe_by_currency rather than reading it, so the
+      // two can drift: taking the exclusion out of the snapshot left every check passing.
+      // This one reads the figure the screens are actually handed.
+      const snap = JSON.parse(psql("select public.sarraf_read_model_snapshot(3650)::text"));
+      const fromSnapshot = Number(snap.owner_safe_by_currency?.usd || 0);
+      const mirrored = ownSafe("usd");
+      if (Math.abs(fromSnapshot - mirrored) > 1e-8) {
+        throw new Error(`the snapshot says the owner's safe holds ${fromSnapshot}, the same question asked directly says ${mirrored}`);
+      }
+      const held = Number(snap.customer_held_by_currency?.usd || 0);
+      if (held <= 0) throw new Error("no customer money exists, so this proves nothing");
+    });
+
+    check("a trade cannot be funded with a customer's money", () => {
+      // «من نەتوانم مامەڵەی پێوە بکەم» — enforced, not remembered. cust-safe now holds 550 in
+      // the drawer; the owner's own dollars are what the sufficiency check may see, and a
+      // purchase larger than those must be refused even though the cash is physically there.
+      const mine = Number(psql(`select public.sarraf_locked_cash_balance('usd')::text`).trim());
+      const inDrawer = Number(psql(
+        `select coalesce(sum(amount),0)::text from public.ledger where cur_id='usd'`).trim());
+      if (inDrawer - mine < 550) {
+        throw new Error(`the drawer holds ${inDrawer} and the owner may spend ${mine} — the customers' 550 is not being held back`);
+      }
     });
   };
   customerMoneyChecks();
