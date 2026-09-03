@@ -3077,16 +3077,28 @@ export default function App() {
   //
   // Nothing was removed. What changed is that a screen is now found by asking what it is for
   // rather than by remembering where it was put.
+  // ── The sections, ordered by the day rather than by the code ────────────────────────────────
+  //
+  //   «ئەو بەشانەی کە ئیشم پێێ نییە لایببیەیت.»
+  //
+  // Four screens the business cannot run without had no entry here at all: قاسە, where money
+  // goes in and out and expenses are recorded; نرخی ڕۆژ, which the owner sets every day and
+  // without which nothing can be valued; بەستنی ڕۆژ, the count against the books; and «خێر بە
+  // وردی», which could not be opened from anywhere in the application — a finished screen that
+  // nothing could reach. Meanwhile five administrative tools sat in the reports group as though
+  // they were part of the day.
+  //
+  // Only one entry is actually gone: «ئینباکسی کارەکان» is the same question «کاری ئەمڕۆ» asks,
+  // so it is one door now. Nothing else was deleted, deliberately — the change log and the
+  // export exist for the day somebody has to prove what happened, and losing that is not
+  // something the owner can undo. They are grouped away from the work instead, under a heading
+  // that says what they are.
   const NAV_GROUPS = isSystemManager ? MANAGER_NAV_GROUPS : [
     {
       label: navSectionLabel("ئەمڕۆ", "Today", "اليوم"),
       items: [
         ["dash", tr("داشبۆرد"), LayoutDashboard],
         ["admin-center", navSectionLabel("کاری ئەمڕۆ", "Today's work", "عمل اليوم"), Inbox],
-        // Deleting the tools drawer took the action inbox's only route with it — nav:0 press:0 —
-        // and the navigation test caught it before this was pushed anywhere real. It belongs
-        // here: it is the list of what is waiting, which is what «ئەمڕۆ» is for.
-        ["action-inbox", navSectionLabel("ئینباکسی کارەکان", "Action inbox", "صندوق الإجراءات"), ClipboardCheck],
         ["approvals", navSectionLabel("پەسەندکردن", "Approvals", "الموافقات"), ShieldCheck],
       ],
     },
@@ -3095,17 +3107,14 @@ export default function App() {
       items: [
         ["newtx", tr("مامەڵەی نوێ"), ArrowLeftRight],
         ["txs", tr("مامەڵەکان"), ListOrdered],
+        // «من نرخی ڕۆژ دادەنێم هەمیشە» — set daily, and nothing can be valued until it is. It
+        // was reachable only by noticing a warning on the dashboard.
+        ["rates", navSectionLabel("نرخی ڕۆژ", "Today's rates", "أسعار اليوم"), TrendingUp],
       ],
     },
     {
-      // All receipt work together, and only the work.
-      //
-      //   «تەنها دوو بەش هەیە کە پەیوەندی بە فیشەوە هەبێت. یەکەم ئەو فیشانەی کە یووسەرەکان
-      //    ناردوویانە و دووەم ئەوانەی کە ئەوان ناردوویانە بەس پشکنینیان دەوێت.»
-      //
-      // «فیشەکان» is those two, as the two sections of one screen. «پشکنین» is where the one
-      // that needs looking at is actually looked at. Forwarding is neither: the owner keeps it
-      // «بۆ بینینی ئەوەی فۆرۆرد کراوە» — a record of what went where, so it says so.
+      // «تەنها دوو بەش هەیە کە پەیوەندی بە فیشەوە هەبێت.» Those two, and the record of what was
+      // forwarded where — which is not work, but is the answer to «ئەوە بۆ کێ نێردرا؟».
       label: navSectionLabel("فیش", "Receipts", "الإيصالات"),
       items: [
         ["receipts", navSectionLabel("فیشەکان", "Receipts", "الإيصالات"), ScanLine],
@@ -3116,10 +3125,13 @@ export default function App() {
     {
       label: navSectionLabel("پارە", "Money", "المال"),
       items: [
+        // The screen the money actually moves through. It had two buttons on the dashboard and
+        // no entry of its own.
+        ["safes", navSectionLabel("قاسە", "Safes", "الخزائن"), Wallet],
         ["debt-center", navSectionLabel("قەرز و قاسە", "Debt & cashbox", "الديون والخزنة"), Scale],
         ["office-payments", navSectionLabel("نووسینگە", "Offices", "المكاتب"), Building2],
         ["partner-holdings", navSectionLabel("لای هاوبەشان", "With partners", "لدى الشركاء"), Boxes],
-        ["explain-balance", navSectionLabel("شیکردنەوەی باڵانس", "Explain a balance", "تفسير الرصيد"), Search],
+        ["close", navSectionLabel("بەستنی ڕۆژ", "Close the day", "إقفال اليوم"), ClipboardCheck],
       ],
     },
     {
@@ -3131,10 +3143,22 @@ export default function App() {
       ],
     },
     {
+      // Named «ڕاپۆرت» because that is the name the owner asked for and verify:roles holds it.
+      // «خێر بە وردی» joins what is inside it; renaming the heading was not asked for.
       label: navSectionLabel("ڕاپۆرت", "Reports", "التقارير"),
       items: [
         ["report", tr("ڕاپۆرت"), PieChart],
+        // Built, finished, and unreachable from anywhere in the application until now.
+        ["profit", navSectionLabel("خێر بە وردی", "Earnings in detail", "الأرباح بالتفصيل"), TrendingUp],
         ["insights", navSectionLabel("ڕەوت و شیکاری", "Trends", "الاتجاهات"), TrendingUp],
+      ],
+    },
+    {
+      // Not the day's work. Kept, because the day somebody has to prove what happened is the
+      // day these matter, and grouped here so they are not in the way until then.
+      label: navSectionLabel("سیستەم", "System", "النظام"),
+      items: [
+        ["explain-balance", navSectionLabel("شیکردنەوەی باڵانس", "Explain a balance", "تفسير الرصيد"), Search],
         ["integrity", navSectionLabel("یەکپارچەیی", "Integrity", "السلامة"), ShieldAlert],
         ["audit", navSectionLabel("تۆماری گۆڕانکاری", "Change log", "سجل التغييرات"), History],
         ["export-audit", navSectionLabel("هەناردە", "Export", "التصدير"), FileCheck2],
@@ -3486,7 +3510,17 @@ export default function App() {
                       ? navSectionLabel("گەڕانەوە بۆ سەرخێڵەکان", "Back to Businesses", "العودة إلى الأعمال")
                       : navSectionLabel("گەڕانەوە بۆ ناوەندی بەڕێوەبردن", "Back to Admin Center", "العودة إلى مركز الإدارة")} />
             )}
-            {page === "action-inbox" && <DeferredPanel><ActionInbox client={supabase} lang={lang} onNavigate={(path) => setPage(path.slice(2))} /></DeferredPanel>}
+            {/* «ئینباکسی کارەکان» is not a second screen any more. It asked the same question
+              * «کاری ئەمڕۆ» asks — what is waiting — and answered it from the server while the
+              * hub answered it from the browser. Two answers to one question, which could
+              * disagree and which the owner had to check twice. The server's list now sits at
+              * the foot of the hub, under the counts, and the route stays so an old link still
+              * lands somewhere real.
+              */}
+            {(page === "admin-center" || page === "action-inbox") && !isSystemManager && (
+              <div className="mt-6"><DeferredPanel><ActionInbox client={supabase} lang={lang}
+                onNavigate={(path) => setPage(path.slice(2))} /></DeferredPanel></div>
+            )}
             {page === "integrity" && <DeferredPanel><IntegrityCenter client={supabase} lang={lang} onNavigate={(path) => setPage(path.slice(2))} /></DeferredPanel>}
             {/* Two records of the same money are only safe while they agree. */}
             {page === "integrity" && <div className="mt-4"><DeferredPanel><BooksReconciliation client={supabase} lang={lang} flash={flash} /></DeferredPanel></div>}
