@@ -15,7 +15,7 @@ import { loadMoneyAtOffices, loadOfficeHoldings, moneyAtOfficeText, officeAdvanc
 import { buildBundleForReceipts, bundleArchiveName, shareOrSaveBundle } from "./services/receiptBundleTransfer.js";
 import { reportFault } from "./services/faultReport.js";
 import { MyReceipts } from "./components/portal/MyReceipts";
-import { intakeReceipt, intakeStatusText, loadMyReceipts, noteReceiptReadFailure, receiptReadFailureText, replaceReceipt, requestStoredReceiptOcr } from "./services/receiptIntake";
+import { dismissRejectedReceipt, intakeReceipt, intakeStatusText, loadMyReceipts, noteReceiptReadFailure, receiptDismissCommandKey, receiptReadFailureText, replaceReceipt, requestStoredReceiptOcr } from "./services/receiptIntake";
 import { DICT } from "./i18n/dictionary";
 import { computeInventoryPosition } from "./services/inventoryAccounting";
 import { createReceiptReviewCommand, finalizeReceiptBatch, loadReceiptPolicy, reviewReceiptBatch } from "./services/receiptReview";
@@ -28,7 +28,7 @@ import { toCsv } from "./services/csvSafe";
 import { revokeAllUrls, revokeDroppedUrls } from "./services/objectUrls";
 import { unrealizedPnl, unrealizedReasonText } from "./services/unrealizedPnl";
 import { EARNING_KINDS, earningsByKind } from "./services/earningsByKind";
-import { capitalEventsFrom, investorShare, investorsTotalByCurrency, profitEventsFrom } from "./services/investorShare";
+import { capitalEventsFrom, investorShare, investorsTotalByCurrency, profitEventsFrom, sharedCostEventsFrom } from "./services/investorShare";
 import { crossRate, fromUsdAsOf, rateAsOf, rateErrorText, rateOf, unpricedCurrencies, usdFromAsOf, validateRate } from "./services/currencyRate";
 import {
   DIRECTION_REFUSED, mayEditExtraction, mayUploadDirection,
@@ -1406,6 +1406,7 @@ export default function App() {
           amount: +r.amount, partnerId: r.partner_id, txId: r.tx_id, note: r.note, date: r.date,
           reversalOf: r.reversal_of || null, commandKey: r.command_key || null,
           createdBy: r.created_by || null, approvalId: r.approval_id || null,
+          paidFrom: r.paid_from || null,
           commissionRateSnapshot: r.commission_rate_snapshot == null ? null : +r.commission_rate_snapshot,
           commissionAmountSnapshot: r.commission_amount_snapshot == null ? null : +r.commission_amount_snapshot,
         })),
@@ -1533,13 +1534,13 @@ export default function App() {
     return () => { cancelled = true; };
   }, [session?.access_token, accessEpoch]);
 
-  const LR = (e) => ({ id: e.id, type: e.type, owner: e.owner || null, investor_id: e.investorId || null, cur_id: e.curId, amount: e.amount, partner_id: e.partnerId || null, cash_account_id: e.cashAccountId || null, tx_id: e.txId || null, note: e.note || null, date: e.date });
+  const LR = (e) => ({ id: e.id, type: e.type, owner: e.owner || null, investor_id: e.investorId || null, cur_id: e.curId, amount: e.amount, partner_id: e.partnerId || null, cash_account_id: e.cashAccountId || null, paid_from: e.paidFrom || null, tx_id: e.txId || null, note: e.note || null, date: e.date });
   const TR = (transaction) => {
     const t = normalizeTransactionBusinessFlow(transaction);
     return { id: t.id, code: t.code || null, type: t.type, direct: !!t.direct,
       pair_id: t.pairId ?? null, direct_role: t.directRole ?? null, own_money: !!t.ownMoney,
       business_flow: t.businessFlow,
-      buy_rate: t.buyRate ?? null, buy_total: t.buyTotal ?? null, cp_id: t.cpId, cp_name: t.cpName, cur_id: t.curId, amount: t.amount, rate: t.rate, against_id: t.againstId, total: t.total, partner_id: t.partnerId, status: t.status, paid_at: t.paidAt, profit: t.profit, profit_cur_id: t.profitCurId, note: t.note || null, date: t.date, edited: !!t.edited, deleted: !!t.deleted };
+      buy_rate: t.buyRate ?? null, buy_total: t.buyTotal ?? null, cp_id: t.cpId, cp_name: t.cpName, cur_id: t.curId, amount: t.amount, rate: t.rate, against_id: t.againstId, total: t.total, partner_id: t.partnerId, partner_fee: t.partnerFee ?? null, status: t.status, paid_at: t.paidAt, profit: t.profit, profit_cur_id: t.profitCurId, note: t.note || null, date: t.date, edited: !!t.edited, deleted: !!t.deleted };
   };
 
   // One key per intent, kept until the outcome is actually known. A key minted fresh on each
@@ -1643,6 +1644,13 @@ export default function App() {
       const phys = Object.fromEntries(Object.entries(rm.physical_by_currency || {}).map(([k,v]) => [k, Number(v) || 0]));
       const partner = {}, invCap = {}, invPaid = {}, expenses = {}, fees = {};
       const selfCap = Object.fromEntries(Object.entries(rm.self_capital || {}).map(([k,v]) => [k, Number(v) || 0]));
+      // «قاسەی تایبەتی خۆم», computed on the server so that the figure a rule is written against
+      // and the figure a screen shows are the same number. verify:accounting runs a scenario
+      // through both this and the browser's own derivation below and refuses to pass unless
+      // they agree to the last unit.
+      const ownMoney = rm.own_money_by_currency
+        ? Object.fromEntries(Object.entries(rm.own_money_by_currency).map(([k,v]) => [k, Number(v) || 0]))
+        : null;
       const acctCash = {}, acctDebt = {}, cust = {};
 
       for (const x of (rm.partner_balances || [])) {
@@ -1726,7 +1734,7 @@ export default function App() {
         cashAccounts[x.cash_account_id][x.cur_id] = Number(x.amount) || 0;
       }
 
-      return { phys, partner, office, cashAccounts, atMe, invCap, invTotal, selfCap, invPaid, expenses, fees, cust, pending: cust, acctCash, acctDebt };
+      return { phys, partner, office, cashAccounts, atMe, invCap, invTotal, selfCap, ownMoney, invPaid, expenses, fees, cust, pending: cust, acctCash, acctDebt };
     }
 
     const phys = {}, partner = {}, invCap = {}, selfCap = {}, invPaid = {}, expenses = {}, fees = {};
@@ -1782,7 +1790,7 @@ export default function App() {
       const sign = t.type === "buy" ? +1 : -1;   // کڕین = قەرزاری ئەوم | فرۆشتن = ئەو قەرزارە
       acctDebt[t.cpId][t.againstId] = (acctDebt[t.cpId][t.againstId] || 0) + sign * t.total;
     }
-    return { phys, partner, atMe, invCap, invTotal, selfCap, invPaid, expenses, fees, cust, pending: cust, acctCash, acctDebt };
+    return { phys, partner, atMe, invCap, invTotal, selfCap, ownMoney: null, invPaid, expenses, fees, cust, pending: cust, acctCash, acctDebt };
   }, [data]);
 
   const cur = (id) => data?.currencies.find((c) => c.id === id) || {};
@@ -1818,17 +1826,25 @@ export default function App() {
     }
     return m;
   };
-  const readModelProfitMap = (direct) => {
-    if (!Array.isArray(data?.readModel?.profit_totals)) return null;
-    const out = {};
-    for (const x of data.readModel.profit_totals) {
-      if (!!x.direct !== !!direct || !x.cur_id) continue;
-      out[x.cur_id] = (out[x.cur_id] || 0) + (Number(x.amount) || 0);
-    }
-    return out;
-  };
-  const ownProfitAll = useMemo(() => data ? (readModelProfitMap(true) || ownProfitIn(null, null)) : {}, [data]);
-  const profitAll = useMemo(() => data ? (readModelProfitMap(false) || profitIn(null, null)) : {}, [data]);
+  // The server sends one row per currency: {cur_id, profit, direct_profit}. This read `x.direct`
+  // and `x.amount`, which are not fields the snapshot has ever had — so `Number(undefined) || 0`
+  // made every shared total zero and the `!!undefined !== !!true` test threw away every direct
+  // one. Both maps came back empty of profit, and because an empty object is truthy the `||`
+  // fallback to the transaction walk never ran.
+  //
+  // The consequence was «قاسەی تایبەتی خۆم»: it adds (sharedProfit − investorsShare) and
+  // ownProfit, so with both at zero it read as capital minus the investors' share minus every
+  // expense — the owner's own money short by every unit of profit they had ever earned, and
+  // negative as soon as the investors' share exceeded the capital. The ownership panel and the
+  // dashboard's «ماڵی خۆم» are the same figure and were wrong with it.
+  //
+  // The reader is gone rather than corrected. Even reading the right fields it would be wrong
+  // here: the snapshot is asked for 30 days, and these two are all-time figures, so it would
+  // have traded a visible bug for a quiet one that drops everything older than a month.
+  // profitIn and ownProfitIn walk the transactions the browser already holds and already
+  // agree with every other profit figure on the screen.
+  const ownProfitAll = useMemo(() => data ? ownProfitIn(null, null) : {}, [data]);
+  const profitAll = useMemo(() => data ? profitIn(null, null) : {}, [data]);
 
   /* بەشی وەبەرهێنەرێک لە خێری دراوێک */
   // Profit is attributed sale by sale, using the capital that stood on the day of that sale.
@@ -1846,23 +1862,37 @@ export default function App() {
    * One investor's share of a currency's profit over a range. Passing no range means all time,
    * which is what the account pages ask for.
    */
+  // Sales earn the pool; expenses paid out of the general safe come out of it. Both are dated
+  // events shared by the capital standing on their own day, so one list carries both — an
+  // investor's share must never be computed from a pool that counts only the good half.
+  const poolEvents = (from = null, to = null) => [
+    ...profitEventsFrom(data.txs, { from, to }),
+    ...sharedCostEventsFrom(data.ledger, { from, to }),
+  ];
+
   const invShare = (iid, curId, from = null, to = null) =>
     investorShare({
       investorId: iid, curId,
-      profitEvents: profitEventsFrom(data.txs, { from, to }),
+      profitEvents: poolEvents(from, to),
       capitalEvents, investors: liveInvestors,
     });
 
   // دابەشکردن تەنها لەسەر خێری هاوبەش دەکرێت (نەک ڕاستەوخۆ)
   const investorsProfitIn = (from = null, to = null) =>
     investorsTotalByCurrency({
-      profitEvents: profitEventsFrom(data.txs, { from, to }),
+      profitEvents: poolEvents(from, to),
       capitalEvents, investors: liveInvestors, currencies: data.currencies,
     });
 
   /* قاسەی خۆم = سەرمایەی خۆم + خێری خۆم − خەرجی − عمولەی هاوبەشان */
   const mySafe = useMemo(() => {
     if (!data || !calc) return {};
+    // The server's answer when there is one. It is the same definition, written once more in
+    // SQL because a rule the server enforces cannot read a number the browser computed — and
+    // the two are held to each other by a gate rather than by hope.
+    if (calc.ownMoney) {
+      return Object.fromEntries(data.currencies.map((c) => [c.id, calc.ownMoney[c.id] || 0]));
+    }
     const invP = investorsProfitIn();
     const out = {};
     for (const c of data.currencies) {
@@ -2106,6 +2136,17 @@ export default function App() {
     // دراوی دەرەوە: دەبێت لای تەرەفێک بێت
     if (cur(f.curId).external && !f.partnerId) { flash(`${cur(f.curId).name} دەبێت لای تەرەفێک دابنرێت`); return false; }
 
+    // عمولەی هاوبەش — «بڕەکە خۆم دایدەنێم». Left empty, the partner's stored rate decides on the
+    // server. Typed, it is the commission, and it is checked here so the owner is told before
+    // they press rather than refused after. The server checks it again and is the authority.
+    const commissionText = String(f.partnerFee ?? "").trim();
+    if (commissionText !== "" && f.partnerId && f.type === "buy") {
+      const asked = Number(commissionText);
+      if (!Number.isFinite(asked)) { flash(tr("عمولەکە ژمارەیەکی دروست نییە")); return false; }
+      if (asked < 0) { flash(tr("عمولە ناتوانێت کەمتر لە سفر بێت")); return false; }
+      if (asked > amount) { flash(tr("عمولە ناتوانێت لە بڕی مامەڵەکە زیاتر بێت")); return false; }
+    }
+
     // The transaction's identity is fixed before the first attempt, so a retry after a lost
     // response saves the same transaction rather than a second one.
     const txId = uid();
@@ -2140,6 +2181,9 @@ export default function App() {
         curId: f.curId, amount, rate, againstId: f.againstId, total,
         buyRate: bookBuyRate, buyTotal: bookBuyTotal,
         partnerId: f.partnerId || null, direct: false, status: f.status || "completed",
+        // Sent as the text the owner typed. Rounding a commission in the browser and then
+        // letting the server round it again is two answers to one question.
+        partnerFee: f.partnerId && f.type === "buy" && commissionText !== "" ? commissionText : null,
         paidAt: null, profit, profitCurId, note: f.note || "",
         date: txDate, edited: false,
       };
@@ -2328,6 +2372,10 @@ export default function App() {
         id: entryId, type: isPayout ? "investor_payout" : "expense",
         owner: null, investorId: isPayout ? f.investorId : null,
         curId: f.curId, amount: -amt, partnerId: null, cashAccountId: f.place || null, txId: null,
+        // «ئاماژە بەوە بکات لە قاسەی گشتی دیدەی یان قاسەی تایبەتی خۆت.» An investor's payout is
+        // not an expense of either safe — it is their own profit going back to them — so it
+        // names none, which is what the server stores for it anyway.
+        paidFrom: isPayout ? null : (f.paidFrom === "general" ? "general" : "own"),
         note: `${f.category}${f.note ? " — " + f.note : ""}`, date: now(),
       };
       const result = await rpcStrict("sarraf_post_ledger_command", {
@@ -3134,7 +3182,11 @@ export default function App() {
   const shared = { data, calc, cur, usr, mySafe, profitAll, profitIn, ownProfitIn, ownProfitAll,
     investorsProfitIn, invShare, invUnpaid, autoRate, avgRate, inventoryPosition, usdValueAt, usdToCurrencyAt,
     toUsd, sumUsd, ratesReady, owners, notify, waNotify, isOwner, flash,
-    readModel: data?.readModel || null, loadTxHistoryPage, loadRangeReport, loadInventorySnapshot };
+    readModel: data?.readModel || null, loadTxHistoryPage, loadRangeReport, loadInventorySnapshot,
+    // Whether this portal is being previewed by an administrator rather than lived in by the
+    // person it belongs to. Only the sender may put their own refused receipt away, so a screen
+    // that offers the button to a previewing administrator offers something the server refuses.
+    previewing: Boolean(va) };
 
   return (
     <div dir={LANGS[lang]?.dir || "rtl"} key={lang} className="zeman-shell min-h-screen" style={{ background: "var(--bg)", color: "var(--txt)" }}>
@@ -3399,7 +3451,7 @@ export default function App() {
               <TxForm {...shared} onSave={saveTx} batch={pendingBatch} onClearBatch={() => setPendingBatch(null)} busy={busy} />}
             {page === "newtx" && !pendingBatch && newTxKind === "commission" &&
               <DeferredPanel><CommissionTrade client={supabase} lang={lang}
-                currencies={data?.currencies || []}
+                currencies={data?.currencies || []} ownMoney={mySafe}
                 onRecorded={(answer) => flash(`${tr("مامەڵەی عمولە تۆمار کرا")} #${answer.code ?? ""}`)} /></DeferredPanel>}
             {page === "txs" && (editTx
               ? <TxForm {...shared} onSave={saveTx} editing={editTx} onCancel={() => setEditTx(null)} />
@@ -4763,7 +4815,7 @@ function Safes({ data, calc, cur, usr, mySafe, invUnpaid, owners, ratesReady, ad
   // hold it; the server refuses that, and the form should never ask for it in the first place.
   const placeStillValid = placesFor(f.curId).some((a) => a.id === f.place);
   const place = placeStillValid ? f.place : "";
-  const [xf, setXf] = useState({ category: "کرێی شوێن", investorId: "", curId: data.currencies[0]?.id, amount: "", note: "", place: "" });
+  const [xf, setXf] = useState({ category: "کرێی شوێن", investorId: "", curId: data.currencies[0]?.id, amount: "", note: "", place: "", paidFrom: "general" });
   const xPlace = placesFor(xf.curId).some((a) => a.id === xf.place) ? xf.place : "";
   const [nc, setNc] = useState({ code: "", name: "", symbol: "", dec: 2 });
   const investors = data.users.filter((u) => u.role === "investor" && !u.deleted);
@@ -4880,6 +4932,14 @@ function Safes({ data, calc, cur, usr, mySafe, invUnpaid, owners, ratesReady, ad
             <option value="">{tr("کاش")}</option>
             {placesFor(xf.curId).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
           </Sel></div>
+          {/* «لە کوێوە» says cash or which account. This says whose money it was — two different
+              questions, and only one of them had ever been asked. */}
+          {!isPayout && (
+            <div><Lbl>{tr("لە کام قاسەوە")}</Lbl><Sel value={xf.paidFrom} onChange={(e) => setXf({ ...xf, paidFrom: e.target.value })}>
+              <option value="general">{tr("قاسەی گشتی")}</option>
+              <option value="own">{tr("قاسەی تایبەتی خۆم")}</option>
+            </Sel></div>
+          )}
           <div><Lbl>{tr("بڕ")}</Lbl><Inp type="number" value={xf.amount} onChange={(e) => setXf({ ...xf, amount: e.target.value })} placeholder="0" /></div>
           {!isPayout && <div><Lbl>{tr("تێبینی")}</Lbl><Inp value={xf.note} onChange={(e) => setXf({ ...xf, note: e.target.value })} /></div>}
           <div className="flex items-end"><Btn kind="danger" className="w-full" onClick={() => { if (+xf.amount > 0) { addExpense({ ...xf, place: xPlace }); setXf({ ...xf, amount: "", note: "" }); } }}>{tr("تۆمارکردن")}</Btn></div>
@@ -4927,7 +4987,7 @@ function Safes({ data, calc, cur, usr, mySafe, invUnpaid, owners, ratesReady, ad
 }
 
 /* ══════════════════ فۆرمی مامەڵە ══════════════════ */
-function TxForm({ data, cur, calc, usr, avgRate, inventoryPosition, usdValueAt, usdToCurrencyAt, autoRate, onSave, editing, onCancel, lockCp, batch, onClearBatch, busy, flash }) {
+function TxForm({ data, cur, calc, usr, mySafe, avgRate, inventoryPosition, usdValueAt, usdToCurrencyAt, autoRate, onSave, editing, onCancel, lockCp, batch, onClearBatch, busy, flash }) {
   const e = editing;
   const [sending, setSending] = useState(false);
   const bCur = batch ? data.currencies.find((c) => c.code === batch.currency)?.id : null;
@@ -4955,6 +5015,9 @@ function TxForm({ data, cur, calc, usr, avgRate, inventoryPosition, usdValueAt, 
     cpId: e ? e.cpId || "" : (lockCp || batch?.customer_id || ""),
     cpName: e ? e.cpName || "" : "",
     partnerId: e ? e.partnerId || "" : (batch?.partner_id || ""),
+    // «بڕەکە خۆم دایدەنێم، ئیتر جاری وایە دەیگۆڕم، واتا ڕێکەوتن نییە.» Empty means the partner's
+    // stored rate decides; anything typed here is the commission for this one purchase.
+    partnerFee: "",
     direct: e ? !!e.direct : false,
     buyQuote: e && e.direct && e.buyRate ? storedRateToDisplay(e.buyRate, initialCurId, initialAgainstId, initialRateBaseId) : "",
     sellQuote: e && e.direct && e.rate ? storedRateToDisplay(e.rate, initialCurId, initialAgainstId, initialRateBaseId) : "",
@@ -5009,6 +5072,20 @@ function TxForm({ data, cur, calc, usr, avgRate, inventoryPosition, usdValueAt, 
   const dBuyTotal = dBuyRate > 0 ? roundByCurrency(amtR * dBuyRate, f.againstId) : 0;
   const dSellTotal = dSellRate > 0 ? roundByCurrency(amtR * dSellRate, f.againstId) : 0;
   const dProfit = bq > 0 && sq > 0 ? roundByCurrency(dSellTotal - dBuyTotal, f.againstId) : null;
+
+  // «تەنها مامەڵەی ئاسایی پارەکەی لە قاسەی گشتییەوەیە، ئەوانی دیکە هی خۆمە تەنها.»
+  //
+  // The safe always has enough for a direct pair — it buys and sells in one press, so its net
+  // effect on the safe is the profit, never a withdrawal — which is exactly why the sufficiency
+  // check can never catch this and why it has to be said here. An owner with 200 of their own
+  // dollars can put 10,000 of their investors' through a trade whose whole earning they keep.
+  //
+  // It is said, not refused. The figure it is said from was wrong on every screen until this
+  // same change fixed it, so nobody has yet seen a true one to plan against; refusing a trade
+  // on a number the owner has never been shown would be the worse mistake. Whether it should
+  // become a refusal is theirs to decide once they have watched it on real data.
+  const ownMoneyHere = mySafe ? (mySafe[f.againstId] || 0) : null;
+  const directOverOwn = f.direct && ownMoneyHere !== null && dBuyTotal > ownMoneyHere + 1e-9;
 
   const pos = f.type === "sell" && inventoryPosition
     ? inventoryPosition(f.curId, f.againstId, e?.id || null, e?.date || null)
@@ -5090,6 +5167,19 @@ function TxForm({ data, cur, calc, usr, avgRate, inventoryPosition, usdValueAt, 
   const inventoryRefuses = (shortOfStock || costBasisMissing) && pos?.fromServer === true;
   const inventoryDoubts = (shortOfStock || costBasisMissing) && pos?.fromServer !== true;
   const feeRate = f.partnerId ? (usr(f.partnerId).rate || 0) : 0;
+  // The commission for this one purchase. «بڕەکە خۆم دایدەنێم» — the stored rate fills the box
+  // in, and whatever is left in it is what the partner is paid. The number that reaches the
+  // server is the string as typed: the arithmetic that decides money is the server's, and this
+  // side only has to show the owner what they are about to agree to.
+  const commissionOffered = f.partnerId && f.type === "buy" && amtR > 0
+    ? roundMoney(data, amtR * feeRate / 100, f.curId) : 0;
+  const commissionTyped = String(f.partnerFee ?? "").trim();
+  const commissionAsked = commissionTyped === "" ? commissionOffered : Number(commissionTyped);
+  const commissionObjection = commissionTyped === "" ? null
+    : !Number.isFinite(commissionAsked) ? tr("عمولەکە ژمارەیەکی دروست نییە")
+    : commissionAsked < 0 ? tr("عمولە ناتوانێت کەمتر لە سفر بێت")
+    : amtR > 0 && commissionAsked > amtR ? tr("عمولە ناتوانێت لە بڕی مامەڵەکە زیاتر بێت")
+    : null;
   const rateQuoteId = oppositePairId(f.curId, f.againstId, f.rateBaseId);
 
   const setPair = (nextCurId, nextAgainstId) => {
@@ -5129,6 +5219,7 @@ function TxForm({ data, cur, calc, usr, avgRate, inventoryPosition, usdValueAt, 
       buyQuote: "",
       sellQuote: "",
       partnerId: "",
+      partnerFee: "",
     }));
   };
 
@@ -5147,7 +5238,7 @@ function TxForm({ data, cur, calc, usr, avgRate, inventoryPosition, usdValueAt, 
   const blank = {
     type: f.type, curId: f.curId, amount: "", againstId: f.againstId, rateBaseId: f.rateBaseId, quote: f.quote,
     manualRate: f.manualRate, cpMode: "acc", cpId: lockCp || "", cpName: "",
-    partnerId: "", status: "completed", officeId: "", note: "",
+    partnerId: "", partnerFee: "", status: "completed", officeId: "", note: "",
     direct: f.direct, buyQuote: f.buyQuote, sellQuote: f.sellQuote,
   };
 
@@ -5165,6 +5256,9 @@ function TxForm({ data, cur, calc, usr, avgRate, inventoryPosition, usdValueAt, 
       flash?.(tr("دراوی مامەڵە و دراوی بەرامبەر ناکرێت هەمان بن"), "error");
       return;
     }
+    // The commission box is already showing why it is wrong; saying it again as a flash is what
+    // turns a note into a refusal the owner can act on.
+    if (commissionObjection) { flash?.(commissionObjection, "error"); return; }
     setSending(true);
     try {
       const ok = await onSave({ ...f, rate, batchId: batch?.id, receiptIds: batch?.receipt_ids || [] }, e);
@@ -5274,6 +5368,7 @@ function TxForm({ data, cur, calc, usr, avgRate, inventoryPosition, usdValueAt, 
             ...f,
             direct: next,
             partnerId: "",
+            partnerFee: "",
             buyQuote: next && directBuyAuto ? Number(directBuyAuto.toPrecision(10)) : f.buyQuote,
             sellQuote: next && directSellAuto ? Number(directSellAuto.toPrecision(10)) : f.sellQuote,
           });
@@ -5403,6 +5498,18 @@ function TxForm({ data, cur, calc, usr, avgRate, inventoryPosition, usdValueAt, 
                   {fmt(dSellTotal, cur(f.againstId).dec || 0)} {cur(f.againstId).code}
                 </span>
               </div>
+              <div className="flex justify-between text-[12px]">
+                <span style={{ color: "var(--txt-3)" }}>{tr("قاسەی تایبەتی خۆم")}</span>
+                <span style={{ ...num, color: directOverOwn ? "var(--warn)" : "var(--txt-3)" }}>
+                  {ownMoneyHere === null ? "—" : `${fmt(ownMoneyHere, cur(f.againstId).dec || 0)} ${cur(f.againstId).code}`}
+                </span>
+              </div>
+              {directOverOwn && (
+                <div className="text-[11.5px] flex items-start gap-1.5" style={{ color: "var(--warn)" }}>
+                  <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                  {tr("ئەم مامەڵەیە لە پارەی خۆت زیاترە — خێرەکەی هەمووی هی تۆیە بەڵام پارەکەی هی هەمووانە")}
+                </div>
+              )}
               <div className="flex justify-between items-baseline pt-2.5" style={{ borderTop: "1px solid var(--line)" }}>
                 <span className="text-[13px] font-semibold" style={{ color: "var(--txt)" }}>
                   {dProfit >= 0 ? tr("خێر") : tr("زەرەر")}
@@ -5538,9 +5645,26 @@ function TxForm({ data, cur, calc, usr, avgRate, inventoryPosition, usdValueAt, 
                   {tr("فیشەکانیش هەر بەم لێدانە دەچنە لای ئەم هاوبەشە")}
                 </div>
               )}
-              {feeRate > 0 && f.type === "buy" && amtR > 0 && (
-                <div className="text-[11.5px] mt-2" style={{ color: "var(--warn)" }}>
-                  {tr("عمولە")} {feeRate}{tr("٪")} = <b style={num}>{fmtMoney(data, roundMoney(data, amtR * feeRate / 100, f.curId), f.curId)}</b> · {tr("باڵانسی دوایی")} <b style={num}>{fmtMoney(data, amtR - roundMoney(data, amtR * feeRate / 100, f.curId), f.curId)}</b>
+              {f.partnerId && f.type === "buy" && amtR > 0 && (
+                <div className="mt-2.5 rounded-[var(--r-sm)] p-2.5 space-y-2"
+                     style={{ background: "var(--surf-2)", border: "1px solid var(--line)" }}>
+                  <Lbl>{tr("عمولەی هاوبەش")}</Lbl>
+                  <Inp value={f.partnerFee} inputMode="decimal"
+                       placeholder={String(commissionOffered)}
+                       onChange={(ev) => setF({ ...f, partnerFee: ev.target.value })} />
+                  <div className="text-[11.5px]" style={{ color: "var(--txt-2)" }}>
+                    {feeRate > 0
+                      ? `${tr("ڕێژەی تۆمارکراوی ئەم هاوبەشە")} ${feeRate}${tr("٪")} = ${fmtMoney(data, commissionOffered, f.curId)}`
+                      : tr("ڕێژەیەکی تۆمارکراو نییە بۆ ئەم هاوبەشە")}
+                  </div>
+                  {commissionObjection
+                    ? <div className="text-[11.5px]" style={{ color: "var(--neg)" }}>{commissionObjection}</div>
+                    : (
+                      <div className="text-[11.5px]" style={{ color: "var(--warn)" }}>
+                        {tr("وەردەگرێت")} <b style={num}>{fmtMoney(data, commissionAsked, f.curId)}</b>
+                        {" · "}{tr("باڵانسی دوایی")} <b style={num}>{fmtMoney(data, amtR - commissionAsked, f.curId)}</b>
+                      </div>
+                    )}
                 </div>
               )}
               {cur(f.curId).external && !f.partnerId && (
@@ -8468,6 +8592,23 @@ function BatchDetail({ id, back, usr, data, profile, onMakeTx, flash, reloadBatc
   const [pick, setPick] = useState({});        // {receiptId: partnerId|""}
   const [saving, setSaving] = useState(false);
   const [allocationReason, setAllocationReason] = useState("دابەشکردنی فیش بەپێی شوێنی پارە");
+  // ── «٣ دانەیان هەڵدەبژێرم و مامەڵەیەکی لێوە درووست ئەکەم» ────────────────────────────────
+  //
+  // The server has taken an arbitrary list of receipt ids since 202608110001 — it checks they
+  // are accepted, unused, one currency and at most one partner, and leaves the batch open when
+  // some are left. What was missing was the way to say which ones. The amount still comes from
+  // the receipts and still cannot be typed over.
+  //
+  // Declared up here with the other hooks on purpose: the first version sat below the loading
+  // return, so it ran on some renders and not others. React counts hooks, and verify:journey
+  // caught the whole screen collapsing with "Rendered more hooks than during the previous
+  // render" before this reached anywhere real.
+  const [chosen, setChosen] = useState(() => new Set());
+  const pickOne = (id) => setChosen((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
   const matchCommandRef = useRef(null);
   const decisionCommandRef = useRef(null);
   const finalizationCommandRef = useRef(null);
@@ -8543,6 +8684,18 @@ function BatchDetail({ id, back, usr, data, profile, onMakeTx, flash, reloadBatc
     conversionGroups[key].n += 1;
   });
   const conversionGroupKeys = Object.keys(conversionGroups);
+
+  // A receipt converted in another press is gone from convertibleReceipts, so a stale id in the
+  // set would silently shrink the total. The selection is always read through what is still there.
+  const selected = convertibleReceipts.filter((r) => chosen.has(r.id));
+  const selectedTotal = selected.reduce((sum, r) => sum + (Number(r.net_amount ?? r.amount) || 0), 0);
+  const selectedCurrencies = [...new Set(selected.map((r) => r.currency))];
+  const selectedPartners = [...new Set(selected.map((r) => r.partner_id || ""))];
+  // The same three rules the server enforces, said here instead of after the press.
+  const selectionObjection = selected.length === 0 ? null
+    : selectedCurrencies.length > 1 ? tr("فیشە هەڵبژێردراوەکان یەک دراو نین")
+    : selectedPartners.length > 1 ? tr("فیشە هەڵبژێردراوەکان لای یەک هاوبەش نین")
+    : null;
   const remainingTotal = convertibleReceipts.reduce((sum, receipt) => sum + (Number(receipt.net_amount ?? receipt.amount) || 0), 0);
   const remainingCurrency = convertibleReceipts[0]?.currency || b.currency;
 
@@ -8886,6 +9039,76 @@ function BatchDetail({ id, back, usr, data, profile, onMakeTx, flash, reloadBatc
         </Card>
       )}
 
+      {/* Choosing which receipts, one by one. «٣ دانەیان هەڵدەبژێرم و مامەڵەیەکی لێوە درووست
+        * ئەکەم ، لە بڕەکە بڕی ئەو ٣ فیشە دابنێ ، ئەوانی تریش بە هەمان شێواز.» */}
+      {canCreateTransaction && (
+        <Card className="p-5">
+          <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
+            <SecLbl>{tr("هەڵبژاردنی فیشەکان")}</SecLbl>
+            <div className="flex gap-1.5">
+              <button type="button" onClick={() => setChosen(new Set(convertibleReceipts.map((r) => r.id)))}
+                className="px-2.5 py-1 rounded-lg text-xs font-semibold"
+                style={{ background: "var(--line)", color: "var(--txt-2)" }}>{tr("هەموویان")}</button>
+              <button type="button" onClick={() => setChosen(new Set())}
+                className="px-2.5 py-1 rounded-lg text-xs font-semibold"
+                style={{ background: "var(--line)", color: "var(--txt-2)" }}>{tr("پاککردنەوەی هەڵبژاردن")}</button>
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            {convertibleReceipts.map((r, i) => {
+              const on = chosen.has(r.id);
+              return (
+                <label key={r.id}
+                  className="flex items-center gap-2.5 p-2.5 rounded-[var(--r-sm)] cursor-pointer tap"
+                  style={on
+                    ? { background: "var(--ac-bg)", border: "1px solid color-mix(in srgb, var(--ac) 34%, transparent)" }
+                    : { background: "var(--surf-2)", border: "1px solid var(--line)" }}>
+                  <input type="checkbox" checked={on} onChange={() => pickOne(r.id)}
+                    className="w-4 h-4 accent-[var(--ac)] shrink-0"
+                    aria-label={`${tr("فیش")} ${i + 1} — ${fmtMoney(data, r.net_amount ?? r.amount, r.currency)} ${r.currency}`} />
+                  <span className="text-xs text-[var(--txt-3)] w-5" style={num}>{i + 1}</span>
+                  {r.image_path && <ReceiptImg path={r.image_path} className="w-9 h-9 object-cover rounded-lg border border-[var(--line)] shrink-0" />}
+                  <span className="min-w-0 flex-1">
+                    <span className="text-sm font-bold text-[var(--txt)] block" style={num}>
+                      {fmtMoney(data, r.net_amount ?? r.amount, r.currency)}
+                      <span className="text-xs font-normal text-[var(--txt-2)]"> {r.currency}</span>
+                    </span>
+                    <span className="text-[11px] text-[var(--txt-3)] truncate block">
+                      {r.receiver || "—"}{r.partner_id ? ` · ${tr("لای")} ${usr(r.partner_id).name}` : ""}
+                    </span>
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+
+          {selected.length > 0 && (
+            <div className="mt-3 pt-3 border-t border-[var(--line)]">
+              <div className="flex items-center justify-between gap-3 mb-2 flex-wrap">
+                <span className="text-sm text-[var(--txt-2)]">
+                  <b style={num}>{selected.length}</b> {tr("فیش هەڵبژێردراوە")}
+                </span>
+                <span className="text-lg font-bold" style={{ ...num, color: "var(--pos)" }}>
+                  {fmtMoney(data, selectedTotal, selectedCurrencies[0])} {selectedCurrencies[0]}
+                </span>
+              </div>
+              {selectionObjection
+                ? <div className="text-[12px] mb-2" style={{ color: "var(--neg)" }}>{selectionObjection}</div>
+                : null}
+              <Btn kind={isOut ? "danger" : "primary"} className="w-full" disabled={!!selectionObjection}
+                onClick={() => onMakeTx({ ...b, total_net: selectedTotal, currency: selectedCurrencies[0],
+                  n: selected.length, partner_id: selected[0]?.partner_id || null,
+                  receipt_ids: selected.map((r) => r.id) })}>
+                {isOut
+                  ? tr("درووستکردنی فرۆشتن لەم فیشە هەڵبژێردراوانە")
+                  : tr("درووستکردنی کڕین لەم فیشە هەڵبژێردراوانە")}
+              </Btn>
+            </div>
+          )}
+        </Card>
+      )}
+
       {canCreateTransaction && (
         <Card className={`p-5 ${isOut ? "border-[color-mix(in_srgb,var(--neg)_34%,transparent)] bg-[color-mix(in_srgb,var(--neg)_8%,transparent)]" : "border-[color-mix(in_srgb,var(--pos)_34%,transparent)] bg-[color-mix(in_srgb,var(--pos)_8%,transparent)]"}`}>
           {conversionGroupKeys.length > 1 ? (
@@ -8964,7 +9187,7 @@ function BatchDetail({ id, back, usr, data, profile, onMakeTx, flash, reloadBatc
 }
 
 /* ─────────── ئەرشیفی فیشەکانی کڕیارێک ─────────── */
-function ReceiptArchive({ customerId, data, flash, simple = false }) {
+function ReceiptArchive({ customerId, data, flash, simple = false, previewing = false }) {
   const [scan, setScan] = useState(false);
   const [recs, setRecs] = useState(null);
   const [share, setShare] = useState(false);
@@ -9020,6 +9243,17 @@ function ReceiptArchive({ customerId, data, flash, simple = false }) {
     await replaceReceipt(supabase, receipt.id, intake.documentId);
   };
 
+  // «هەر لە تەنیشت خۆیا دیلێتکردنی ئەو فیشە هەبێت.»  It leaves the sender's list and nothing is
+  // destroyed. The command key is derived from the document rather than generated, so pressing
+  // twice — a slow network, an impatient second tap — is the same press, not two.
+  //
+  // Offered only to the person whose portal this is. An administrator previewing it may not put
+  // somebody else's refusal away: that would take from the person who needs it the one signal
+  // telling them to send a better photograph, and the server refuses it either way.
+  const dismissOne = async (receipt) => {
+    await dismissRejectedReceipt(supabase, receipt.id, receiptDismissCommandKey(receipt.id));
+  };
+
   useEffect(() => {
     let active = true;
     if (simple) {
@@ -9053,6 +9287,7 @@ function ReceiptArchive({ customerId, data, flash, simple = false }) {
           loadSummary={(batchId) => loadBatchSummary(supabase, batchId)} /></DeferredPanel>
         <MyReceipts receipts={mine} loading={mine === null} error={mineError}
           onReload={reloadMine} onReplace={replaceOne} onBundle={bundleThese}
+          onDismiss={previewing ? null : dismissOne}
           ui={{ Card, Pill, Empty, StatePanel, tr }} />
       </div>
     );
@@ -10174,9 +10409,17 @@ function Report({ data, calc, cur, usr, profitIn, investorsProfitIn, invShare, s
   const earningKinds = useMemo(
     () => earningsByKind({ txs, usdValueAt }), [txs, usdValueAt]);
 
-  const exp = {}, fee = {}, payout = {}, flow = {};
+  // «کە خەرجییەکەم دا ئاماژە بەوە بکات لە قاسەی گشتی دیدەی یان قاسەی تایبەتی خۆت» — the total
+  // is still one figure, and beside it the two safes it came out of. An expense recorded before
+  // the question was asked reads as the owner's own, which is what every screen has always
+  // done with it.
+  const exp = {}, expGeneral = {}, expOwn = {}, fee = {}, payout = {}, flow = {};
   entries.forEach((e) => {
-    if (e.type === "expense") exp[e.curId] = (exp[e.curId] || 0) + Math.abs(e.amount);
+    if (e.type === "expense") {
+      exp[e.curId] = (exp[e.curId] || 0) + Math.abs(e.amount);
+      const safe = e.paidFrom === "general" ? expGeneral : expOwn;
+      safe[e.curId] = (safe[e.curId] || 0) + Math.abs(e.amount);
+    }
     if (e.type === "partner_fee") fee[e.curId] = (fee[e.curId] || 0) + Math.abs(e.amount);
     if (e.type === "investor_payout") payout[e.curId] = (payout[e.curId] || 0) + Math.abs(e.amount);
     const fl = (flow[e.curId] = flow[e.curId] || { inn: 0, out: 0 });
@@ -10310,6 +10553,8 @@ function Report({ data, calc, cur, usr, profitIn, investorsProfitIn, invShare, s
             <PL label={tr("خێری فرۆشتن")} m={profit} tone="pos" />
             <PL label={tr("زەرەری فرۆشتن")} m={loss} tone="neg" />
             <PL label={tr("خەرجی")} m={exp} tone="neg" />
+            <PL label={tr("— لە قاسەی گشتی")} m={expGeneral} tone="neg" />
+            <PL label={tr("— لە قاسەی تایبەتی خۆم")} m={expOwn} tone="neg" />
             <PL label={tr("عمولەی هاوبەشان")} m={fee} tone="neg" />
             <PL label={tr("خێری وەبەرهێنەران")} m={invP} tone="neg" />
             <div className="mt-1 pt-1 border-t-2 border-slate-900/10">
@@ -11863,7 +12108,7 @@ function Audit({ data }) {
 }
 
 /* پۆرتاڵی کڕیار */
-function CustomerPortal({ user, c, base, data, calc, cur, usr, flash, reloadBatches, online, stale, refreshing, refreshedAt, refresh }) {
+function CustomerPortal({ user, c, base, data, calc, cur, usr, flash, reloadBatches, online, stale, refreshing, refreshedAt, refresh, previewing = false }) {
   const list = base;
   const customerRoutes = useMemo(() => ["home", "activity", "documents", "account", "upload"], []);
   const [tab, setTab] = usePortalRoute("customer", customerRoutes, "home");
@@ -12007,7 +12252,7 @@ function CustomerPortal({ user, c, base, data, calc, cur, usr, flash, reloadBatc
               post — above an empty state and a permission error, with no way to send at all. */}
           <PortalAction icon={Upload} label={tr("ناردنی فیش")}
             hint={tr("سکرینشۆتی ناردنی پارە")} onClick={() => setTab("upload")} primary />
-          <ReceiptArchive customerId={user.id} data={data} flash={flash} simple />
+          <ReceiptArchive customerId={user.id} data={data} flash={flash} simple previewing={previewing} />
           <DeferredPanel><ForwardedReceipts client={supabase} flash={flash} subjectId={user.id}
             signedUrlFor={async (path) => {
               const { data: signed } = await supabase.storage.from("receipts").createSignedUrl(path, 3600);
@@ -12033,7 +12278,7 @@ function CustomerPortal({ user, c, base, data, calc, cur, usr, flash, reloadBatc
 }
 
 /* پۆرتاڵی هاوبەش */
-function PartnerPortal({ user, data, calc, cur, usr, flash, reloadBatches, online, stale, refreshing, refreshedAt, refresh }) {
+function PartnerPortal({ user, data, calc, cur, usr, flash, reloadBatches, online, stale, refreshing, refreshedAt, refresh, previewing = false }) {
   const partnerRoutes = useMemo(() => ["home", "activity", "documents", "account", "upload"], []);
   const [tab, setTab] = usePortalRoute("partner", partnerRoutes, "home");
   // A partner can upload only for customer-purchase transactions explicitly assigned to them.
@@ -12110,7 +12355,7 @@ function PartnerPortal({ user, data, calc, cur, usr, flash, reloadBatches, onlin
         <PartnerReceipts partnerId={user.id} data={data} flash={flash} />
         {/* Their own archive: what this partner themselves sent, with the details of each
             receipt — the same view the customer-seller gets, scoped by the server to them. */}
-        <ReceiptArchive customerId={user.id} data={data} flash={flash} simple />
+        <ReceiptArchive customerId={user.id} data={data} flash={flash} simple previewing={previewing} />
       </>}
       {tab === "upload" && (
         <>
@@ -12147,7 +12392,7 @@ function PartnerPortal({ user, data, calc, cur, usr, flash, reloadBatches, onlin
 }
 
 /* ══════════════════ پۆرتاڵی ڕۆڵەکانی تر ══════════════════ */
-function Portal({ user, data, calc, cur, usr, officePay, settle, invUnpaid, flash, reloadBatches, accountMove, accountTransfer, ...portalState }) {
+function Portal({ user, data, calc, cur, usr, officePay, settle, invUnpaid, flash, reloadBatches, accountMove, accountTransfer, previewing = false, ...portalState }) {
   if (user.role === "office") return (
     <div className="portal-frame"><section className="portal-main" id="portal-content">
       <DeferredPanel><OfficePayments client={supabase} lang={portalState.lang || "ku"} flash={flash}
@@ -12158,10 +12403,10 @@ function Portal({ user, data, calc, cur, usr, officePay, settle, invUnpaid, flas
   if (user.role === "customer") {
     const c = calc.cust[user.id] || { owe: {}, due: {} };
     const base = data.txs.filter((t) => !t.deleted && t.cpId === user.id).reverse();
-    return <CustomerPortal user={user} c={c} base={base} data={data} calc={calc} cur={cur} usr={usr} flash={flash} reloadBatches={reloadBatches} {...portalState} />;
+    return <CustomerPortal user={user} c={c} base={base} data={data} calc={calc} cur={cur} usr={usr} flash={flash} reloadBatches={reloadBatches} previewing={previewing} {...portalState} />;
   }
 
-  if (user.role === "partner") return <PartnerPortal user={user} data={data} calc={calc} cur={cur} usr={usr} flash={flash} reloadBatches={reloadBatches} {...portalState} />;
+  if (user.role === "partner") return <PartnerPortal user={user} data={data} calc={calc} cur={cur} usr={usr} flash={flash} reloadBatches={reloadBatches} previewing={previewing} {...portalState} />;
 
   if (user.role === "__never__") {
     const bal = calc.partner[user.id] || {};

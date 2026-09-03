@@ -136,6 +136,37 @@ export function profitEventsFrom(txs, { from = null, to = null } = {}) {
   return events;
 }
 
+/**
+ * The dated costs the general safe carried, from the ledger.
+ *
+ *   «کە خەرجییەکەم دا ئاماژە بەوە بکات لە قاسەی گشتی دیدەی یان قاسەی تایبەتی خۆت»
+ *   «خەرجی لە قاسەی گشتی — بەڵێ، بەپێی ڕێژەکەیان»
+ *
+ * An expense paid out of the general safe is a cost of the shared business, so it comes out of
+ * the pool before the pool is divided. Fed in as a negative event, it is shared by exactly the
+ * same rule a sale is: by the capital standing on the day it was paid. Somebody who was not
+ * there that day carries none of it, which is the same fairness that makes a sale's profit
+ * theirs only if they were there for it.
+ *
+ * An expense paid out of the owner's own safe is not here, and neither is one recorded before
+ * the question was ever asked — both are the owner's alone, which is what the screens have
+ * always done with them.
+ */
+export function sharedCostEventsFrom(ledger, { from = null, to = null } = {}) {
+  const events = [];
+  for (const e of ledger || []) {
+    if (!e || e.type !== "expense" || e.paidFrom !== "general") continue;
+    const day = String(e.date || "").slice(0, 10);
+    if (from && day < from) continue;
+    if (to && day > to) continue;
+    // The ledger stores an expense as a negative movement. Its sign is already the sign this
+    // wants, so taking Math.abs and negating it again would be two chances to get it backwards.
+    const amount = num(e.amount);
+    if (amount) events.push({ date: e.date, curId: e.curId, amount });
+  }
+  return events;
+}
+
 /** The dated capital movements, from the ledger. */
 export function capitalEventsFrom(ledger) {
   const events = [];

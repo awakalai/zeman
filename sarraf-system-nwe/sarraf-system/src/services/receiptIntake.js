@@ -372,6 +372,48 @@ export function mayBeReplaced(receipt) {
   return receiptOutcome(receipt) === "rejected" && !receipt?.replacedBy;
 }
 
+/**
+ * Whether the person who sent this one may put it away.
+ *
+ * «فیشی ڕەتکراوە پێویست ناکات بۆ من بنێردرێت، هەر لە تەنیشت خۆیا دیلێتکردنی ئەو فیشە هەبێت.»
+ *
+ * Only the four refused states, and 'failed_terminal' is deliberately not among them: the
+ * database refuses that one, and a button that offers something the server will refuse is worse
+ * than no button. `receiptOutcome` calls it refused because that is what it means to the reader;
+ * this asks a narrower question, so it reads the state itself.
+ */
+export const DISMISSIBLE_STATES = Object.freeze(
+  ["rejected", "duplicate", "currency_mismatch", "tamper_suspected"]);
+
+export function mayBeDismissed(receipt) {
+  return DISMISSIBLE_STATES.includes(receipt?.state);
+}
+
+export const receiptDismissCommandKey = (documentId = newId()) =>
+  `receipt-dismiss:${cleanSubject(documentId)}`;
+
+/**
+ * Put a refused receipt away.
+ *
+ * Nothing is destroyed: the row, the reason it was refused and every state it passed through
+ * stay exactly where they are — «بێگوومان دەبێت ئەو هیستۆرییە هەبێت بۆ ئەوەی بزانم کێ فیشی
+ * دووبارە و خراپ دەنێرێت». It moves to a terminal state and leaves the sender's list, and the
+ * owner can still count how many a person has had refused.
+ */
+export async function dismissRejectedReceipt(client, documentId, commandKey) {
+  const { data, error } = await client.rpc("sarraf_dismiss_rejected_receipt", {
+    p_document_id: documentId,
+    p_command_key: commandKey || receiptDismissCommandKey(documentId),
+  });
+  if (error) throw error;
+  return {
+    documentId: data?.document_id || documentId,
+    was: data?.was || null,
+    reason: data?.reason || null,
+    replayed: data?.replayed === true,
+  };
+}
+
 // loadMyIntakes was here, and it is gone on purpose.
 //
 // It called sarraf_my_receipt_intakes — the one-argument version that answers "what is MINE",

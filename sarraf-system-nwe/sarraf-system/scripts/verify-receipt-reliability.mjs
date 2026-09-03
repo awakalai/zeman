@@ -528,6 +528,249 @@ try {
     if (state !== "rejected") throw new Error(`a receipt could not even be rejected: ${state}`);
   });
 
+  // ══ CHOOSING WHICH RECEIPTS ═════════════════════════════════════════════════
+  //
+  //   «باشترین ڕێگا ئەوەیە سیلێکتردنی فیشەکان هەبێت ، ٣ دانەیان هەڵدەبژێرم و مامەڵەیەکی
+  //    لێوە درووست ئەکەم ، لە بڕەکە بڕی ئەو ٣ فیشە دابنێ ، ئەوانی تریش بە هەمان شێواز.»
+  //
+  // sarraf_convert_receipt_batch_to_transaction has taken an arbitrary list of receipt ids
+  // since it was written, and no gate had ever driven it — the command at the very centre of
+  // this business was covered by nothing. These drive it with a real selection.
+  // A receipt held at a partner must carry what a real WeChat/Alipay screenshot carries —
+  // recipient, date, platform, fee status — §2.5 of the owner's logic, enforced by the database.
+  const intake = (id, batchId, amount, fields = {}) => {
+    const f = { currency: "CNY", partner: null, ...fields };
+    psql(`insert into public.receipt_intake_items(id,batch_id,submitted_by,customer_id,partner_id,
+            direction,image_path,amount,fee,net_amount,currency,source_status,intake_status,counted,
+            payee,tx_date,platform,has_fee,tenant_id)
+          values ('${id}','${batchId}','rl-cus','rl-cus',${f.partner ? `'${f.partner}'` : "null"},
+                  'in','ingest/${batchId}/${id}.jpg',${amount},0,${amount},'${f.currency}',
+                  'ok','accepted',true,
+                  '张伟', now(), 'wechat', false, 't-sarkhel')`);
+  };
+  // The server replaces `amount` with the sum of the chosen receipts but keeps the caller's
+  // rate and total, and refuses unless total = amount × rate. So the sum has to be named here,
+  // which is exactly what the screen shows before the press.
+  // Buying yuan means paying dollars, and the cashbox has to have them. Without this the
+  // command refuses for a reason that has nothing to do with what is being checked here.
+  psql(`insert into public.ledger(id,type,cur_id,amount,date,tenant_id)
+        values ('led-rl-conversion-fund','deposit','usd',100000,now(),'t-sarkhel')
+        on conflict (id) do nothing`);
+
+  const RATE = 0.14;
+  const convert = (batchId, ids, key, sum, extra = {}) => {
+    // The transaction carries its own id — sarraf_commit_transactions refuses one without.
+    const tx = { id: `tx-${key}`, type: "buy", cp_id: "rl-cus", cur_id: "cny", rate: RATE,
+                 against_id: "usd", total: Number((sum * RATE).toFixed(2)),
+                 status: "completed", ...extra };
+    return psql(`select public.sarraf_convert_receipt_batch_to_transaction('${batchId}',
+      '${JSON.stringify(ids)}'::jsonb,
+      '${JSON.stringify(tx)}'::jsonb,
+      'مامەڵە لە فیشە هەڵبژێردراوەکان', 'receipt-convert:${key}')::text`);
+  };
+
+  check("three of eight receipts become one transaction, for the sum of those three", () => {
+    batch("rb-selection-of-eight", { stage: "verified" });
+    // Every one at the same partner: yuan cannot sit in the cashbox — «پارەکە بە ویچات دەنێرێت
+    // بۆ ئەکاونتی هاوبەشەکەم» — and the database refuses an external currency with no custody.
+    for (let i = 1; i <= 8; i += 1) {
+      intake(`sel-000${i}`, "rb-selection-of-eight", 100 + i, { partner: "rl-par" });
+    }
+    // 101 + 102 + 103 = 306, and nothing else.
+    convert("rb-selection-of-eight", ["sel-0001", "sel-0002", "sel-0003"], "sel-first-three-of-eight", 306);
+    const moved = num(`select count(*) from public.receipt_intake_items
+                        where batch_id='rb-selection-of-eight' and transaction_id is not null`);
+    if (moved !== 3) throw new Error(`${moved} receipts were converted, expected 3`);
+    const amount = num(`select t.amount from public.txs t
+                         join public.receipt_intake_items i on i.transaction_id = t.id
+                        where i.id='sel-0001'`);
+    if (amount !== 306) throw new Error(`the transaction is for ${amount}, expected 306`);
+  });
+
+  check("and the other five are still waiting, on a batch that stayed open", () => {
+    // The half that matters most: «دەبێت هەموو فیشێک بکەم بە مامەڵە». A batch that closed here
+    // would take five real payments out of sight.
+    const left = num(`select count(*) from public.receipt_intake_items
+                       where batch_id='rb-selection-of-eight' and transaction_id is null`);
+    if (left !== 5) throw new Error(`${left} receipts are left, expected 5`);
+    const row = one(`select coalesce(tx_id,'—')||'|'||receipt_stage from public.receipt_batches
+                      where id='rb-selection-of-eight'`);
+    if (row !== "—|verified") throw new Error(`the batch reads ${row}, expected it to stay open`);
+  });
+
+  check("the remaining five can be converted in their own turn", () => {
+    convert("rb-selection-of-eight", ["sel-0004", "sel-0005", "sel-0006", "sel-0007", "sel-0008"], "sel-the-remaining-five", 530);
+    const left = num(`select count(*) from public.receipt_intake_items
+                       where batch_id='rb-selection-of-eight' and transaction_id is null`);
+    if (left !== 0) throw new Error(`${left} receipts are still unconverted`);
+    const stage = one(`select receipt_stage::text from public.receipt_batches where id='rb-selection-of-eight'`);
+    if (stage !== "matched") throw new Error(`the batch is ${stage}, expected matched once empty`);
+  });
+
+  check("a receipt already turned into money cannot be chosen again", () => {
+    // §2.12 of the logic: «فیشێک تەنها یەکجار دەبێت بە پارە».
+    const before = num(`select count(*) from public.txs where not deleted`);
+    let refusedIt = false;
+    try { convert("rb-selection-of-eight", ["sel-0001"], "sel-trying-the-same-one-twice", 101); } catch { refusedIt = true; }
+    const after = num(`select count(*) from public.txs where not deleted`);
+    if (!refusedIt) throw new Error("a spent receipt was accepted again");
+    if (after !== before) throw new Error("a second transaction was created from a spent receipt");
+  });
+
+  check("a selection that mixes two currencies is refused", () => {
+    batch("rb-selection-mixed-currency", { stage: "verified" });
+    intake("mix-0001", "rb-selection-mixed-currency", 100, { partner: "rl-par" });
+    intake("mix-0002", "rb-selection-mixed-currency", 200, { currency: "USD", partner: "rl-par" });
+    let refusedIt = false;
+    try { convert("rb-selection-mixed-currency", ["mix-0001", "mix-0002"], "mix-two-currencies-at-once", 300); } catch { refusedIt = true; }
+    if (!refusedIt) throw new Error("dinars and dollars were added together");
+    const moved = num(`select count(*) from public.receipt_intake_items
+                        where batch_id='rb-selection-mixed-currency' and transaction_id is not null`);
+    if (moved !== 0) throw new Error("a refused conversion moved receipts anyway");
+  });
+
+  check("a selection split across two partners is refused", () => {
+    // The money is at one partner or the other. One transaction cannot be at both.
+    batch("rb-selection-two-partners", { stage: "verified" });
+    psql(`insert into public.app_users(id,name,role,tenant_id) values
+          ('rl-par2','هاوبەشی دووەم','partner','t-sarkhel') on conflict (id) do nothing`);
+    intake("two-0001", "rb-selection-two-partners", 100, { partner: "rl-par" });
+    intake("two-0002", "rb-selection-two-partners", 100, { partner: "rl-par2" });
+    let refusedIt = false;
+    try { convert("rb-selection-two-partners", ["two-0001", "two-0002"], "two-partners-in-one-press", 200); } catch { refusedIt = true; }
+    if (!refusedIt) throw new Error("one transaction was placed with two partners at once");
+    const moved = num(`select count(*) from public.receipt_intake_items
+                        where batch_id='rb-selection-two-partners' and transaction_id is not null`);
+    if (moved !== 0) throw new Error("a refused conversion moved receipts anyway");
+  });
+
+  check("pressing the same conversion twice makes one transaction, not two", () => {
+    batch("rb-selection-pressed-twice", { stage: "verified" });
+    intake("twice-0001", "rb-selection-pressed-twice", 500, { partner: "rl-par" });
+    convert("rb-selection-pressed-twice", ["twice-0001"], "pressed-the-same-conversion-twice", 500);
+    const once = num(`select count(*) from public.txs where not deleted`);
+    convert("rb-selection-pressed-twice", ["twice-0001"], "pressed-the-same-conversion-twice", 500);
+    const twice = num(`select count(*) from public.txs where not deleted`);
+    if (twice !== once) throw new Error(`the second press made ${twice - once} more transaction(s)`);
+  });
+
+  // ══ PUTTING A REFUSAL AWAY ══════════════════════════════════════════════════
+  //
+  //   «فیشی ڕەتکراوە پێویست ناکات بۆ من بنێردرێت، هەر لە تەنیشت خۆیا دیلێتکردنی ئەو فیشە
+  //    هەبێت.» — and, in the same breath: «بێگوومان دەبێت ئەو هیستۆرییە هەبێت بۆ ئەوەی بزانم
+  //    کێ فیشی دووبارە و خراپ دەنێرێت.»
+  //
+  // Both at once: it leaves the sender's list, and nothing about it is destroyed.
+  const dismiss = (docId, key) => psql(
+    `select public.sarraf_dismiss_rejected_receipt('${docId}','receipt-dismiss:${key}')::text`);
+  // The state machine only moves one step at a time, so a fixture has to walk there.
+  // A rejected document must carry its reason — the table refuses one without, which is the
+  // rule that makes «هۆکارەکەشی پێ بڵێ» impossible to forget.
+  const walk = (docId, states, reason = "هەمان وێنە پێشتر نێردراوە") => {
+    for (const st of states) {
+      psql(st === "rejected"
+        ? `update public.receipt_documents
+              set state='rejected', rule_code='duplicate', rule_reason='${reason}'
+            where id='${docId}'`
+        : `update public.receipt_documents set state='${st}' where id='${docId}'`);
+    }
+  };
+  const REFUSED_PATH = ["uploading", "uploaded", "needs_manual_review", "rejected"];
+  // A document may not be called validated until somebody has read a recipient, a date, a
+  // platform and a fee answer off the image.  A fixture walking that far has to satisfy the
+  // same rule a real reader would.
+  const readIt = (docId) => psql(
+    `insert into public.receipt_extractions(document_id,version,is_original,raw,gross_amount,order_amount,
+       fee_amount,net_amount,fee_treatment,currency,ref_no,payee,tx_date,platform,has_fee,tenant_id)
+     values ('${docId}',1,true,'{}'::jsonb,100,100,0,100,'no_fee','CNY','REF-${docId}',
+             '张伟',current_date,'wechat',false,'t-sarkhel')`);
+
+  check("the person who sent a refused receipt can put it away", () => {
+    batch("rb-dismissal-of-refusals");
+    document("doc-dismiss-mine", "rb-dismissal-of-refusals");
+    walk("doc-dismiss-mine", REFUSED_PATH);
+    be("customer");
+    dismiss("doc-dismiss-mine", "the-sender-puts-it-away");
+    be("admin");
+    const state = one(`select state::text from public.receipt_documents where id='doc-dismiss-mine'`);
+    if (state !== "cancelled") throw new Error(`it is ${state}, expected cancelled`);
+  });
+
+  check("and nothing about it is destroyed", () => {
+    // The row, the reason it was refused, and every state it passed through.
+    const reason = one(`select coalesce(rule_reason,'—') from public.receipt_documents
+                         where id='doc-dismiss-mine'`);
+    if (!reason.includes("هەمان وێنە")) throw new Error(`the reason reads ${reason}`);
+    const steps = num(`select count(*) from public.receipt_state_transitions
+                        where document_id='doc-dismiss-mine'`);
+    if (steps < 4) throw new Error(`only ${steps} steps of history survived`);
+    const last = one(`select from_state::text||'→'||to_state::text
+                        from public.receipt_state_transitions
+                       where document_id='doc-dismiss-mine' order by created_at desc limit 1`);
+    if (last !== "rejected→cancelled") throw new Error(`the last step reads ${last}`);
+  });
+
+  check("the owner can still count how many a person has had refused", () => {
+    // The whole reason for keeping it: «بزانم کێ فیشی دووبارە و خراپ دەنێرێت».
+    const refusals = num(`select count(*) from public.receipt_state_transitions t
+                            join public.receipt_documents d on d.id = t.document_id
+                           where d.uploader_id='rl-cus' and t.to_state='rejected'
+                             and t.document_id='doc-dismiss-mine'`);
+    if (refusals !== 1) throw new Error(`the record of that refusal reads ${refusals}, expected 1`);
+  });
+
+  check("somebody else's refusal cannot be put away", () => {
+    batch("rb-dismissal-not-yours");
+    document("doc-dismiss-theirs", "rb-dismissal-not-yours");
+    walk("doc-dismiss-theirs", REFUSED_PATH);
+    // Even the administrator may not: hiding somebody's refusal from them takes away the one
+    // signal telling them to send a better photograph.
+    let refusedIt = false;
+    try { dismiss("doc-dismiss-theirs", "an-administrator-tries-it"); } catch { refusedIt = true; }
+    const state = one(`select state::text from public.receipt_documents where id='doc-dismiss-theirs'`);
+    if (!refusedIt || state !== "rejected") throw new Error(`it is ${state} — somebody else put it away`);
+  });
+
+  check("a receipt that was accepted cannot be put away", () => {
+    // Only a refusal. Otherwise this is a way to make a real payment disappear from the list
+    // it is waiting in.
+    batch("rb-dismissal-of-a-good-one");
+    document("doc-dismiss-accepted", "rb-dismissal-of-a-good-one");
+    walk("doc-dismiss-accepted", ["uploading", "uploaded", "ocr_pending", "ocr_processing", "parsed"]);
+    readIt("doc-dismiss-accepted");
+    walk("doc-dismiss-accepted", ["validated", "submitted", "accepted"]);
+    be("customer");
+    let refusedIt = false;
+    try { dismiss("doc-dismiss-accepted", "trying-it-on-a-good-one"); } catch { refusedIt = true; }
+    be("admin");
+    const state = one(`select state::text from public.receipt_documents where id='doc-dismiss-accepted'`);
+    if (!refusedIt || state !== "accepted") throw new Error(`it is ${state} — an accepted receipt was put away`);
+  });
+
+  check("a receipt still on its way cannot be put away", () => {
+    // The state table would allow 'uploaded'→'cancelled' — that is how a half-finished upload
+    // is abandoned.  This command must not be the door to it: a receipt that has not been
+    // refused is still on its way to becoming money, and its sender pressing «لایبە» on it
+    // would take a real payment out of the pile nobody has looked at yet.
+    batch("rb-dismissal-still-going");
+    document("doc-dismiss-underway", "rb-dismissal-still-going");
+    walk("doc-dismiss-underway", ["uploading", "uploaded"]);
+    be("customer");
+    let refusedIt = false;
+    try { dismiss("doc-dismiss-underway", "trying-it-on-one-underway"); } catch { refusedIt = true; }
+    be("admin");
+    const state = one(`select state::text from public.receipt_documents where id='doc-dismiss-underway'`);
+    if (!refusedIt || state !== "uploaded") throw new Error(`it is ${state} — one still on its way was put away`);
+  });
+
+  check("putting the same one away twice changes nothing the second time", () => {
+    be("customer");
+    dismiss("doc-dismiss-mine", "the-sender-puts-it-away");
+    be("admin");
+    const state = one(`select state::text from public.receipt_documents where id='doc-dismiss-mine'`);
+    if (state !== "cancelled") throw new Error(`it is ${state}`);
+  });
+
   // ── the report ──────────────────────────────────────────────────────────────
   let failed = 0;
   for (const [ok, name] of checks) { console.log(`${ok ? "PASS" : "FAIL"}  ${name}`); if (!ok) failed++; }

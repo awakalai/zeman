@@ -10,6 +10,9 @@
 // The database itself is built by scripts/lib/zeman-db.mjs, which the business-flow gate uses
 // too, so both run against the same schema and the same migration list.
 import { PG_HINT, postgresAvailable, startDatabase } from "./lib/zeman-db.mjs";
+import {
+  capitalEventsFrom, investorsTotalByCurrency, profitEventsFrom, sharedCostEventsFrom,
+} from "../src/services/investorShare.js";
 
 if (!postgresAvailable()) {
   if (process.env.CI === "true" || process.env.ZEMAN_DB_STRICT === "1") {
@@ -3769,6 +3772,401 @@ try {
     });
   };
   reminderChecks();
+
+  // ── پارەی کڕیار هی کڕیارەکەیە ─────────────────────────────────────────────────────────────
+  //
+  //   «هەر کڕیارێکیش دەبێت قاسەیەکی هەبێت وەک قاسەکەی خۆم... خۆیان دێن پارە دەدەن تا بیخەمە
+  //    حسابەکەیان.» And, asked whose it then is: «پارەکە هی خۆیەتی نەک هی من.»
+  //
+  // The books and the working ledger answer two different questions here, and both are right:
+  // the journal says the drawer holds a thousand more dollars and the business owes a thousand,
+  // while «قاسەی گشتی» says the owner's own money did not move. Confusing the two is how a
+  // business spends a customer's deposit believing it is theirs, so it is pinned.
+  const customerMoneyChecks = () => {
+    const ownSafe = (cur) => Number(psql(
+      `select coalesce(sum(amount),0)::text from public.ledger
+        where cur_id='${cur}' and partner_id is null and office_id is null
+          and cash_account_id is null`).trim());
+    const cashInBooks = () => Number(psql(
+      `select coalesce(round(sum(case when l.side='debit' then l.amount else -l.amount end),2),0)::text
+         from public.journal_lines l join public.journal_entries e on e.id=l.entry_id
+        where l.account_id='acc-1000' and l.currency='USD' and e.status='posted'`).trim());
+
+    check("a customer's money never counts as the owner's own", () => {
+      const mineBefore = ownSafe("usd"), booksBefore = cashInBooks();
+      psql(`select public.sarraf_customer_vault_move('cust-1','USD',1000,'in',1,
+              'کڕیارەکە پارەی هێنا','vault:money-the-owner-does-not-own')`);
+      // The half the owner asked for: their thousand is not his.
+      if (ownSafe("usd") !== mineBefore) {
+        throw new Error(`the owner's safe moved by ${ownSafe("usd") - mineBefore} on a customer's deposit`);
+      }
+      // And the half that keeps the books honest: the drawer really does hold it.
+      if (cashInBooks() - booksBefore !== 1000) {
+        throw new Error(`the books recorded ${cashInBooks() - booksBefore} of cash, expected 1000`);
+      }
+    });
+
+    check("and it is recorded as owed to them, not as earnings", () => {
+      // acc-2000 is what the business owes its customers. A deposit that landed anywhere else —
+      // income above all — would read as a thousand dollars of profit that was never earned.
+      const owed = Number(psql(
+        `select coalesce(round(sum(case when l.side='credit' then l.amount else -l.amount end),2),0)::text
+           from public.journal_lines l join public.journal_entries e on e.id=l.entry_id
+          where l.account_id='acc-2000' and e.source_type='customer_vault_deposit'`).trim());
+      if (owed !== 1000) throw new Error(`${owed} is recorded as owed, expected 1000`);
+      const income = Number(psql(
+        `select coalesce(count(*),0)::text from public.journal_lines l
+           join public.journal_entries e on e.id=l.entry_id
+          where e.source_type='customer_vault_deposit' and l.account_id in ('acc-4000','acc-4100')`).trim());
+      if (income !== 0) throw new Error(`a customer's deposit reached an income account ${income} time(s)`);
+    });
+
+    check("taking it back out again leaves the owner's safe where it was", () => {
+      const mineBefore = ownSafe("usd");
+      psql(`select public.sarraf_customer_vault_move('cust-1','USD',400,'out',1,
+              'کڕیارەکە بەشێکی بردەوە','vault:they-took-some-of-it-back')`);
+      if (ownSafe("usd") !== mineBefore) {
+        throw new Error(`the owner's safe moved by ${ownSafe("usd") - mineBefore} on a withdrawal`);
+      }
+    });
+
+    check("a customer cannot take out more than they put in", () => {
+      let refused = false;
+      try {
+        psql(`select public.sarraf_customer_vault_move('cust-1','USD',999999,'out',1,
+                'زۆرتر لەوەی هەیەتی','vault:more-than-they-ever-had')`);
+      } catch { refused = true; }
+      if (!refused) throw new Error("a customer withdrew money they never deposited");
+    });
+  };
+  customerMoneyChecks();
+
+  // ── «بڕەکە خۆم دایدەنێم، ئیتر جاری وایە دەیگۆڕم، واتا ڕێکەوتن نییە» ────────────────────────
+  //
+  // The commission a partner is paid for holding money was one stored percentage applied to
+  // every purchase. There is no agreed percentage: the owner names an amount, and changes it.
+  // The stored rate is now a default, and `partner_fee` on the transaction is the decision.
+  //
+  // What matters is that the number the owner typed is the number in every place the system
+  // records a commission — the ledger row that moves it and the snapshot that reports it.
+  const partnerCommissionChecks = () => {
+    asAdmin();
+    psql(`insert into public.app_users(id,name,role,rate,tenant_id)
+          values ('p-comm','Commission Partner','partner',2,'t-sarkhel')
+          on conflict (id) do update set rate = excluded.rate`);
+    // A purchase pays dollars out of the main safe. Without them the command refuses for a
+    // reason that has nothing to do with commissions.
+    psql(`insert into public.ledger(id,type,cur_id,amount,date,tenant_id)
+          values ('led-comm-fund','deposit','usd',5000,now(),'t-sarkhel')`);
+
+    const buy = (id, amount, extra = "") => psql(`select public.sarraf_commit_transactions(
+      jsonb_build_array(jsonb_build_object('id','${id}','type','buy','cp_id','cust-1',
+        'cur_id','cny','amount',${amount},'rate',0.14,'against_id','usd',
+        'total',${(amount * 0.14).toFixed(2)},'status','completed','partner_id','p-comm'${extra})),
+      '[]'::jsonb, null, 'cmd-${id}', 'کڕین', 'commission')`);
+
+    const feeRow = (txId) => psql(`select coalesce(sum(amount),0)::text from public.ledger
+                                    where tx_id='${txId}' and type='partner_fee'`).trim();
+    const snapshot = (txId) => psql(`select coalesce(partner_fee_snapshot,-1)::text||'/'||
+                                      coalesce(partner_rate_snapshot,-1)::text
+                                     from public.txs where id='${txId}'`).trim();
+
+    check("with no amount named, the partner's stored rate is still what applies", () => {
+      buy("tx-comm-default", 1000);
+      if (Number(feeRow("tx-comm-default")) !== -20) {
+        throw new Error(`the ledger took ${feeRow("tx-comm-default")}, expected -20`);
+      }
+      const [fee, rate] = snapshot("tx-comm-default").split("/").map(Number);
+      if (fee !== 20 || rate !== 2) throw new Error(`the snapshot reads ${fee} at ${rate}%`);
+    });
+
+    check("the amount the owner names is the amount the partner is paid", () => {
+      buy("tx-comm-named", 1000, ",'partner_fee',50");
+      if (Number(feeRow("tx-comm-named")) !== -50) {
+        throw new Error(`the ledger took ${feeRow("tx-comm-named")}, expected -50`);
+      }
+      if (Number(snapshot("tx-comm-named").split("/")[0]) !== 50) {
+        throw new Error(`the snapshot reads ${snapshot("tx-comm-named")}`);
+      }
+    });
+
+    check("the snapshot never names a rate that was not charged", () => {
+      // A report multiplying amount by partner_rate_snapshot must land on partner_fee_snapshot.
+      // A snapshot saying 2% next to a fee of 50 on 1000 is a number nobody can reconcile.
+      const [fee, rate] = snapshot("tx-comm-named").split("/").map(Number);
+      if (Math.abs(1000 * rate / 100 - fee) > 1e-8) {
+        throw new Error(`1000 at ${rate}% is not ${fee}`);
+      }
+    });
+
+    check("naming nothing at all means the partner is paid nothing", () => {
+      // «جاری وایە دەیگۆڕم» includes changing it to none. Zero must mean zero, not "use the
+      // stored rate" — a falsy override quietly falling back to 2% would pay a commission the
+      // owner deliberately declined.
+      buy("tx-comm-zero", 1000, ",'partner_fee',0");
+      if (Number(feeRow("tx-comm-zero")) !== 0) {
+        throw new Error(`the ledger took ${feeRow("tx-comm-zero")} on a zero commission`);
+      }
+      const rows = psql(`select count(*)::text from public.ledger
+                          where tx_id='tx-comm-zero' and type='partner_fee'`).trim();
+      if (rows !== "0") throw new Error(`${rows} commission row(s) were written for nothing`);
+    });
+
+    check("the partner ends up holding the money less the commission", () => {
+      // The whole reason the number matters: «بڕەکە هەر لەو پارەیە دەبردڕێ».
+      const held = Number(psql(
+        `select public.sarraf_locked_cash_balance('cny','p-comm')::text`).trim());
+      // 1000-20, 1000-50 and 1000-0 across the three purchases above.
+      if (Math.abs(held - 2930) > 1e-8) throw new Error(`the partner holds ${held}, expected 2930`);
+    });
+
+    mustFail("a commission below zero is refused",
+      `select public.sarraf_commit_transactions(
+        jsonb_build_array(jsonb_build_object('id','tx-comm-neg','type','buy','cp_id','cust-1',
+          'cur_id','cny','amount',1000,'rate',0.14,'against_id','usd','total',140,
+          'status','completed','partner_id','p-comm','partner_fee',-5)),
+        '[]'::jsonb, null, 'cmd-tx-comm-neg', 'کڕین', 'commission')`);
+
+    mustFail("a commission larger than the money it comes out of is refused",
+      `select public.sarraf_commit_transactions(
+        jsonb_build_array(jsonb_build_object('id','tx-comm-over','type','buy','cp_id','cust-1',
+          'cur_id','cny','amount',1000,'rate',0.14,'against_id','usd','total',140,
+          'status','completed','partner_id','p-comm','partner_fee',1001)),
+        '[]'::jsonb, null, 'cmd-tx-comm-over', 'کڕین', 'commission')`);
+
+    mustFail("a commission that is not a number is refused",
+      `select public.sarraf_commit_transactions(
+        jsonb_build_array(jsonb_build_object('id','tx-comm-junk','type','buy','cp_id','cust-1',
+          'cur_id','cny','amount',1000,'rate',0.14,'against_id','usd','total',140,
+          'status','completed','partner_id','p-comm','partner_fee','بیست')),
+        '[]'::jsonb, null, 'cmd-tx-comm-junk', 'کڕین', 'commission')`);
+
+    check("a refused commission writes nothing at all", () => {
+      const left = psql(`select count(*)::text from public.txs
+                          where id in ('tx-comm-neg','tx-comm-over','tx-comm-junk')`).trim();
+      if (left !== "0") throw new Error(`${left} transaction(s) survived a refused commission`);
+    });
+
+    check("the commission of a sale is nothing, asked directly", () => {
+      // The end-to-end check below proves no commission row is written for a sale, but the
+      // commit command guards that separately — so the guard inside the function itself would
+      // be measured by nothing and could rot. This asks the function, where the guard lives.
+      const onSale = psql(`select public.sarraf_partner_commission(
+        jsonb_build_object('type','sell','partner_id','p-comm','amount',500,'partner_fee',40))::text`).trim();
+      if (Number(onSale) !== 0) throw new Error(`a sale was priced at ${onSale} in commission`);
+      const onOwn = psql(`select public.sarraf_partner_commission(
+        jsonb_build_object('type','buy','partner_id','p-comm','amount',500,'direct',true))::text`).trim();
+      if (Number(onOwn) !== 0) throw new Error(`the owner's own trade was priced at ${onOwn}`);
+    });
+
+    check("a sale pays no commission, whatever amount is named on it", () => {
+      // A sale takes money out of the partner's account rather than putting it in, so there is
+      // nothing to pay them for. Without this, `partner_fee` on a sale would be a second way to
+      // move money out of a partner's custody with no purchase behind it.
+      psql(`select public.sarraf_commit_transactions(
+        jsonb_build_array(jsonb_build_object('id','tx-comm-sale','type','sell','cp_id','cust-1',
+          'cur_id','cny','amount',500,'rate',0.15,'against_id','usd','total',75,
+          'status','completed','partner_id','p-comm','partner_fee',40)),
+        '[]'::jsonb, null, 'cmd-tx-comm-sale', 'فرۆشتن', 'commission')`);
+      if (Number(feeRow("tx-comm-sale")) !== 0) {
+        throw new Error(`a sale paid ${feeRow("tx-comm-sale")} in commission`);
+      }
+      // And the partner's standing rate is still what the sale's snapshot records, unchanged.
+      const rate = Number(snapshot("tx-comm-sale").split("/")[1]);
+      if (rate !== 2) throw new Error(`the sale's rate snapshot reads ${rate}`);
+    });
+  };
+  partnerCommissionChecks();
+
+  // ── «کە خەرجییەکەم دا ئاماژە بەوە بکات لە قاسەی گشتی دیدەی یان قاسەی تایبەتی خۆت» ──────────
+  //
+  // Two different pockets — the general safe, which holds the owner's money and the investors'
+  // together, and the owner's own, which holds only theirs. Until now an expense never said
+  // which one it came out of.
+  const expenseSafeChecks = () => {
+    asAdmin();
+    psql(`insert into public.ledger(id,type,cur_id,amount,date,tenant_id)
+          values ('led-xsafe-fund','deposit','usd',9000,now(),'t-sarkhel')`);
+
+    const spend = (id, safe, amount = 100) => psql(`select public.sarraf_post_ledger_command(
+      jsonb_build_array(jsonb_build_object('id','${id}','type','expense','cur_id','usd',
+        'amount',${-amount}${safe === null ? "" : `,'paid_from','${safe}'`},'note','کرێی شوێن')),
+      'expense:${id}', 'خەرجی', '${id}')`);
+    const safeOf = (id) => psql(
+      `select coalesce(paid_from,'—') from public.ledger where id='${id}'`).trim();
+
+    check("an expense records which safe it came out of", () => {
+      spend("led-xsafe-general", "general");
+      spend("led-xsafe-own", "own");
+      if (safeOf("led-xsafe-general") !== "general") {
+        throw new Error(`the general one reads ${safeOf("led-xsafe-general")}`);
+      }
+      if (safeOf("led-xsafe-own") !== "own") {
+        throw new Error(`the private one reads ${safeOf("led-xsafe-own")}`);
+      }
+    });
+
+    check("an expense that names no safe is the owner's own, as it always was", () => {
+      // Every expense recorded before this column existed came off the owner's equity and
+      // nobody else's. A silent change of meaning for those rows would move money between the
+      // owner and their investors without anybody asking for it.
+      spend("led-xsafe-silent", null);
+      if (safeOf("led-xsafe-silent") !== "own") {
+        throw new Error(`an unnamed safe reads ${safeOf("led-xsafe-silent")}`);
+      }
+    });
+
+    mustFail("a safe nobody has heard of is refused",
+      `select public.sarraf_post_ledger_command(
+        jsonb_build_array(jsonb_build_object('id','led-xsafe-junk','type','expense','cur_id','usd',
+          'amount',-10,'paid_from','somewhere-else','note','کرێی شوێن')),
+        'expense:led-xsafe-junk', 'خەرجی', 'junk safe')`);
+
+    check("and a refused safe leaves no expense behind", () => {
+      const left = psql(`select count(*)::text from public.ledger where id='led-xsafe-junk'`).trim();
+      if (left !== "0") throw new Error(`${left} row(s) survived`);
+    });
+
+    check("a capital movement carries no safe, whatever it is sent", () => {
+      // ledger.owner already answers whose capital a deposit is. A deposit also naming a safe
+      // would be a second, contradictory answer to the same question.
+      psql(`select public.sarraf_post_ledger_command(
+        jsonb_build_array(jsonb_build_object('id','led-xsafe-cap','type','deposit','owner','self',
+          'cur_id','usd','amount',50,'paid_from','general','note','سەرمایە')),
+        'expense:led-xsafe-cap', 'داخڵکردن', 'capital')`);
+      if (safeOf("led-xsafe-cap") !== "—") {
+        throw new Error(`a deposit was filed under ${safeOf("led-xsafe-cap")}`);
+      }
+    });
+
+    check("the reading screens are told the split, and it still adds up to the total", () => {
+      const snap = JSON.parse(psql("select public.sarraf_read_model_snapshot(3650)::text"));
+      const split = snap.expenses_by_safe || [];
+      const general = split.filter((r) => r.paid_from === "general" && r.cur_id === "usd")
+        .reduce((sum, r) => sum + Number(r.amount), 0);
+      const own = split.filter((r) => r.paid_from === "own" && r.cur_id === "usd")
+        .reduce((sum, r) => sum + Number(r.amount), 0);
+      if (general !== 100) throw new Error(`the general safe paid ${general}, expected 100`);
+      if (own !== 200) throw new Error(`the owner's own safe paid ${own}, expected 200`);
+      // The undivided total every existing screen reads must be unchanged by the split.
+      const total = Number(snap.expenses?.usd || 0);
+      if (Math.abs(total - (general + own)) > 1e-8) {
+        throw new Error(`the total reads ${total} but the split adds to ${general + own}`);
+      }
+    });
+  };
+  expenseSafeChecks();
+
+  // ── «قاسەی تایبەتی خۆم» — یەک ژمارە، دوو جێگە ────────────────────────────────────────────
+  //
+  // The owner's own money has only ever been a subtraction done in the browser. A rule the
+  // server enforces, and a figure the screens show, cannot be two different numbers — so the
+  // server computes it too, and this is the check that the two never drift apart.
+  //
+  // It is not a fixture. It reads whatever the database actually holds after every check above
+  // — hundreds of ledger rows, sales, expenses of both safes, partner fees — and runs it
+  // through the browser's own module, imported here rather than reimplemented. If either side
+  // is changed without the other, this fails.
+  const ownMoneyChecks = () => {
+    asAdmin();
+    const rows = (sql) => JSON.parse(psql(`select coalesce(jsonb_agg(to_jsonb(s)),'[]'::jsonb)::text
+                                             from (${sql}) s`));
+
+    check("the server and the browser agree on the owner's own money, to the last unit", () => {
+      // A rich enough state to tell the implementations apart: an investor with a rate, capital
+      // that arrives partway through, sales before and after it, and expenses of both safes.
+      psql(`insert into public.app_users(id,name,role,rate,tenant_id)
+            values ('inv-own','Own Money Investor','investor',40,'t-sarkhel')
+            on conflict (id) do update set rate = excluded.rate`);
+      // In a currency of its own, so the arithmetic below can be worked out by hand. The
+      // agreement itself is then checked here AND in dollars, where hundreds of rows from
+      // every check above are already sitting.
+      psql(`insert into public.currencies(id,code,name,dec) values ('chf','CHF','Franc',2)
+            on conflict do nothing`);
+      psql(`insert into public.ledger(id,type,owner,investor_id,cur_id,amount,date,tenant_id) values
+              ('led-own-self','deposit','self',null,'chf',20000,'2026-01-05','t-sarkhel'),
+              ('led-own-inv','deposit','investor','inv-own','chf',30000,'2026-06-01','t-sarkhel'),
+              ('led-own-self-usd','deposit','self',null,'usd',20000,'2026-01-05','t-sarkhel')`);
+      psql(`insert into public.txs(id,code,type,cp_id,cur_id,amount,rate,against_id,total,
+              status,profit,profit_cur_id,date,business_flow,tenant_id) values
+              ('tx-own-early',9001,'sell','cust-1','cny',1000,0.15,'chf',150,'completed',
+                40,'chf','2026-03-01','standard','t-sarkhel'),
+              ('tx-own-late',9002,'sell','cust-1','cny',1000,0.15,'chf',150,'completed',
+                90,'chf','2026-07-01','standard','t-sarkhel')`);
+      psql(`insert into public.ledger(id,type,cur_id,amount,date,tenant_id,paid_from) values
+              ('led-own-shared','expense','chf',-300,'2026-08-01','t-sarkhel','general'),
+              ('led-own-mine','expense','chf',-120,'2026-08-01','t-sarkhel','own')`);
+
+      // What the browser holds, shaped exactly as loadAll() shapes it.
+      const ledger = rows(`select id, type, owner, investor_id, cur_id, amount, date, paid_from
+                             from public.ledger`).map((r) => ({
+        id: r.id, type: r.type, owner: r.owner, investorId: r.investor_id,
+        curId: r.cur_id, amount: Number(r.amount), date: r.date, paidFrom: r.paid_from,
+      }));
+      const txs = rows(`select id, type, direct, deleted, profit, profit_cur_id, date
+                          from public.txs`).map((r) => ({
+        id: r.id, type: r.type, direct: r.direct, deleted: r.deleted,
+        profit: r.profit === null ? null : Number(r.profit),
+        profitCurId: r.profit_cur_id, date: r.date,
+      }));
+      const investors = rows(`select id, rate, scope_curs from public.app_users
+                               where role='investor' and not deleted`)
+        .map((r) => ({ id: r.id, rate: Number(r.rate) || 0, scope: r.scope_curs || [] }));
+
+      // src/App.jsx: selfCap + (sharedProfit − investors) + ownProfit − expenses − fees.
+      const capitalEvents = capitalEventsFrom(ledger);
+      const poolEvents = [...profitEventsFrom(txs), ...sharedCostEventsFrom(ledger)];
+      const sum = (fn) => ledger.reduce((total, e) => total + (fn(e) || 0), 0);
+      for (const curId of ["chf", "usd"]) {
+      const selfCap = sum((e) => e.curId === curId && e.owner === "self"
+        && (e.type === "deposit" || e.type === "withdraw") ? e.amount : 0);
+      const expenses = sum((e) => e.curId === curId && e.type === "expense" ? Math.abs(e.amount) : 0);
+      const fees = sum((e) => e.curId === curId && e.type === "partner_fee" ? Math.abs(e.amount) : 0);
+      const profitOf = (direct) => txs.reduce((total, t) => total
+        + (!t.deleted && !!t.direct === direct && t.profit != null && t.profitCurId === curId
+            ? t.profit : 0), 0);
+      const invP = investorsTotalByCurrency({
+        profitEvents: poolEvents, capitalEvents, investors, currencies: [{ id: curId }],
+      })[curId] || 0;
+      const browser = selfCap + (profitOf(false) - invP) + profitOf(true) - expenses - fees;
+
+      const server = Number(psql(`select public.sarraf_owner_own_money('${curId}')::text`).trim());
+      if (Math.abs(server - browser) > 1e-8) {
+        throw new Error(`the server says ${server} and the browser says ${browser}`);
+      }
+      // A figure that is zero on both sides would agree without proving anything.
+      if (Math.abs(server) < 1) throw new Error(`both sides say ${server}, which proves nothing`);
+      }
+    });
+
+    check("an investor's share of a shared cost is what the server takes off too", () => {
+      // The half most easily got wrong: not a percentage of a total, but a sum over events,
+      // each weighted by the capital standing on its own day.
+      const share = Number(psql("select public.sarraf_investors_share('chf')::text").trim());
+      if (!Number.isFinite(share)) throw new Error(`the share reads ${share}`);
+      // The 40-rate investor arrived in June with 30,000 against the owner's 20,000, so they
+      // take nothing from the March sale and 40% of three-fifths of everything after it.
+      const late = 90 * (30000 / 50000) * 0.4;
+      const cost = -300 * (30000 / 50000) * 0.4;
+      if (Math.abs(share - (late + cost)) > 1e-6) {
+        throw new Error(`the share reads ${share}, expected ${late + cost}`);
+      }
+    });
+
+    check("the snapshot hands the screens the same number the function computes", () => {
+      const snap = JSON.parse(psql("select public.sarraf_read_model_snapshot(3650)::text"));
+      const fromSnapshot = Number(snap.own_money_by_currency?.chf);
+      const fromFunction = Number(psql("select public.sarraf_owner_own_money('chf')::text").trim());
+      if (Math.abs(fromSnapshot - fromFunction) > 1e-8) {
+        throw new Error(`the snapshot says ${fromSnapshot} and the function says ${fromFunction}`);
+      }
+      // Every currency, so a currency the owner has nothing in is a zero rather than a silence.
+      const named = Object.keys(snap.own_money_by_currency || {}).sort().join(",");
+      const all = psql("select string_agg(id,',' order by id) from public.currencies").trim();
+      if (named !== all) throw new Error(`the snapshot names ${named}, the currencies are ${all}`);
+    });
+  };
+  ownMoneyChecks();
 
   check("a second reset cannot empty a system that has since gone live", () => {
     const out = JSON.parse(psql("select public.sarraf_reset_installation()::text"));

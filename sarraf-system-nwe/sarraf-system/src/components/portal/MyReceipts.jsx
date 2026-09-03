@@ -1,5 +1,5 @@
 import React from "react";
-import { receiptOutcome, mayBeReplaced } from "../../services/receiptIntake";
+import { receiptOutcome, mayBeReplaced, mayBeDismissed } from "../../services/receiptIntake";
 import { MAX_BUNDLE_RECEIPTS } from "../../services/receiptBundle.js";
 
 /**
@@ -31,7 +31,7 @@ const when = (iso) => {
   return Number.isNaN(d.getTime()) ? "—" : d.toLocaleString("en-GB");
 };
 
-export function MyReceipts({ receipts, loading, error, onReload, onReplace, onBundle, ui }) {
+export function MyReceipts({ receipts, loading, error, onReload, onReplace, onDismiss, onBundle, ui }) {
   const { Card, Pill, Empty, StatePanel, tr } = ui;
   const [busy, setBusy] = React.useState(null);
   const [failed, setFailed] = React.useState("");
@@ -77,6 +77,25 @@ export function MyReceipts({ receipts, loading, error, onReload, onReplace, onBu
   };
 
   const pick = (id) => inputs.current[id]?.click();
+
+  // «هەر لە تەنیشت خۆیا دیلێتکردنی ئەو فیشە هەبێت.»  It leaves this list; the row, the reason and
+  // the history stay in the database, which is what lets the owner still see who keeps sending
+  // bad ones.  Confirmed first, because a mis-tap next to «بارکردنەوەی فیشی نوێ» would otherwise
+  // take away the refusal reason the person still needs to read.
+  const [confirming, setConfirming] = React.useState(null);
+  const putAway = async (receipt) => {
+    setFailed("");
+    setBusy(receipt.id);
+    try {
+      await onDismiss(receipt);
+      setConfirming(null);
+      await onReload?.();
+    } catch (e) {
+      setFailed(e?.message || tr("لابردنەکە سەرکەوتوو نەبوو"));
+    } finally {
+      setBusy(null);
+    }
+  };
 
   const chosen = async (receipt, file) => {
     if (!file) return;
@@ -226,6 +245,35 @@ export function MyReceipts({ receipts, loading, error, onReload, onReplace, onBu
                   {busy === r.id ? tr("دەنێردرێت…") : tr("بارکردنەوەی فیشی نوێ")}
                 </button>
               </>
+            )}
+
+            {onDismiss && mayBeDismissed(r) && (
+              confirming === r.id ? (
+                <div className="rounded-[var(--r-sm)] p-2.5 space-y-2"
+                     style={{ background: "var(--surf-2)", border: "1px solid var(--line)" }}>
+                  <div className="text-[11.5px] leading-6 text-[var(--txt-2)]">
+                    {tr("لە لیستەکەت لادەبرێت. ناسڕێتەوە — تۆمارەکەی و هۆکارەکەی دەمێننەوە.")}
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button type="button" disabled={busy === r.id} onClick={() => putAway(r)}
+                      className="rounded-[var(--r-sm)] py-2 text-[12px] font-bold tap disabled:opacity-60"
+                      style={{ background: "var(--neg)", color: "var(--on-accent)" }}>
+                      {busy === r.id ? tr("لادەبرێت…") : tr("بەڵێ، لایبە")}
+                    </button>
+                    <button type="button" disabled={busy === r.id} onClick={() => setConfirming(null)}
+                      className="rounded-[var(--r-sm)] py-2 text-[12px] font-bold tap disabled:opacity-60"
+                      style={{ background: "var(--surf)", color: "var(--txt)", border: "1px solid var(--line)" }}>
+                      {tr("پاشگەزبوونەوە")}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button type="button" onClick={() => setConfirming(r.id)}
+                  className="w-full rounded-[var(--r-sm)] py-2 text-[12px] font-semibold tap"
+                  style={{ background: "transparent", color: "var(--txt-2)", border: "1px solid var(--line)" }}>
+                  {tr("لابردن لە لیستەکەم")}
+                </button>
+              )
             )}
           </Card>
         );
