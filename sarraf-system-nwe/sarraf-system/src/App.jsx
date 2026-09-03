@@ -6059,6 +6059,18 @@ function TxRow({ t, cur, usr, onEdit, onDel, flip, lite, settle, unsettle }) {
                 />
               ) : null}
               {!lite && t.partnerId ? <D k={tr("لای")} v={usr(t.partnerId).name} /> : null}
+              {/* The owner can now name a commission per purchase, so the transaction has to say
+                  what was actually paid. A figure you can set and then never see again is a
+                  figure nobody can check. The percentage beside it is the one that was charged,
+                  not the one on the partner's record. */}
+              {!lite && t.partnerId && t.partnerFeeSnapshot != null ? (
+                <D k={tr("عمولەی هاوبەش")}
+                   v={`${fmt(t.partnerFeeSnapshot, cur(t.curId).dec ?? 0)} ${cur(t.curId).code}`
+                      + (t.partnerRateSnapshot != null
+                          ? ` · ${fmt(t.partnerRateSnapshot, rateDigits(t.partnerRateSnapshot))}${tr("٪")}`
+                          : "")}
+                   tone="neg" />
+              ) : null}
               <D k={tr("بەروار")} v={new Date(t.date).toLocaleDateString("en-GB")} />
               <D k={tr("کات")} v={new Date(t.date).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })} />
             </div>
