@@ -3113,13 +3113,17 @@ export default function App() {
       ],
     },
     {
-      // «تەنها دوو بەش هەیە کە پەیوەندی بە فیشەوە هەبێت.» Those two, and the record of what was
-      // forwarded where — which is not work, but is the answer to «ئەوە بۆ کێ نێردرا؟».
+      // «تەنها دوو بەش هەیە کە پەیوەندی بە فیشەوە هەبێت. یەکەم ئەو فیشانەی کە یووسەرەکان
+      // ناردوویانە و دووەم ئەوانەی کە ئەوان ناردوویانە بەس پشکنینیان دەوێت.»
+      //
+      // Two, and only these two. «فۆرواردکراوەکان» used to sit here as a third: it is not
+      // receipt work, it is the record of which partner was sent which receipts, so it has
+      // moved to «پارە» beside «لای هاوبەشان», which is the same question about the same
+      // people. Nothing was removed — it changed neighbours.
       label: navSectionLabel("فیش", "Receipts", "الإيصالات"),
       items: [
         ["receipts", navSectionLabel("فیشەکان", "Receipts", "الإيصالات"), ScanLine],
         ["receipt-review", navSectionLabel("پشکنین", "Review", "المراجعة"), ClipboardCheck],
-        ["receipt-forwarding", navSectionLabel("فۆرواردکراوەکان", "Forwarded", "المُحوَّلة"), Send],
       ],
     },
     {
@@ -3131,6 +3135,9 @@ export default function App() {
         ["debt-center", navSectionLabel("قەرز و قاسە", "Debt & cashbox", "الديون والخزنة"), Scale],
         ["office-payments", navSectionLabel("نووسینگە", "Offices", "المكاتب"), Building2],
         ["partner-holdings", navSectionLabel("لای هاوبەشان", "With partners", "لدى الشركاء"), Boxes],
+        // «بۆ بینینی ئەوەی فۆرۆرد کراوە» — which partner was sent which receipts. The same
+        // people as the line above it, which is why it reads better here than under «فیش».
+        ["receipt-forwarding", navSectionLabel("فۆرواردکراوەکان", "Forwarded", "المُحوَّلة"), Send],
         ["close", navSectionLabel("بەستنی ڕۆژ", "Close the day", "إقفال اليوم"), ClipboardCheck],
       ],
     },
@@ -3186,7 +3193,11 @@ export default function App() {
   // written and is why the bar read داشبۆرد · کاری ئەمڕۆ · ئینباکس · پەسەندکردن — four entries
   // that happened to be adjacent in a list, not the four a person reaches for. A named list
   // also cannot drift when a group is reordered.
-  const PHONE_BAR_IDS = ["dash", "admin-center", "people", "txs"];
+  // The four a person reaches for on a phone, which is not the four that happen to be first in
+  // a list. The owner's day is: see what is waiting, record a trade, deal with the receipts —
+  // «ئەمە زۆرترین کاری ڕۆژە». «بەکارهێنەران» and «مامەڵەکان» are opened when something needs
+  // looking up, which is what the sheet is for, and both keep their entry there.
+  const PHONE_BAR_IDS = ["dash", "admin-center", "newtx", "receipts"];
   const BAR_NAV = PHONE_BAR_IDS
     .map((id) => NAV_GROUPS.flatMap((g) => g.items).find(([itemId]) => itemId === id))
     .filter(Boolean);
