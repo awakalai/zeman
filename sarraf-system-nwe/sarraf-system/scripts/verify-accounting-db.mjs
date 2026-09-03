@@ -10,6 +10,9 @@
 // The database itself is built by scripts/lib/zeman-db.mjs, which the business-flow gate uses
 // too, so both run against the same schema and the same migration list.
 import { PG_HINT, postgresAvailable, startDatabase } from "./lib/zeman-db.mjs";
+import {
+  capitalEventsFrom, investorsTotalByCurrency, profitEventsFrom, sharedCostEventsFrom,
+} from "../src/services/investorShare.js";
 
 if (!postgresAvailable()) {
   if (process.env.CI === "true" || process.env.ZEMAN_DB_STRICT === "1") {
@@ -4053,6 +4056,117 @@ try {
     });
   };
   expenseSafeChecks();
+
+  // ── «قاسەی تایبەتی خۆم» — یەک ژمارە، دوو جێگە ────────────────────────────────────────────
+  //
+  // The owner's own money has only ever been a subtraction done in the browser. A rule the
+  // server enforces, and a figure the screens show, cannot be two different numbers — so the
+  // server computes it too, and this is the check that the two never drift apart.
+  //
+  // It is not a fixture. It reads whatever the database actually holds after every check above
+  // — hundreds of ledger rows, sales, expenses of both safes, partner fees — and runs it
+  // through the browser's own module, imported here rather than reimplemented. If either side
+  // is changed without the other, this fails.
+  const ownMoneyChecks = () => {
+    asAdmin();
+    const rows = (sql) => JSON.parse(psql(`select coalesce(jsonb_agg(to_jsonb(s)),'[]'::jsonb)::text
+                                             from (${sql}) s`));
+
+    check("the server and the browser agree on the owner's own money, to the last unit", () => {
+      // A rich enough state to tell the implementations apart: an investor with a rate, capital
+      // that arrives partway through, sales before and after it, and expenses of both safes.
+      psql(`insert into public.app_users(id,name,role,rate,tenant_id)
+            values ('inv-own','Own Money Investor','investor',40,'t-sarkhel')
+            on conflict (id) do update set rate = excluded.rate`);
+      // In a currency of its own, so the arithmetic below can be worked out by hand. The
+      // agreement itself is then checked here AND in dollars, where hundreds of rows from
+      // every check above are already sitting.
+      psql(`insert into public.currencies(id,code,name,dec) values ('chf','CHF','Franc',2)
+            on conflict do nothing`);
+      psql(`insert into public.ledger(id,type,owner,investor_id,cur_id,amount,date,tenant_id) values
+              ('led-own-self','deposit','self',null,'chf',20000,'2026-01-05','t-sarkhel'),
+              ('led-own-inv','deposit','investor','inv-own','chf',30000,'2026-06-01','t-sarkhel'),
+              ('led-own-self-usd','deposit','self',null,'usd',20000,'2026-01-05','t-sarkhel')`);
+      psql(`insert into public.txs(id,code,type,cp_id,cur_id,amount,rate,against_id,total,
+              status,profit,profit_cur_id,date,business_flow,tenant_id) values
+              ('tx-own-early',9001,'sell','cust-1','cny',1000,0.15,'chf',150,'completed',
+                40,'chf','2026-03-01','standard','t-sarkhel'),
+              ('tx-own-late',9002,'sell','cust-1','cny',1000,0.15,'chf',150,'completed',
+                90,'chf','2026-07-01','standard','t-sarkhel')`);
+      psql(`insert into public.ledger(id,type,cur_id,amount,date,tenant_id,paid_from) values
+              ('led-own-shared','expense','chf',-300,'2026-08-01','t-sarkhel','general'),
+              ('led-own-mine','expense','chf',-120,'2026-08-01','t-sarkhel','own')`);
+
+      // What the browser holds, shaped exactly as loadAll() shapes it.
+      const ledger = rows(`select id, type, owner, investor_id, cur_id, amount, date, paid_from
+                             from public.ledger`).map((r) => ({
+        id: r.id, type: r.type, owner: r.owner, investorId: r.investor_id,
+        curId: r.cur_id, amount: Number(r.amount), date: r.date, paidFrom: r.paid_from,
+      }));
+      const txs = rows(`select id, type, direct, deleted, profit, profit_cur_id, date
+                          from public.txs`).map((r) => ({
+        id: r.id, type: r.type, direct: r.direct, deleted: r.deleted,
+        profit: r.profit === null ? null : Number(r.profit),
+        profitCurId: r.profit_cur_id, date: r.date,
+      }));
+      const investors = rows(`select id, rate, scope_curs from public.app_users
+                               where role='investor' and not deleted`)
+        .map((r) => ({ id: r.id, rate: Number(r.rate) || 0, scope: r.scope_curs || [] }));
+
+      // src/App.jsx: selfCap + (sharedProfit − investors) + ownProfit − expenses − fees.
+      const capitalEvents = capitalEventsFrom(ledger);
+      const poolEvents = [...profitEventsFrom(txs), ...sharedCostEventsFrom(ledger)];
+      const sum = (fn) => ledger.reduce((total, e) => total + (fn(e) || 0), 0);
+      for (const curId of ["chf", "usd"]) {
+      const selfCap = sum((e) => e.curId === curId && e.owner === "self"
+        && (e.type === "deposit" || e.type === "withdraw") ? e.amount : 0);
+      const expenses = sum((e) => e.curId === curId && e.type === "expense" ? Math.abs(e.amount) : 0);
+      const fees = sum((e) => e.curId === curId && e.type === "partner_fee" ? Math.abs(e.amount) : 0);
+      const profitOf = (direct) => txs.reduce((total, t) => total
+        + (!t.deleted && !!t.direct === direct && t.profit != null && t.profitCurId === curId
+            ? t.profit : 0), 0);
+      const invP = investorsTotalByCurrency({
+        profitEvents: poolEvents, capitalEvents, investors, currencies: [{ id: curId }],
+      })[curId] || 0;
+      const browser = selfCap + (profitOf(false) - invP) + profitOf(true) - expenses - fees;
+
+      const server = Number(psql(`select public.sarraf_owner_own_money('${curId}')::text`).trim());
+      if (Math.abs(server - browser) > 1e-8) {
+        throw new Error(`the server says ${server} and the browser says ${browser}`);
+      }
+      // A figure that is zero on both sides would agree without proving anything.
+      if (Math.abs(server) < 1) throw new Error(`both sides say ${server}, which proves nothing`);
+      }
+    });
+
+    check("an investor's share of a shared cost is what the server takes off too", () => {
+      // The half most easily got wrong: not a percentage of a total, but a sum over events,
+      // each weighted by the capital standing on its own day.
+      const share = Number(psql("select public.sarraf_investors_share('chf')::text").trim());
+      if (!Number.isFinite(share)) throw new Error(`the share reads ${share}`);
+      // The 40-rate investor arrived in June with 30,000 against the owner's 20,000, so they
+      // take nothing from the March sale and 40% of three-fifths of everything after it.
+      const late = 90 * (30000 / 50000) * 0.4;
+      const cost = -300 * (30000 / 50000) * 0.4;
+      if (Math.abs(share - (late + cost)) > 1e-6) {
+        throw new Error(`the share reads ${share}, expected ${late + cost}`);
+      }
+    });
+
+    check("the snapshot hands the screens the same number the function computes", () => {
+      const snap = JSON.parse(psql("select public.sarraf_read_model_snapshot(3650)::text"));
+      const fromSnapshot = Number(snap.own_money_by_currency?.chf);
+      const fromFunction = Number(psql("select public.sarraf_owner_own_money('chf')::text").trim());
+      if (Math.abs(fromSnapshot - fromFunction) > 1e-8) {
+        throw new Error(`the snapshot says ${fromSnapshot} and the function says ${fromFunction}`);
+      }
+      // Every currency, so a currency the owner has nothing in is a zero rather than a silence.
+      const named = Object.keys(snap.own_money_by_currency || {}).sort().join(",");
+      const all = psql("select string_agg(id,',' order by id) from public.currencies").trim();
+      if (named !== all) throw new Error(`the snapshot names ${named}, the currencies are ${all}`);
+    });
+  };
+  ownMoneyChecks();
 
   check("a second reset cannot empty a system that has since gone live", () => {
     const out = JSON.parse(psql("select public.sarraf_reset_installation()::text"));

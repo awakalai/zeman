@@ -1644,6 +1644,13 @@ export default function App() {
       const phys = Object.fromEntries(Object.entries(rm.physical_by_currency || {}).map(([k,v]) => [k, Number(v) || 0]));
       const partner = {}, invCap = {}, invPaid = {}, expenses = {}, fees = {};
       const selfCap = Object.fromEntries(Object.entries(rm.self_capital || {}).map(([k,v]) => [k, Number(v) || 0]));
+      // «قاسەی تایبەتی خۆم», computed on the server so that the figure a rule is written against
+      // and the figure a screen shows are the same number. verify:accounting runs a scenario
+      // through both this and the browser's own derivation below and refuses to pass unless
+      // they agree to the last unit.
+      const ownMoney = rm.own_money_by_currency
+        ? Object.fromEntries(Object.entries(rm.own_money_by_currency).map(([k,v]) => [k, Number(v) || 0]))
+        : null;
       const acctCash = {}, acctDebt = {}, cust = {};
 
       for (const x of (rm.partner_balances || [])) {
@@ -1727,7 +1734,7 @@ export default function App() {
         cashAccounts[x.cash_account_id][x.cur_id] = Number(x.amount) || 0;
       }
 
-      return { phys, partner, office, cashAccounts, atMe, invCap, invTotal, selfCap, invPaid, expenses, fees, cust, pending: cust, acctCash, acctDebt };
+      return { phys, partner, office, cashAccounts, atMe, invCap, invTotal, selfCap, ownMoney, invPaid, expenses, fees, cust, pending: cust, acctCash, acctDebt };
     }
 
     const phys = {}, partner = {}, invCap = {}, selfCap = {}, invPaid = {}, expenses = {}, fees = {};
@@ -1783,7 +1790,7 @@ export default function App() {
       const sign = t.type === "buy" ? +1 : -1;   // کڕین = قەرزاری ئەوم | فرۆشتن = ئەو قەرزارە
       acctDebt[t.cpId][t.againstId] = (acctDebt[t.cpId][t.againstId] || 0) + sign * t.total;
     }
-    return { phys, partner, atMe, invCap, invTotal, selfCap, invPaid, expenses, fees, cust, pending: cust, acctCash, acctDebt };
+    return { phys, partner, atMe, invCap, invTotal, selfCap, ownMoney: null, invPaid, expenses, fees, cust, pending: cust, acctCash, acctDebt };
   }, [data]);
 
   const cur = (id) => data?.currencies.find((c) => c.id === id) || {};
@@ -1819,17 +1826,25 @@ export default function App() {
     }
     return m;
   };
-  const readModelProfitMap = (direct) => {
-    if (!Array.isArray(data?.readModel?.profit_totals)) return null;
-    const out = {};
-    for (const x of data.readModel.profit_totals) {
-      if (!!x.direct !== !!direct || !x.cur_id) continue;
-      out[x.cur_id] = (out[x.cur_id] || 0) + (Number(x.amount) || 0);
-    }
-    return out;
-  };
-  const ownProfitAll = useMemo(() => data ? (readModelProfitMap(true) || ownProfitIn(null, null)) : {}, [data]);
-  const profitAll = useMemo(() => data ? (readModelProfitMap(false) || profitIn(null, null)) : {}, [data]);
+  // The server sends one row per currency: {cur_id, profit, direct_profit}. This read `x.direct`
+  // and `x.amount`, which are not fields the snapshot has ever had — so `Number(undefined) || 0`
+  // made every shared total zero and the `!!undefined !== !!true` test threw away every direct
+  // one. Both maps came back empty of profit, and because an empty object is truthy the `||`
+  // fallback to the transaction walk never ran.
+  //
+  // The consequence was «قاسەی تایبەتی خۆم»: it adds (sharedProfit − investorsShare) and
+  // ownProfit, so with both at zero it read as capital minus the investors' share minus every
+  // expense — the owner's own money short by every unit of profit they had ever earned, and
+  // negative as soon as the investors' share exceeded the capital. The ownership panel and the
+  // dashboard's «ماڵی خۆم» are the same figure and were wrong with it.
+  //
+  // The reader is gone rather than corrected. Even reading the right fields it would be wrong
+  // here: the snapshot is asked for 30 days, and these two are all-time figures, so it would
+  // have traded a visible bug for a quiet one that drops everything older than a month.
+  // profitIn and ownProfitIn walk the transactions the browser already holds and already
+  // agree with every other profit figure on the screen.
+  const ownProfitAll = useMemo(() => data ? ownProfitIn(null, null) : {}, [data]);
+  const profitAll = useMemo(() => data ? profitIn(null, null) : {}, [data]);
 
   /* بەشی وەبەرهێنەرێک لە خێری دراوێک */
   // Profit is attributed sale by sale, using the capital that stood on the day of that sale.
@@ -1872,6 +1887,12 @@ export default function App() {
   /* قاسەی خۆم = سەرمایەی خۆم + خێری خۆم − خەرجی − عمولەی هاوبەشان */
   const mySafe = useMemo(() => {
     if (!data || !calc) return {};
+    // The server's answer when there is one. It is the same definition, written once more in
+    // SQL because a rule the server enforces cannot read a number the browser computed — and
+    // the two are held to each other by a gate rather than by hope.
+    if (calc.ownMoney) {
+      return Object.fromEntries(data.currencies.map((c) => [c.id, calc.ownMoney[c.id] || 0]));
+    }
     const invP = investorsProfitIn();
     const out = {};
     for (const c of data.currencies) {
@@ -3430,7 +3451,7 @@ export default function App() {
               <TxForm {...shared} onSave={saveTx} batch={pendingBatch} onClearBatch={() => setPendingBatch(null)} busy={busy} />}
             {page === "newtx" && !pendingBatch && newTxKind === "commission" &&
               <DeferredPanel><CommissionTrade client={supabase} lang={lang}
-                currencies={data?.currencies || []}
+                currencies={data?.currencies || []} ownMoney={mySafe}
                 onRecorded={(answer) => flash(`${tr("مامەڵەی عمولە تۆمار کرا")} #${answer.code ?? ""}`)} /></DeferredPanel>}
             {page === "txs" && (editTx
               ? <TxForm {...shared} onSave={saveTx} editing={editTx} onCancel={() => setEditTx(null)} />
@@ -4966,7 +4987,7 @@ function Safes({ data, calc, cur, usr, mySafe, invUnpaid, owners, ratesReady, ad
 }
 
 /* ══════════════════ فۆرمی مامەڵە ══════════════════ */
-function TxForm({ data, cur, calc, usr, avgRate, inventoryPosition, usdValueAt, usdToCurrencyAt, autoRate, onSave, editing, onCancel, lockCp, batch, onClearBatch, busy, flash }) {
+function TxForm({ data, cur, calc, usr, mySafe, avgRate, inventoryPosition, usdValueAt, usdToCurrencyAt, autoRate, onSave, editing, onCancel, lockCp, batch, onClearBatch, busy, flash }) {
   const e = editing;
   const [sending, setSending] = useState(false);
   const bCur = batch ? data.currencies.find((c) => c.code === batch.currency)?.id : null;
@@ -5051,6 +5072,20 @@ function TxForm({ data, cur, calc, usr, avgRate, inventoryPosition, usdValueAt, 
   const dBuyTotal = dBuyRate > 0 ? roundByCurrency(amtR * dBuyRate, f.againstId) : 0;
   const dSellTotal = dSellRate > 0 ? roundByCurrency(amtR * dSellRate, f.againstId) : 0;
   const dProfit = bq > 0 && sq > 0 ? roundByCurrency(dSellTotal - dBuyTotal, f.againstId) : null;
+
+  // «تەنها مامەڵەی ئاسایی پارەکەی لە قاسەی گشتییەوەیە، ئەوانی دیکە هی خۆمە تەنها.»
+  //
+  // The safe always has enough for a direct pair — it buys and sells in one press, so its net
+  // effect on the safe is the profit, never a withdrawal — which is exactly why the sufficiency
+  // check can never catch this and why it has to be said here. An owner with 200 of their own
+  // dollars can put 10,000 of their investors' through a trade whose whole earning they keep.
+  //
+  // It is said, not refused. The figure it is said from was wrong on every screen until this
+  // same change fixed it, so nobody has yet seen a true one to plan against; refusing a trade
+  // on a number the owner has never been shown would be the worse mistake. Whether it should
+  // become a refusal is theirs to decide once they have watched it on real data.
+  const ownMoneyHere = mySafe ? (mySafe[f.againstId] || 0) : null;
+  const directOverOwn = f.direct && ownMoneyHere !== null && dBuyTotal > ownMoneyHere + 1e-9;
 
   const pos = f.type === "sell" && inventoryPosition
     ? inventoryPosition(f.curId, f.againstId, e?.id || null, e?.date || null)
@@ -5463,6 +5498,18 @@ function TxForm({ data, cur, calc, usr, avgRate, inventoryPosition, usdValueAt, 
                   {fmt(dSellTotal, cur(f.againstId).dec || 0)} {cur(f.againstId).code}
                 </span>
               </div>
+              <div className="flex justify-between text-[12px]">
+                <span style={{ color: "var(--txt-3)" }}>{tr("قاسەی تایبەتی خۆم")}</span>
+                <span style={{ ...num, color: directOverOwn ? "var(--warn)" : "var(--txt-3)" }}>
+                  {ownMoneyHere === null ? "—" : `${fmt(ownMoneyHere, cur(f.againstId).dec || 0)} ${cur(f.againstId).code}`}
+                </span>
+              </div>
+              {directOverOwn && (
+                <div className="text-[11.5px] flex items-start gap-1.5" style={{ color: "var(--warn)" }}>
+                  <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                  {tr("ئەم مامەڵەیە لە پارەی خۆت زیاترە — خێرەکەی هەمووی هی تۆیە بەڵام پارەکەی هی هەمووانە")}
+                </div>
+              )}
               <div className="flex justify-between items-baseline pt-2.5" style={{ borderTop: "1px solid var(--line)" }}>
                 <span className="text-[13px] font-semibold" style={{ color: "var(--txt)" }}>
                   {dProfit >= 0 ? tr("خێر") : tr("زەرەر")}

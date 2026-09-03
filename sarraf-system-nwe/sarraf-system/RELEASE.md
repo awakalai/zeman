@@ -310,7 +310,38 @@ inferred from a diff.
   deliberately does not do** is change how an expense is shared out: whether an expense from
   the general safe should reduce the investors' share of profit as well as the owner's is a
   decision about their money and is the owner's to make. The mark is recorded and shown; the
-  arithmetic waits on the answer.
+  arithmetic waits on the answer. **The owner has since answered: yes, in proportion to what
+  each of them has in.** So a general-safe expense is now a negative event in the same pool the
+  sales earn into, shared by the capital standing on the day it was paid — the same rule, and
+  the same module, that shares a sale. An expense from the owner's own safe, and any expense
+  recorded before the column existed, stay the owner's alone.
+- **`202609020011` — «قاسەی تایبەتی خۆم» becomes a number the server knows.** It had only ever
+  been a subtraction done in the browser, which is fine for a figure on a screen and impossible
+  for a rule. `sarraf_owner_own_money` is the same definition in SQL, and `sarraf_investors_share`
+  is the capital-weighted half of it. Two implementations of one number is a real hazard and is
+  answered the only honest way: `verify:accounting` runs the database's own accumulated state
+  through both — the SQL, and the browser's `investorShare.js` imported into the gate — and
+  fails unless they agree to the last unit. The snapshot carries the figure so the screens read
+  the server's answer rather than their own.
+
+  It also **corrects a defect**. `readModelProfitMap` read `x.direct` and `x.amount` from the
+  snapshot's profit rows, which carry `cur_id`, `profit` and `direct_profit` and never had
+  either field. Every shared total came back zero and every direct one was thrown away, and
+  because an empty object is truthy the fallback to the transaction walk never ran. «قاسەی
+  تایبەتی خۆم» was therefore short by every unit of profit the owner had ever earned, and went
+  negative as soon as the investors' share passed the capital — the ownership panel and the
+  dashboard's «ماڵی خۆم» are the same figure and were wrong with it. The reader is deleted
+  rather than repaired: it is a 30-day window and these are all-time figures, so fixing the
+  field names would have traded a visible bug for a quiet one.
+- **A direct trade and a commission trade say when they exceed the owner's own money.** «تەنها
+  مامەڵەی ئاسایی پارەکەی لە قاسەی گشتییەوەیە، ئەوانی دیکە هی خۆمە تەنها.» The sufficiency check
+  can never catch this: a direct pair buys and sells in one command, so its net effect on the
+  safe is the profit and never a withdrawal. Both screens now show «قاسەی تایبەتی خۆم» for the
+  currency being spent and say plainly when the trade goes past it. **It is a warning, not a
+  refusal**, and deliberately: the figure it is said from was wrong on every screen until the
+  defect above was fixed, so nobody has yet seen a true one to plan against, and refusing a
+  trade on a number the owner has never been shown would be the worse mistake. Whether it
+  should become a refusal is theirs to decide once they have watched it on real data.
 
 ## 6. What this document does NOT claim
 

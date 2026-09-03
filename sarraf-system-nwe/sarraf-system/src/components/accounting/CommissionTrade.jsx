@@ -38,6 +38,8 @@ const COPY = {
     needAccounts: "سەرەتا لە قاسەدا حسابێک بکەرەوە — بێ حساب ئەم مامەڵەیە هیچ شوێنێکی نییە بۆ ناوبردن",
     samePlace: "پارەکە دەبێت لە شوێنێکەوە بۆ شوێنێکی تر بجوڵێت",
     loss: "ئەمە زەرەرە، نەک خێر — دڵنیایت؟",
+    ownMoney: "قاسەی تایبەتی خۆم",
+    overOwn: "ئەم مامەڵەیە لە پارەی خۆت زیاترە — خێرەکەی هەمووی هی تۆیە بەڵام پارەکەی هی هەمووانە",
   },
   en: {
     title: "Commission trade",
@@ -51,6 +53,8 @@ const COPY = {
     needAccounts: "Open an account in قاسە first — without one this trade has no place to name",
     samePlace: "The money has to move from one place to another",
     loss: "This is a loss, not an earning — is that right?",
+    ownMoney: "My own safe",
+    overOwn: "This is more than your own money — the earning is all yours but the money is everyone's",
   },
   ar: {
     title: "معاملة عمولة",
@@ -64,6 +68,8 @@ const COPY = {
     needAccounts: "افتح حسابًا في الخزنة أولًا — بدونه لا مكان تسميه هذه المعاملة",
     samePlace: "يجب أن ينتقل المال من مكان إلى آخر",
     loss: "هذه خسارة وليست ربحًا — هل هذا صحيح؟",
+    ownMoney: "خزنتي الخاصة",
+    overOwn: "هذه المعاملة تتجاوز مالك الخاص — الربح كله لك لكن المال للجميع",
   },
 };
 
@@ -71,7 +77,7 @@ const localeKey = (lang) => (lang === "en" ? "en" : lang === "ar" ? "ar" : "ku")
 const money = (n) => Number(n || 0).toLocaleString("en-US",
   { maximumFractionDigits: 4 });
 
-export function CommissionTrade({ client, lang = "ku", currencies = [], onRecorded }) {
+export function CommissionTrade({ client, lang = "ku", currencies = [], ownMoney = null, onRecorded }) {
   const copy = COPY[localeKey(lang)];
   const [state, setState] = useState("loading");
   const [accounts, setAccounts] = useState([]);
@@ -120,6 +126,13 @@ export function CommissionTrade({ client, lang = "ku", currencies = [], onRecord
   }, [sameCurrency, fromAmount, toAmount]);
 
   const ready = Number(fromAmount) > 0 && Number(toAmount) > 0 && !samePlace && !busy;
+
+  // «ئەوانی دیکە هی خۆمە تەنها.» The earning of a commission trade is the owner's alone, so the
+  // money it is made with should be theirs alone too. The server checks the place has the money;
+  // it cannot check whose money it is, because in one safe holding everybody's that is a claim
+  // and not a balance. Said here, not refused — see the note in TxForm for why.
+  const ownHere = ownMoney ? Number(ownMoney[fromCur] || 0) : null;
+  const overOwn = ownHere !== null && Number(fromAmount) > ownHere + 1e-9;
 
   const placeName = (id) => accounts.find((a) => a.id === id)?.name || copy.cash;
 
@@ -191,6 +204,11 @@ export function CommissionTrade({ client, lang = "ku", currencies = [], onRecord
 
       {samePlace && <div className="debt-error" role="alert">
         <AlertTriangle aria-hidden="true" /> {copy.samePlace}
+      </div>}
+
+      {overOwn && <div className="debt-error" role="status">
+        <AlertTriangle aria-hidden="true" /> {copy.overOwn}
+        {" — "}{copy.ownMoney}: {money(ownHere)}
       </div>}
 
       {/* Said plainly when it can be said exactly, and not invented when it cannot. */}
