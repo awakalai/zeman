@@ -333,6 +333,17 @@ inferred from a diff.
   dashboard's «ماڵی خۆم» are the same figure and were wrong with it. The reader is deleted
   rather than repaired: it is a 30-day window and these are all-time figures, so fixing the
   field names would have traded a visible bug for a quiet one.
+- **The owner's own money in a currency can be negative, and that is right.** The live report
+  shows CNY at −493.29: the partners' commissions are paid in yuan while the capital and the
+  profit are counted in dollars, so per currency the yuan side carries a cost and no income.
+  It looks like a defect and is not, and the answer is measured rather than argued.
+  `verify:accounting` builds the exact shape — 14,000 dollars in, 100,000 yuan bought, 500 yuan
+  of commission taken out — and asks whether what everybody owns still equals what the business
+  holds. It does, to the unit. Take that cost out of the owner's yuan, which is the change the
+  question was asking for, and the books credit the owner with 14,000 while the business holds
+  13,930: seventy dollars that do not exist. So the arithmetic stands unchanged and only the
+  presentation was fixed — the safes screen now says in one sentence what a minus sign there
+  means, because a right number with no explanation beside it gets reported as a bug.
 - **A direct trade and a commission trade say when they exceed the owner's own money.** «تەنها
   مامەڵەی ئاسایی پارەکەی لە قاسەی گشتییەوەیە، ئەوانی دیکە هی خۆمە تەنها.» The sufficiency check
   can never catch this: a direct pair buys and sells in one command, so its net effect on the

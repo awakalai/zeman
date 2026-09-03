@@ -665,5 +665,70 @@ select 'receipt_batches → its customer',
 
 \echo ''
 \echo ''
+\echo '════════ ١٤. قاسەی تایبەتی خۆم — ئەو ژمارەیەی هەڵە بوو ════════'
+\echo '   ئەم ژمارەیە لە وێبگەڕەکەدا هەڵە دەژمێردرا: خێری تۆ هەرگیز تێیدا نەبوو.'
+\echo '   ئێستا سێرڤەرەکە دەیژمێرێت، و ئەمە یەکەم جارە بە ڕاستی ببینرێت.'
+\echo ''
+
+-- The figure «قاسەی تایبەتی خۆم» is the owner's own claim on one shared safe:
+--
+--     سەرمایەی خۆم + (خێری هاوبەش − بەشی وەبەرهێنەران) + خێری ڕاستەوخۆ − خەرجی − عمولە
+--
+-- Until 202609020011 the browser computed it from two fields the server has never sent, so
+-- every unit of profit fell out of it. This prints each part beside the total so the owner can
+-- see where the number comes from rather than being handed one figure to trust.
+select c.id                                          as "دراو",
+       round(coalesce((select sum(l.amount) from public.ledger l
+                        where l.cur_id = c.id and l.owner = 'self'
+                          and l.type in ('deposit','withdraw')), 0), 2)      as "سەرمایەی خۆم",
+       round(coalesce((select sum(t.profit) from public.txs t
+                        where not t.deleted and not t.direct and t.type = 'sell'
+                          and t.profit is not null and t.profit_cur_id = c.id), 0), 2)
+                                                                             as "خێری هاوبەش",
+       round(public.sarraf_investors_share(c.id), 2)                         as "بەشی وەبەرهێنەران",
+       round(coalesce((select sum(t.profit) from public.txs t
+                        where not t.deleted and t.direct and t.profit is not null
+                          and t.profit_cur_id = c.id), 0), 2)                as "خێری ڕاستەوخۆ",
+       round(coalesce((select sum(abs(l.amount)) from public.ledger l
+                        where l.type = 'expense' and l.cur_id = c.id), 0), 2) as "خەرجی",
+       round(coalesce((select sum(abs(l.amount)) from public.ledger l
+                        where l.type = 'partner_fee' and l.cur_id = c.id), 0), 2) as "عمولە",
+       round(public.sarraf_owner_own_money(c.id), 2)                         as "قاسەی تایبەتی خۆم"
+  from public.currencies c
+ order by c.id;
+
+\echo ''
+\echo '   خەرجی بەپێی قاسە — لە کام قاسەوە درا (بەتاڵ واتە پێش ئەم پرسیارە تۆمار کراوە)'
+\echo ''
+
+select coalesce(paid_from, '— پێش ئەم ستوونە') as "لە کام قاسەوە",
+       cur_id                                  as "دراو",
+       count(*)                                as "ژمارە",
+       round(sum(abs(amount)), 2)              as "کۆ"
+  from public.ledger
+ where type = 'expense'
+ group by coalesce(paid_from, '— پێش ئەم ستوونە'), cur_id
+ order by 1, 2;
+
+\echo ''
+\echo '   عمولەی هاوبەش — ئەوەی وەرگیراوە بەرامبەر ڕێژەی ئێستای هاوبەشەکە'
+\echo '   «جیاواز لە ڕێژەی ئێستا» دوو مانای هەیە: یان بڕەکەت بۆ ئەو مامەڵەیە بە دەست دانا،'
+\echo '   یان ڕێژە تۆمارکراوەکەت دوای ئەو مامەڵەیە گۆڕی. ئەم ڕاپۆرتە ناتوانێت جیایان بکاتەوە.'
+\echo ''
+
+select u.name                                            as "هاوبەش",
+       u.rate                                            as "ڕێژەی تۆمارکراو",
+       count(*)                                          as "کڕین",
+       round(sum(t.partner_fee_snapshot), 2)             as "کۆی عمولە",
+       count(*) filter (where t.partner_rate_snapshot is distinct from u.rate)
+                                                         as "جیاواز لە ڕێژەی ئێستا"
+  from public.txs t
+  join public.app_users u on u.id = t.partner_id
+ where not t.deleted and t.partner_fee_snapshot is not null
+ group by u.name, u.rate
+ order by 4 desc nulls last;
+
+\echo ''
+\echo ''
 \echo '════════ تەواو ════════'
 \echo ''

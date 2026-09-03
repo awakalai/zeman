@@ -4168,6 +4168,85 @@ try {
   };
   ownMoneyChecks();
 
+  // ── «بەشی یەن سالبە» — هەڵەیە یان ڕاستە؟ ─────────────────────────────────────────────────
+  //
+  // The live report shows the owner's own money in yuan as a negative number, because the
+  // commissions their partners take are paid in yuan while the capital and the profit are
+  // counted in dollars. It looks alarming and the owner asked whether it should be changed.
+  //
+  // The way to answer that is not an opinion. If the negative is right, then what everybody
+  // owns adds up to what the business actually holds; if it is a double count, the two will
+  // not meet. This builds the exact shape — dollars in, yuan bought, a commission taken out of
+  // the yuan — and asks that question directly.
+  const commissionBalanceCheck = () => {
+    asAdmin();
+    check("a commission paid in yuan leaves what is owned equal to what is held", () => {
+      psql(`insert into public.tenants(id,name) values ('t-bal','Balance') on conflict do nothing`);
+      psql(`insert into public.app_users(id,name,role,rate,tenant_id) values
+              ('bal-par','Balance Partner','partner',0.5,'t-bal'),
+              ('bal-cus','Balance Customer','customer',0,'t-bal')
+            on conflict (id) do nothing`);
+
+      // Everything below is measured inside this one business, so the hundreds of rows the
+      // checks above left behind cannot reach it.
+      const money = (sql) => Number(psql(sql).trim()) || 0;
+      const own = (cur) => money(`select public.sarraf_owner_own_money('${cur}')::text`);
+      const capital = 14000;
+
+      // Measured as a CHANGE, not as a total. This gate connects as a role that sees every
+      // business, and the checks above have already left yuan commissions in other ones; the
+      // first version of this compared totals and read the owner as 70 short and 79.80 poorer,
+      // which was the other tenants' money showing up, not a defect.
+      const ownUsdBefore = own("usd");
+      const ownCnyBefore = own("cny");
+
+      psql(`insert into public.ledger(id,type,owner,cur_id,amount,date,tenant_id)
+            values ('led-bal-cap','deposit','self','usd',${capital},now(),'t-bal')`);
+
+      // 100,000 yuan bought for 14,000 dollars, held by a partner who takes 0.5% of the yuan.
+      psql(`insert into public.txs(id,code,type,cp_id,cur_id,amount,rate,against_id,total,
+              partner_id,status,date,business_flow,tenant_id,partner_rate_snapshot,
+              partner_fee_snapshot)
+            values ('tx-bal',99001,'buy','bal-cus','cny',100000,0.14,'usd',14000,
+                    'bal-par','completed',now(),'partner_custody','t-bal',0.5,500)`);
+      psql(`insert into public.ledger(id,type,cur_id,amount,partner_id,tx_id,date,tenant_id) values
+              ('led-bal-cny','buy','cny',100000,'bal-par','tx-bal',now(),'t-bal'),
+              ('led-bal-fee','partner_fee','cny',-500,'bal-par','tx-bal',now(),'t-bal'),
+              ('led-bal-usd','buy','usd',-14000,null,'tx-bal',now(),'t-bal')`);
+
+      // WHAT IS HELD: the dollars still in the safe, and the yuan the partner is holding — the
+      // yuan valued back at the rate they were bought at, which is the only rate this scenario
+      // has.
+      const usdHeld = money(`select coalesce(sum(amount),0)::text from public.ledger
+                              where tenant_id='t-bal' and cur_id='usd'`);
+      const cnyHeld = money(`select coalesce(sum(amount),0)::text from public.ledger
+                              where tenant_id='t-bal' and cur_id='cny'`);
+      if (Math.abs(cnyHeld - 99500) > 1e-8) throw new Error(`the partner holds ${cnyHeld} yuan`);
+      if (Math.abs(usdHeld - 0) > 1e-8) throw new Error(`the safe holds ${usdHeld} dollars`);
+      const held = usdHeld + cnyHeld * 0.14;
+
+      // WHAT IS OWNED: how much the owner's own money moved, by the definition every screen
+      // uses. Nobody else has put anything into this business, so this is the whole of it.
+      const gainedUsd = own("usd") - ownUsdBefore;
+      const gainedCny = own("cny") - ownCnyBefore;
+
+      // 14,000 dollars went in and 99,500 yuan came back, which at 0.14 is 13,930. The 70
+      // dollars of difference IS the 500 yuan of commission, and what the owner owns has to
+      // fall by exactly that much or the books are not describing this business.
+      const owned = gainedUsd + gainedCny * 0.14;
+      if (Math.abs(owned - held) > 1e-6) {
+        throw new Error(`the business holds ${held} but the owner is credited with ${owned}`);
+      }
+      if (Math.abs(gainedCny + 500) > 1e-8) {
+        throw new Error(`the owner's yuan moved by ${gainedCny}, expected -500`);
+      }
+      if (Math.abs(gainedUsd - capital) > 1e-8) {
+        throw new Error(`the owner's dollars moved by ${gainedUsd}, expected ${capital}`);
+      }
+    });
+  };
+  commissionBalanceCheck();
+
   check("a second reset cannot empty a system that has since gone live", () => {
     const out = JSON.parse(psql("select public.sarraf_reset_installation()::text"));
     if (out.done !== false) throw new Error(JSON.stringify(out));
