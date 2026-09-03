@@ -3770,6 +3770,74 @@ try {
   };
   reminderChecks();
 
+  // ── پارەی کڕیار هی کڕیارەکەیە ─────────────────────────────────────────────────────────────
+  //
+  //   «هەر کڕیارێکیش دەبێت قاسەیەکی هەبێت وەک قاسەکەی خۆم... خۆیان دێن پارە دەدەن تا بیخەمە
+  //    حسابەکەیان.» And, asked whose it then is: «پارەکە هی خۆیەتی نەک هی من.»
+  //
+  // The books and the working ledger answer two different questions here, and both are right:
+  // the journal says the drawer holds a thousand more dollars and the business owes a thousand,
+  // while «قاسەی گشتی» says the owner's own money did not move. Confusing the two is how a
+  // business spends a customer's deposit believing it is theirs, so it is pinned.
+  const customerMoneyChecks = () => {
+    const ownSafe = (cur) => Number(psql(
+      `select coalesce(sum(amount),0)::text from public.ledger
+        where cur_id='${cur}' and partner_id is null and office_id is null
+          and cash_account_id is null`).trim());
+    const cashInBooks = () => Number(psql(
+      `select coalesce(round(sum(case when l.side='debit' then l.amount else -l.amount end),2),0)::text
+         from public.journal_lines l join public.journal_entries e on e.id=l.entry_id
+        where l.account_id='acc-1000' and l.currency='USD' and e.status='posted'`).trim());
+
+    check("a customer's money never counts as the owner's own", () => {
+      const mineBefore = ownSafe("usd"), booksBefore = cashInBooks();
+      psql(`select public.sarraf_customer_vault_move('cust-1','USD',1000,'in',1,
+              'کڕیارەکە پارەی هێنا','vault:money-the-owner-does-not-own')`);
+      // The half the owner asked for: their thousand is not his.
+      if (ownSafe("usd") !== mineBefore) {
+        throw new Error(`the owner's safe moved by ${ownSafe("usd") - mineBefore} on a customer's deposit`);
+      }
+      // And the half that keeps the books honest: the drawer really does hold it.
+      if (cashInBooks() - booksBefore !== 1000) {
+        throw new Error(`the books recorded ${cashInBooks() - booksBefore} of cash, expected 1000`);
+      }
+    });
+
+    check("and it is recorded as owed to them, not as earnings", () => {
+      // acc-2000 is what the business owes its customers. A deposit that landed anywhere else —
+      // income above all — would read as a thousand dollars of profit that was never earned.
+      const owed = Number(psql(
+        `select coalesce(round(sum(case when l.side='credit' then l.amount else -l.amount end),2),0)::text
+           from public.journal_lines l join public.journal_entries e on e.id=l.entry_id
+          where l.account_id='acc-2000' and e.source_type='customer_vault_deposit'`).trim());
+      if (owed !== 1000) throw new Error(`${owed} is recorded as owed, expected 1000`);
+      const income = Number(psql(
+        `select coalesce(count(*),0)::text from public.journal_lines l
+           join public.journal_entries e on e.id=l.entry_id
+          where e.source_type='customer_vault_deposit' and l.account_id in ('acc-4000','acc-4100')`).trim());
+      if (income !== 0) throw new Error(`a customer's deposit reached an income account ${income} time(s)`);
+    });
+
+    check("taking it back out again leaves the owner's safe where it was", () => {
+      const mineBefore = ownSafe("usd");
+      psql(`select public.sarraf_customer_vault_move('cust-1','USD',400,'out',1,
+              'کڕیارەکە بەشێکی بردەوە','vault:they-took-some-of-it-back')`);
+      if (ownSafe("usd") !== mineBefore) {
+        throw new Error(`the owner's safe moved by ${ownSafe("usd") - mineBefore} on a withdrawal`);
+      }
+    });
+
+    check("a customer cannot take out more than they put in", () => {
+      let refused = false;
+      try {
+        psql(`select public.sarraf_customer_vault_move('cust-1','USD',999999,'out',1,
+                'زۆرتر لەوەی هەیەتی','vault:more-than-they-ever-had')`);
+      } catch { refused = true; }
+      if (!refused) throw new Error("a customer withdrew money they never deposited");
+    });
+  };
+  customerMoneyChecks();
+
   check("a second reset cannot empty a system that has since gone live", () => {
     const out = JSON.parse(psql("select public.sarraf_reset_installation()::text"));
     if (out.done !== false) throw new Error(JSON.stringify(out));
