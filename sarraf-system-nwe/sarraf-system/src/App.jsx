@@ -1406,6 +1406,7 @@ export default function App() {
           amount: +r.amount, partnerId: r.partner_id, txId: r.tx_id, note: r.note, date: r.date,
           reversalOf: r.reversal_of || null, commandKey: r.command_key || null,
           createdBy: r.created_by || null, approvalId: r.approval_id || null,
+          paidFrom: r.paid_from || null,
           commissionRateSnapshot: r.commission_rate_snapshot == null ? null : +r.commission_rate_snapshot,
           commissionAmountSnapshot: r.commission_amount_snapshot == null ? null : +r.commission_amount_snapshot,
         })),
@@ -1533,7 +1534,7 @@ export default function App() {
     return () => { cancelled = true; };
   }, [session?.access_token, accessEpoch]);
 
-  const LR = (e) => ({ id: e.id, type: e.type, owner: e.owner || null, investor_id: e.investorId || null, cur_id: e.curId, amount: e.amount, partner_id: e.partnerId || null, cash_account_id: e.cashAccountId || null, tx_id: e.txId || null, note: e.note || null, date: e.date });
+  const LR = (e) => ({ id: e.id, type: e.type, owner: e.owner || null, investor_id: e.investorId || null, cur_id: e.curId, amount: e.amount, partner_id: e.partnerId || null, cash_account_id: e.cashAccountId || null, paid_from: e.paidFrom || null, tx_id: e.txId || null, note: e.note || null, date: e.date });
   const TR = (transaction) => {
     const t = normalizeTransactionBusinessFlow(transaction);
     return { id: t.id, code: t.code || null, type: t.type, direct: !!t.direct,
@@ -2342,6 +2343,10 @@ export default function App() {
         id: entryId, type: isPayout ? "investor_payout" : "expense",
         owner: null, investorId: isPayout ? f.investorId : null,
         curId: f.curId, amount: -amt, partnerId: null, cashAccountId: f.place || null, txId: null,
+        // «ئاماژە بەوە بکات لە قاسەی گشتی دیدەی یان قاسەی تایبەتی خۆت.» An investor's payout is
+        // not an expense of either safe — it is their own profit going back to them — so it
+        // names none, which is what the server stores for it anyway.
+        paidFrom: isPayout ? null : (f.paidFrom === "general" ? "general" : "own"),
         note: `${f.category}${f.note ? " — " + f.note : ""}`, date: now(),
       };
       const result = await rpcStrict("sarraf_post_ledger_command", {
@@ -4781,7 +4786,7 @@ function Safes({ data, calc, cur, usr, mySafe, invUnpaid, owners, ratesReady, ad
   // hold it; the server refuses that, and the form should never ask for it in the first place.
   const placeStillValid = placesFor(f.curId).some((a) => a.id === f.place);
   const place = placeStillValid ? f.place : "";
-  const [xf, setXf] = useState({ category: "کرێی شوێن", investorId: "", curId: data.currencies[0]?.id, amount: "", note: "", place: "" });
+  const [xf, setXf] = useState({ category: "کرێی شوێن", investorId: "", curId: data.currencies[0]?.id, amount: "", note: "", place: "", paidFrom: "general" });
   const xPlace = placesFor(xf.curId).some((a) => a.id === xf.place) ? xf.place : "";
   const [nc, setNc] = useState({ code: "", name: "", symbol: "", dec: 2 });
   const investors = data.users.filter((u) => u.role === "investor" && !u.deleted);
@@ -4898,6 +4903,14 @@ function Safes({ data, calc, cur, usr, mySafe, invUnpaid, owners, ratesReady, ad
             <option value="">{tr("کاش")}</option>
             {placesFor(xf.curId).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
           </Sel></div>
+          {/* «لە کوێوە» says cash or which account. This says whose money it was — two different
+              questions, and only one of them had ever been asked. */}
+          {!isPayout && (
+            <div><Lbl>{tr("لە کام قاسەوە")}</Lbl><Sel value={xf.paidFrom} onChange={(e) => setXf({ ...xf, paidFrom: e.target.value })}>
+              <option value="general">{tr("قاسەی گشتی")}</option>
+              <option value="own">{tr("قاسەی تایبەتی خۆم")}</option>
+            </Sel></div>
+          )}
           <div><Lbl>{tr("بڕ")}</Lbl><Inp type="number" value={xf.amount} onChange={(e) => setXf({ ...xf, amount: e.target.value })} placeholder="0" /></div>
           {!isPayout && <div><Lbl>{tr("تێبینی")}</Lbl><Inp value={xf.note} onChange={(e) => setXf({ ...xf, note: e.target.value })} /></div>}
           <div className="flex items-end"><Btn kind="danger" className="w-full" onClick={() => { if (+xf.amount > 0) { addExpense({ ...xf, place: xPlace }); setXf({ ...xf, amount: "", note: "" }); } }}>{tr("تۆمارکردن")}</Btn></div>
@@ -10341,9 +10354,17 @@ function Report({ data, calc, cur, usr, profitIn, investorsProfitIn, invShare, s
   const earningKinds = useMemo(
     () => earningsByKind({ txs, usdValueAt }), [txs, usdValueAt]);
 
-  const exp = {}, fee = {}, payout = {}, flow = {};
+  // «کە خەرجییەکەم دا ئاماژە بەوە بکات لە قاسەی گشتی دیدەی یان قاسەی تایبەتی خۆت» — the total
+  // is still one figure, and beside it the two safes it came out of. An expense recorded before
+  // the question was asked reads as the owner's own, which is what every screen has always
+  // done with it.
+  const exp = {}, expGeneral = {}, expOwn = {}, fee = {}, payout = {}, flow = {};
   entries.forEach((e) => {
-    if (e.type === "expense") exp[e.curId] = (exp[e.curId] || 0) + Math.abs(e.amount);
+    if (e.type === "expense") {
+      exp[e.curId] = (exp[e.curId] || 0) + Math.abs(e.amount);
+      const safe = e.paidFrom === "general" ? expGeneral : expOwn;
+      safe[e.curId] = (safe[e.curId] || 0) + Math.abs(e.amount);
+    }
     if (e.type === "partner_fee") fee[e.curId] = (fee[e.curId] || 0) + Math.abs(e.amount);
     if (e.type === "investor_payout") payout[e.curId] = (payout[e.curId] || 0) + Math.abs(e.amount);
     const fl = (flow[e.curId] = flow[e.curId] || { inn: 0, out: 0 });
@@ -10477,6 +10498,8 @@ function Report({ data, calc, cur, usr, profitIn, investorsProfitIn, invShare, s
             <PL label={tr("خێری فرۆشتن")} m={profit} tone="pos" />
             <PL label={tr("زەرەری فرۆشتن")} m={loss} tone="neg" />
             <PL label={tr("خەرجی")} m={exp} tone="neg" />
+            <PL label={tr("— لە قاسەی گشتی")} m={expGeneral} tone="neg" />
+            <PL label={tr("— لە قاسەی تایبەتی خۆم")} m={expOwn} tone="neg" />
             <PL label={tr("عمولەی هاوبەشان")} m={fee} tone="neg" />
             <PL label={tr("خێری وەبەرهێنەران")} m={invP} tone="neg" />
             <div className="mt-1 pt-1 border-t-2 border-slate-900/10">

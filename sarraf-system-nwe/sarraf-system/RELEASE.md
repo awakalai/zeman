@@ -292,6 +292,25 @@ inferred from a diff.
 - **`202609020007` — a debtor can be told.** One new notification kind, and a narrow insert
   policy so the command that writes it — which runs as `sarraf_definer`, not as the superuser
   every notification trigger before it used — may write inside its own tenant and nowhere else.
+- **`202609020008` — a refused receipt can be put away.** Two transitions added to
+  `receipt_transition_allowed` (`rejected`→`cancelled`, and the three other refused states →
+  `cancelled`), and one command that only the person who sent a receipt may run, only on one
+  that was refused. Nothing is deleted: the row, the reason and every state it passed through
+  stay, so the owner can still count how many a person has had refused.
+- **`202609020009` — the commission is a number the owner chooses.** `app_users.rate` becomes a
+  default rather than a rule: a purchase may carry `partner_fee`, and when it does that is what
+  the partner is paid, in the balance check, the transaction snapshot and the ledger row alike.
+  `partner_rate_snapshot` becomes the percentage actually charged rather than the one on file,
+  so `amount × rate ÷ 100` always lands on the fee that was taken. A purchase that names no
+  commission behaves exactly as before.
+- **`202609020010` — an expense says which safe it came out of.** A new `ledger.paid_from`
+  column (`general` / `own`), written by expenses only, and the snapshot reports the split
+  beside the total it already reported. Every existing row stays null, and null keeps meaning
+  what every screen already does with it — the owner's own — so no figure moves. **What this
+  deliberately does not do** is change how an expense is shared out: whether an expense from
+  the general safe should reduce the investors' share of profit as well as the owner's is a
+  decision about their money and is the owner's to make. The mark is recorded and shown; the
+  arithmetic waits on the answer.
 
 ## 6. What this document does NOT claim
 

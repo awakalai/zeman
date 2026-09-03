@@ -3975,6 +3975,85 @@ try {
   };
   partnerCommissionChecks();
 
+  // ── «کە خەرجییەکەم دا ئاماژە بەوە بکات لە قاسەی گشتی دیدەی یان قاسەی تایبەتی خۆت» ──────────
+  //
+  // Two different pockets — the general safe, which holds the owner's money and the investors'
+  // together, and the owner's own, which holds only theirs. Until now an expense never said
+  // which one it came out of.
+  const expenseSafeChecks = () => {
+    asAdmin();
+    psql(`insert into public.ledger(id,type,cur_id,amount,date,tenant_id)
+          values ('led-xsafe-fund','deposit','usd',9000,now(),'t-sarkhel')`);
+
+    const spend = (id, safe, amount = 100) => psql(`select public.sarraf_post_ledger_command(
+      jsonb_build_array(jsonb_build_object('id','${id}','type','expense','cur_id','usd',
+        'amount',${-amount}${safe === null ? "" : `,'paid_from','${safe}'`},'note','کرێی شوێن')),
+      'expense:${id}', 'خەرجی', '${id}')`);
+    const safeOf = (id) => psql(
+      `select coalesce(paid_from,'—') from public.ledger where id='${id}'`).trim();
+
+    check("an expense records which safe it came out of", () => {
+      spend("led-xsafe-general", "general");
+      spend("led-xsafe-own", "own");
+      if (safeOf("led-xsafe-general") !== "general") {
+        throw new Error(`the general one reads ${safeOf("led-xsafe-general")}`);
+      }
+      if (safeOf("led-xsafe-own") !== "own") {
+        throw new Error(`the private one reads ${safeOf("led-xsafe-own")}`);
+      }
+    });
+
+    check("an expense that names no safe is the owner's own, as it always was", () => {
+      // Every expense recorded before this column existed came off the owner's equity and
+      // nobody else's. A silent change of meaning for those rows would move money between the
+      // owner and their investors without anybody asking for it.
+      spend("led-xsafe-silent", null);
+      if (safeOf("led-xsafe-silent") !== "own") {
+        throw new Error(`an unnamed safe reads ${safeOf("led-xsafe-silent")}`);
+      }
+    });
+
+    mustFail("a safe nobody has heard of is refused",
+      `select public.sarraf_post_ledger_command(
+        jsonb_build_array(jsonb_build_object('id','led-xsafe-junk','type','expense','cur_id','usd',
+          'amount',-10,'paid_from','somewhere-else','note','کرێی شوێن')),
+        'expense:led-xsafe-junk', 'خەرجی', 'junk safe')`);
+
+    check("and a refused safe leaves no expense behind", () => {
+      const left = psql(`select count(*)::text from public.ledger where id='led-xsafe-junk'`).trim();
+      if (left !== "0") throw new Error(`${left} row(s) survived`);
+    });
+
+    check("a capital movement carries no safe, whatever it is sent", () => {
+      // ledger.owner already answers whose capital a deposit is. A deposit also naming a safe
+      // would be a second, contradictory answer to the same question.
+      psql(`select public.sarraf_post_ledger_command(
+        jsonb_build_array(jsonb_build_object('id','led-xsafe-cap','type','deposit','owner','self',
+          'cur_id','usd','amount',50,'paid_from','general','note','سەرمایە')),
+        'expense:led-xsafe-cap', 'داخڵکردن', 'capital')`);
+      if (safeOf("led-xsafe-cap") !== "—") {
+        throw new Error(`a deposit was filed under ${safeOf("led-xsafe-cap")}`);
+      }
+    });
+
+    check("the reading screens are told the split, and it still adds up to the total", () => {
+      const snap = JSON.parse(psql("select public.sarraf_read_model_snapshot(3650)::text"));
+      const split = snap.expenses_by_safe || [];
+      const general = split.filter((r) => r.paid_from === "general" && r.cur_id === "usd")
+        .reduce((sum, r) => sum + Number(r.amount), 0);
+      const own = split.filter((r) => r.paid_from === "own" && r.cur_id === "usd")
+        .reduce((sum, r) => sum + Number(r.amount), 0);
+      if (general !== 100) throw new Error(`the general safe paid ${general}, expected 100`);
+      if (own !== 200) throw new Error(`the owner's own safe paid ${own}, expected 200`);
+      // The undivided total every existing screen reads must be unchanged by the split.
+      const total = Number(snap.expenses?.usd || 0);
+      if (Math.abs(total - (general + own)) > 1e-8) {
+        throw new Error(`the total reads ${total} but the split adds to ${general + own}`);
+      }
+    });
+  };
+  expenseSafeChecks();
+
   check("a second reset cannot empty a system that has since gone live", () => {
     const out = JSON.parse(psql("select public.sarraf_reset_installation()::text"));
     if (out.done !== false) throw new Error(JSON.stringify(out));
