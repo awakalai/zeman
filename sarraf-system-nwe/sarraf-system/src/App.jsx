@@ -15,7 +15,7 @@ import { loadMoneyAtOffices, loadOfficeHoldings, moneyAtOfficeText, officeAdvanc
 import { buildBundleForReceipts, bundleArchiveName, shareOrSaveBundle } from "./services/receiptBundleTransfer.js";
 import { reportFault } from "./services/faultReport.js";
 import { MyReceipts } from "./components/portal/MyReceipts";
-import { intakeReceipt, intakeStatusText, loadMyReceipts, noteReceiptReadFailure, receiptReadFailureText, replaceReceipt, requestStoredReceiptOcr } from "./services/receiptIntake";
+import { dismissRejectedReceipt, intakeReceipt, intakeStatusText, loadMyReceipts, noteReceiptReadFailure, receiptDismissCommandKey, receiptReadFailureText, replaceReceipt, requestStoredReceiptOcr } from "./services/receiptIntake";
 import { DICT } from "./i18n/dictionary";
 import { computeInventoryPosition } from "./services/inventoryAccounting";
 import { createReceiptReviewCommand, finalizeReceiptBatch, loadReceiptPolicy, reviewReceiptBatch } from "./services/receiptReview";
@@ -3134,7 +3134,11 @@ export default function App() {
   const shared = { data, calc, cur, usr, mySafe, profitAll, profitIn, ownProfitIn, ownProfitAll,
     investorsProfitIn, invShare, invUnpaid, autoRate, avgRate, inventoryPosition, usdValueAt, usdToCurrencyAt,
     toUsd, sumUsd, ratesReady, owners, notify, waNotify, isOwner, flash,
-    readModel: data?.readModel || null, loadTxHistoryPage, loadRangeReport, loadInventorySnapshot };
+    readModel: data?.readModel || null, loadTxHistoryPage, loadRangeReport, loadInventorySnapshot,
+    // Whether this portal is being previewed by an administrator rather than lived in by the
+    // person it belongs to. Only the sender may put their own refused receipt away, so a screen
+    // that offers the button to a previewing administrator offers something the server refuses.
+    previewing: Boolean(va) };
 
   return (
     <div dir={LANGS[lang]?.dir || "rtl"} key={lang} className="zeman-shell min-h-screen" style={{ background: "var(--bg)", color: "var(--txt)" }}>
@@ -9063,7 +9067,7 @@ function BatchDetail({ id, back, usr, data, profile, onMakeTx, flash, reloadBatc
 }
 
 /* ─────────── ئەرشیفی فیشەکانی کڕیارێک ─────────── */
-function ReceiptArchive({ customerId, data, flash, simple = false }) {
+function ReceiptArchive({ customerId, data, flash, simple = false, previewing = false }) {
   const [scan, setScan] = useState(false);
   const [recs, setRecs] = useState(null);
   const [share, setShare] = useState(false);
@@ -9119,6 +9123,17 @@ function ReceiptArchive({ customerId, data, flash, simple = false }) {
     await replaceReceipt(supabase, receipt.id, intake.documentId);
   };
 
+  // «هەر لە تەنیشت خۆیا دیلێتکردنی ئەو فیشە هەبێت.»  It leaves the sender's list and nothing is
+  // destroyed. The command key is derived from the document rather than generated, so pressing
+  // twice — a slow network, an impatient second tap — is the same press, not two.
+  //
+  // Offered only to the person whose portal this is. An administrator previewing it may not put
+  // somebody else's refusal away: that would take from the person who needs it the one signal
+  // telling them to send a better photograph, and the server refuses it either way.
+  const dismissOne = async (receipt) => {
+    await dismissRejectedReceipt(supabase, receipt.id, receiptDismissCommandKey(receipt.id));
+  };
+
   useEffect(() => {
     let active = true;
     if (simple) {
@@ -9152,6 +9167,7 @@ function ReceiptArchive({ customerId, data, flash, simple = false }) {
           loadSummary={(batchId) => loadBatchSummary(supabase, batchId)} /></DeferredPanel>
         <MyReceipts receipts={mine} loading={mine === null} error={mineError}
           onReload={reloadMine} onReplace={replaceOne} onBundle={bundleThese}
+          onDismiss={previewing ? null : dismissOne}
           ui={{ Card, Pill, Empty, StatePanel, tr }} />
       </div>
     );
@@ -11962,7 +11978,7 @@ function Audit({ data }) {
 }
 
 /* پۆرتاڵی کڕیار */
-function CustomerPortal({ user, c, base, data, calc, cur, usr, flash, reloadBatches, online, stale, refreshing, refreshedAt, refresh }) {
+function CustomerPortal({ user, c, base, data, calc, cur, usr, flash, reloadBatches, online, stale, refreshing, refreshedAt, refresh, previewing = false }) {
   const list = base;
   const customerRoutes = useMemo(() => ["home", "activity", "documents", "account", "upload"], []);
   const [tab, setTab] = usePortalRoute("customer", customerRoutes, "home");
@@ -12106,7 +12122,7 @@ function CustomerPortal({ user, c, base, data, calc, cur, usr, flash, reloadBatc
               post — above an empty state and a permission error, with no way to send at all. */}
           <PortalAction icon={Upload} label={tr("ناردنی فیش")}
             hint={tr("سکرینشۆتی ناردنی پارە")} onClick={() => setTab("upload")} primary />
-          <ReceiptArchive customerId={user.id} data={data} flash={flash} simple />
+          <ReceiptArchive customerId={user.id} data={data} flash={flash} simple previewing={previewing} />
           <DeferredPanel><ForwardedReceipts client={supabase} flash={flash} subjectId={user.id}
             signedUrlFor={async (path) => {
               const { data: signed } = await supabase.storage.from("receipts").createSignedUrl(path, 3600);
@@ -12132,7 +12148,7 @@ function CustomerPortal({ user, c, base, data, calc, cur, usr, flash, reloadBatc
 }
 
 /* پۆرتاڵی هاوبەش */
-function PartnerPortal({ user, data, calc, cur, usr, flash, reloadBatches, online, stale, refreshing, refreshedAt, refresh }) {
+function PartnerPortal({ user, data, calc, cur, usr, flash, reloadBatches, online, stale, refreshing, refreshedAt, refresh, previewing = false }) {
   const partnerRoutes = useMemo(() => ["home", "activity", "documents", "account", "upload"], []);
   const [tab, setTab] = usePortalRoute("partner", partnerRoutes, "home");
   // A partner can upload only for customer-purchase transactions explicitly assigned to them.
@@ -12209,7 +12225,7 @@ function PartnerPortal({ user, data, calc, cur, usr, flash, reloadBatches, onlin
         <PartnerReceipts partnerId={user.id} data={data} flash={flash} />
         {/* Their own archive: what this partner themselves sent, with the details of each
             receipt — the same view the customer-seller gets, scoped by the server to them. */}
-        <ReceiptArchive customerId={user.id} data={data} flash={flash} simple />
+        <ReceiptArchive customerId={user.id} data={data} flash={flash} simple previewing={previewing} />
       </>}
       {tab === "upload" && (
         <>
@@ -12246,7 +12262,7 @@ function PartnerPortal({ user, data, calc, cur, usr, flash, reloadBatches, onlin
 }
 
 /* ══════════════════ پۆرتاڵی ڕۆڵەکانی تر ══════════════════ */
-function Portal({ user, data, calc, cur, usr, officePay, settle, invUnpaid, flash, reloadBatches, accountMove, accountTransfer, ...portalState }) {
+function Portal({ user, data, calc, cur, usr, officePay, settle, invUnpaid, flash, reloadBatches, accountMove, accountTransfer, previewing = false, ...portalState }) {
   if (user.role === "office") return (
     <div className="portal-frame"><section className="portal-main" id="portal-content">
       <DeferredPanel><OfficePayments client={supabase} lang={portalState.lang || "ku"} flash={flash}
@@ -12257,10 +12273,10 @@ function Portal({ user, data, calc, cur, usr, officePay, settle, invUnpaid, flas
   if (user.role === "customer") {
     const c = calc.cust[user.id] || { owe: {}, due: {} };
     const base = data.txs.filter((t) => !t.deleted && t.cpId === user.id).reverse();
-    return <CustomerPortal user={user} c={c} base={base} data={data} calc={calc} cur={cur} usr={usr} flash={flash} reloadBatches={reloadBatches} {...portalState} />;
+    return <CustomerPortal user={user} c={c} base={base} data={data} calc={calc} cur={cur} usr={usr} flash={flash} reloadBatches={reloadBatches} previewing={previewing} {...portalState} />;
   }
 
-  if (user.role === "partner") return <PartnerPortal user={user} data={data} calc={calc} cur={cur} usr={usr} flash={flash} reloadBatches={reloadBatches} {...portalState} />;
+  if (user.role === "partner") return <PartnerPortal user={user} data={data} calc={calc} cur={cur} usr={usr} flash={flash} reloadBatches={reloadBatches} previewing={previewing} {...portalState} />;
 
   if (user.role === "__never__") {
     const bal = calc.partner[user.id] || {};

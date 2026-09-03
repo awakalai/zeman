@@ -654,6 +654,123 @@ try {
     if (twice !== once) throw new Error(`the second press made ${twice - once} more transaction(s)`);
   });
 
+  // ══ PUTTING A REFUSAL AWAY ══════════════════════════════════════════════════
+  //
+  //   «فیشی ڕەتکراوە پێویست ناکات بۆ من بنێردرێت، هەر لە تەنیشت خۆیا دیلێتکردنی ئەو فیشە
+  //    هەبێت.» — and, in the same breath: «بێگوومان دەبێت ئەو هیستۆرییە هەبێت بۆ ئەوەی بزانم
+  //    کێ فیشی دووبارە و خراپ دەنێرێت.»
+  //
+  // Both at once: it leaves the sender's list, and nothing about it is destroyed.
+  const dismiss = (docId, key) => psql(
+    `select public.sarraf_dismiss_rejected_receipt('${docId}','receipt-dismiss:${key}')::text`);
+  // The state machine only moves one step at a time, so a fixture has to walk there.
+  // A rejected document must carry its reason — the table refuses one without, which is the
+  // rule that makes «هۆکارەکەشی پێ بڵێ» impossible to forget.
+  const walk = (docId, states, reason = "هەمان وێنە پێشتر نێردراوە") => {
+    for (const st of states) {
+      psql(st === "rejected"
+        ? `update public.receipt_documents
+              set state='rejected', rule_code='duplicate', rule_reason='${reason}'
+            where id='${docId}'`
+        : `update public.receipt_documents set state='${st}' where id='${docId}'`);
+    }
+  };
+  const REFUSED_PATH = ["uploading", "uploaded", "needs_manual_review", "rejected"];
+  // A document may not be called validated until somebody has read a recipient, a date, a
+  // platform and a fee answer off the image.  A fixture walking that far has to satisfy the
+  // same rule a real reader would.
+  const readIt = (docId) => psql(
+    `insert into public.receipt_extractions(document_id,version,is_original,raw,gross_amount,order_amount,
+       fee_amount,net_amount,fee_treatment,currency,ref_no,payee,tx_date,platform,has_fee,tenant_id)
+     values ('${docId}',1,true,'{}'::jsonb,100,100,0,100,'no_fee','CNY','REF-${docId}',
+             '张伟',current_date,'wechat',false,'t-sarkhel')`);
+
+  check("the person who sent a refused receipt can put it away", () => {
+    batch("rb-dismissal-of-refusals");
+    document("doc-dismiss-mine", "rb-dismissal-of-refusals");
+    walk("doc-dismiss-mine", REFUSED_PATH);
+    be("customer");
+    dismiss("doc-dismiss-mine", "the-sender-puts-it-away");
+    be("admin");
+    const state = one(`select state::text from public.receipt_documents where id='doc-dismiss-mine'`);
+    if (state !== "cancelled") throw new Error(`it is ${state}, expected cancelled`);
+  });
+
+  check("and nothing about it is destroyed", () => {
+    // The row, the reason it was refused, and every state it passed through.
+    const reason = one(`select coalesce(rule_reason,'—') from public.receipt_documents
+                         where id='doc-dismiss-mine'`);
+    if (!reason.includes("هەمان وێنە")) throw new Error(`the reason reads ${reason}`);
+    const steps = num(`select count(*) from public.receipt_state_transitions
+                        where document_id='doc-dismiss-mine'`);
+    if (steps < 4) throw new Error(`only ${steps} steps of history survived`);
+    const last = one(`select from_state::text||'→'||to_state::text
+                        from public.receipt_state_transitions
+                       where document_id='doc-dismiss-mine' order by created_at desc limit 1`);
+    if (last !== "rejected→cancelled") throw new Error(`the last step reads ${last}`);
+  });
+
+  check("the owner can still count how many a person has had refused", () => {
+    // The whole reason for keeping it: «بزانم کێ فیشی دووبارە و خراپ دەنێرێت».
+    const refusals = num(`select count(*) from public.receipt_state_transitions t
+                            join public.receipt_documents d on d.id = t.document_id
+                           where d.uploader_id='rl-cus' and t.to_state='rejected'
+                             and t.document_id='doc-dismiss-mine'`);
+    if (refusals !== 1) throw new Error(`the record of that refusal reads ${refusals}, expected 1`);
+  });
+
+  check("somebody else's refusal cannot be put away", () => {
+    batch("rb-dismissal-not-yours");
+    document("doc-dismiss-theirs", "rb-dismissal-not-yours");
+    walk("doc-dismiss-theirs", REFUSED_PATH);
+    // Even the administrator may not: hiding somebody's refusal from them takes away the one
+    // signal telling them to send a better photograph.
+    let refusedIt = false;
+    try { dismiss("doc-dismiss-theirs", "an-administrator-tries-it"); } catch { refusedIt = true; }
+    const state = one(`select state::text from public.receipt_documents where id='doc-dismiss-theirs'`);
+    if (!refusedIt || state !== "rejected") throw new Error(`it is ${state} — somebody else put it away`);
+  });
+
+  check("a receipt that was accepted cannot be put away", () => {
+    // Only a refusal. Otherwise this is a way to make a real payment disappear from the list
+    // it is waiting in.
+    batch("rb-dismissal-of-a-good-one");
+    document("doc-dismiss-accepted", "rb-dismissal-of-a-good-one");
+    walk("doc-dismiss-accepted", ["uploading", "uploaded", "ocr_pending", "ocr_processing", "parsed"]);
+    readIt("doc-dismiss-accepted");
+    walk("doc-dismiss-accepted", ["validated", "submitted", "accepted"]);
+    be("customer");
+    let refusedIt = false;
+    try { dismiss("doc-dismiss-accepted", "trying-it-on-a-good-one"); } catch { refusedIt = true; }
+    be("admin");
+    const state = one(`select state::text from public.receipt_documents where id='doc-dismiss-accepted'`);
+    if (!refusedIt || state !== "accepted") throw new Error(`it is ${state} — an accepted receipt was put away`);
+  });
+
+  check("a receipt still on its way cannot be put away", () => {
+    // The state table would allow 'uploaded'→'cancelled' — that is how a half-finished upload
+    // is abandoned.  This command must not be the door to it: a receipt that has not been
+    // refused is still on its way to becoming money, and its sender pressing «لایبە» on it
+    // would take a real payment out of the pile nobody has looked at yet.
+    batch("rb-dismissal-still-going");
+    document("doc-dismiss-underway", "rb-dismissal-still-going");
+    walk("doc-dismiss-underway", ["uploading", "uploaded"]);
+    be("customer");
+    let refusedIt = false;
+    try { dismiss("doc-dismiss-underway", "trying-it-on-one-underway"); } catch { refusedIt = true; }
+    be("admin");
+    const state = one(`select state::text from public.receipt_documents where id='doc-dismiss-underway'`);
+    if (!refusedIt || state !== "uploaded") throw new Error(`it is ${state} — one still on its way was put away`);
+  });
+
+  check("putting the same one away twice changes nothing the second time", () => {
+    be("customer");
+    dismiss("doc-dismiss-mine", "the-sender-puts-it-away");
+    be("admin");
+    const state = one(`select state::text from public.receipt_documents where id='doc-dismiss-mine'`);
+    if (state !== "cancelled") throw new Error(`it is ${state}`);
+  });
+
   // ── the report ──────────────────────────────────────────────────────────────
   let failed = 0;
   for (const [ok, name] of checks) { console.log(`${ok ? "PASS" : "FAIL"}  ${name}`); if (!ok) failed++; }
