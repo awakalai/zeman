@@ -4902,6 +4902,18 @@ function Safes({ data, calc, cur, usr, mySafe, invUnpaid, owners, ratesReady, ad
             </div>
           ))}
           <div className="text-[11px] text-[var(--txt-3)] mt-2">{tr("سەرمایەی خۆت + خێری خۆت − خەرجی و عمولەکان")}</div>
+          {/* A currency the owner never put capital into, but pays commissions in, reads as a
+              negative here — and it is correct: it is what those commissions cost, waiting to be
+              earned back when the currency is sold. Proved rather than assumed, in
+              verify:accounting: leave that cost out and the books credit the owner with money
+              the business does not hold. Said plainly, because a minus sign with no sentence
+              beside it is how a right number gets reported as a bug. */}
+          {data.currencies.some((c) => (mySafe[c.id] || 0) < 0) && (
+            <div className="text-[11px] leading-5 mt-2 rounded-[var(--r-sm)] p-2.5"
+                 style={{ background: "var(--surf-2)", color: "var(--txt-2)" }}>
+              {tr("دراوێک بە سالبی دەردەکەوێت کاتێک عمولەی پێ دراوە بەڵام سەرمایەی خۆت بەو دراوە نییە — ئەوە تێچووی ئەو عمولانەیە، و کاتێک ئەو دراوە دەفرۆشیت دەگەڕێتەوە. هەڵە نییە.")}
+            </div>
+          )}
         </Card>
       </div>
 
