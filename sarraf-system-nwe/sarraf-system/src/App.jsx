@@ -28,7 +28,7 @@ import { toCsv } from "./services/csvSafe";
 import { revokeAllUrls, revokeDroppedUrls } from "./services/objectUrls";
 import { unrealizedPnl, unrealizedReasonText } from "./services/unrealizedPnl";
 import { EARNING_KINDS, earningsByKind } from "./services/earningsByKind";
-import { capitalEventsFrom, investorShare, investorsTotalByCurrency, profitEventsFrom } from "./services/investorShare";
+import { capitalEventsFrom, investorShare, investorsTotalByCurrency, profitEventsFrom, sharedCostEventsFrom } from "./services/investorShare";
 import { crossRate, fromUsdAsOf, rateAsOf, rateErrorText, rateOf, unpricedCurrencies, usdFromAsOf, validateRate } from "./services/currencyRate";
 import {
   DIRECTION_REFUSED, mayEditExtraction, mayUploadDirection,
@@ -1847,17 +1847,25 @@ export default function App() {
    * One investor's share of a currency's profit over a range. Passing no range means all time,
    * which is what the account pages ask for.
    */
+  // Sales earn the pool; expenses paid out of the general safe come out of it. Both are dated
+  // events shared by the capital standing on their own day, so one list carries both — an
+  // investor's share must never be computed from a pool that counts only the good half.
+  const poolEvents = (from = null, to = null) => [
+    ...profitEventsFrom(data.txs, { from, to }),
+    ...sharedCostEventsFrom(data.ledger, { from, to }),
+  ];
+
   const invShare = (iid, curId, from = null, to = null) =>
     investorShare({
       investorId: iid, curId,
-      profitEvents: profitEventsFrom(data.txs, { from, to }),
+      profitEvents: poolEvents(from, to),
       capitalEvents, investors: liveInvestors,
     });
 
   // دابەشکردن تەنها لەسەر خێری هاوبەش دەکرێت (نەک ڕاستەوخۆ)
   const investorsProfitIn = (from = null, to = null) =>
     investorsTotalByCurrency({
-      profitEvents: profitEventsFrom(data.txs, { from, to }),
+      profitEvents: poolEvents(from, to),
       capitalEvents, investors: liveInvestors, currencies: data.currencies,
     });
 

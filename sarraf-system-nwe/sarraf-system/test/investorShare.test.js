@@ -2,7 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   capitalAsOf, capitalEventsFrom, inScopeFor, investorShare,
-  investorSharesForCurrency, investorsTotalByCurrency, profitEventsFrom, sharesForEvent,
+  investorSharesForCurrency, investorsTotalByCurrency, profitEventsFrom, sharedCostEventsFrom,
+  sharesForEvent,
 } from "../src/services/investorShare.js";
 
 const round = (n) => Math.round(n * 100) / 100;
@@ -254,4 +255,104 @@ test("nothing at all is handled without error", () => {
   assert.deepEqual(capitalEventsFrom(null), []);
   assert.deepEqual(profitEventsFrom(null), []);
   assert.deepEqual(sharesForEvent({ profit: 0, curId: "usd", capital: { self: 0, byInvestor: {} }, investors: [] }), {});
+});
+
+// ── «خەرجی لە قاسەی گشتی — بەڵێ، بەپێی ڕێژەکەیان» ─────────────────────────────────────────────
+//
+// An expense paid out of the general safe is a cost of the shared business, so it comes off the
+// pool before the pool is divided. The owner confirmed this is what should happen; an expense
+// paid out of their own safe stays theirs alone.
+
+test("only an expense from the general safe becomes a shared cost", () => {
+  const ledger = [
+    { type: "expense", paidFrom: "general", curId: "usd", amount: -400, date: "2026-09-01T00:00:00Z" },
+    { type: "expense", paidFrom: "own", curId: "usd", amount: -900, date: "2026-09-01T00:00:00Z" },
+    // Recorded before the question was ever asked: the owner's alone, as every screen has
+    // always treated it.
+    { type: "expense", paidFrom: null, curId: "usd", amount: -700, date: "2026-09-01T00:00:00Z" },
+    { type: "deposit", owner: "self", curId: "usd", amount: 5000, date: "2026-09-01T00:00:00Z" },
+    { type: "partner_fee", curId: "usd", amount: -50, date: "2026-09-01T00:00:00Z" },
+  ];
+  assert.deepEqual(sharedCostEventsFrom(ledger), [
+    { date: "2026-09-01T00:00:00Z", curId: "usd", amount: -400 },
+  ]);
+});
+
+test("a shared cost keeps the ledger's own sign rather than being negated twice", () => {
+  const [only] = sharedCostEventsFrom([
+    { type: "expense", paidFrom: "general", curId: "usd", amount: -400, date: "2026-09-01T00:00:00Z" },
+  ]);
+  assert.equal(only.amount < 0, true);
+});
+
+test("an expense from the general safe takes the investor's share down with it", () => {
+  // 1,000 earned and 400 spent on 20 August, when the owner and Ahmed each hold 50,000. Ahmed's
+  // rate is 50%, so his share of the pool is 25% of it: 250 of the profit, less 100 of the cost.
+  const shares = investorSharesForCurrency({
+    profitEvents: [
+      { date: "2026-08-20T00:00:00Z", curId: "usd", amount: 1000 },
+      ...sharedCostEventsFrom([
+        { type: "expense", paidFrom: "general", curId: "usd", amount: -400,
+          date: "2026-08-20T00:00:00Z" },
+      ]),
+    ],
+    capitalEvents: capital, investors, curId: "usd",
+  });
+  assert.equal(round(shares.ahmed), 150);
+});
+
+test("an expense from the owner's own safe leaves the investor's share alone", () => {
+  const shares = investorSharesForCurrency({
+    profitEvents: [
+      { date: "2026-08-20T00:00:00Z", curId: "usd", amount: 1000 },
+      ...sharedCostEventsFrom([
+        { type: "expense", paidFrom: "own", curId: "usd", amount: -400,
+          date: "2026-08-20T00:00:00Z" },
+      ]),
+    ],
+    capitalEvents: capital, investors, curId: "usd",
+  });
+  assert.equal(round(shares.ahmed), 250);
+});
+
+test("a cost carried before an investor arrived is not theirs to carry", () => {
+  // The same fairness that keeps them out of profit earned before they came.
+  const shares = investorSharesForCurrency({
+    profitEvents: sharedCostEventsFrom([
+      { type: "expense", paidFrom: "general", curId: "usd", amount: -400,
+        date: "2026-03-01T00:00:00Z" },
+    ]),
+    capitalEvents: capital, investors, curId: "usd",
+  });
+  assert.equal(shares.ahmed ?? 0, 0);
+});
+
+test("a shared cost outside the reported range is not counted in it", () => {
+  const ledger = [
+    { type: "expense", paidFrom: "general", curId: "usd", amount: -400, date: "2026-08-20T00:00:00Z" },
+    { type: "expense", paidFrom: "general", curId: "usd", amount: -900, date: "2026-09-20T00:00:00Z" },
+  ];
+  const inAugust = sharedCostEventsFrom(ledger, { from: "2026-08-01", to: "2026-08-31" });
+  assert.equal(inAugust.length, 1);
+  assert.equal(inAugust[0].amount, -400);
+});
+
+test("the whole cost is carried between the owner and the investors, and no more", () => {
+  // What makes the books balance: the money that left the safe is borne exactly once. Ahmed
+  // carries his quarter of it and the owner carries the rest — never more than 400 between them.
+  const costOnly = sharedCostEventsFrom([
+    { type: "expense", paidFrom: "general", curId: "usd", amount: -400,
+      date: "2026-08-20T00:00:00Z" },
+  ]);
+  const totals = investorsTotalByCurrency({
+    profitEvents: costOnly, capitalEvents: capital, investors, currencies: [{ id: "usd" }],
+  });
+  assert.equal(round(totals.usd), -100);
+  assert.equal(round(-400 - totals.usd), -300);
+});
+
+test("nothing at all is a shared cost of nothing", () => {
+  assert.deepEqual(sharedCostEventsFrom(null), []);
+  assert.deepEqual(sharedCostEventsFrom([{ type: "expense", paidFrom: "general", curId: "usd",
+                                           amount: 0, date: "2026-09-01T00:00:00Z" }]), []);
 });
