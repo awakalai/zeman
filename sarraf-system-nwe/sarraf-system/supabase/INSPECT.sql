@@ -711,8 +711,9 @@ select coalesce(paid_from, '— پێش ئەم ستوونە') as "لە کام ق�
  order by 1, 2;
 
 \echo ''
-\echo '   عمولەی هاوبەش — ڕێژەی وەرگیراو بەرامبەر ڕێژەی تۆمارکراوی هاوبەشەکە'
-\echo '   جیاوازی لە نێوانیاندا هەڵە نییە: واتا بڕەکەت بۆ ئەو مامەڵەیە بە دەست دانا'
+\echo '   عمولەی هاوبەش — ئەوەی وەرگیراوە بەرامبەر ڕێژەی ئێستای هاوبەشەکە'
+\echo '   «جیاواز لە ڕێژەی ئێستا» دوو مانای هەیە: یان بڕەکەت بۆ ئەو مامەڵەیە بە دەست دانا،'
+\echo '   یان ڕێژە تۆمارکراوەکەت دوای ئەو مامەڵەیە گۆڕی. ئەم ڕاپۆرتە ناتوانێت جیایان بکاتەوە.'
 \echo ''
 
 select u.name                                            as "هاوبەش",
@@ -720,7 +721,7 @@ select u.name                                            as "هاوبەش",
        count(*)                                          as "کڕین",
        round(sum(t.partner_fee_snapshot), 2)             as "کۆی عمولە",
        count(*) filter (where t.partner_rate_snapshot is distinct from u.rate)
-                                                         as "بە دەست دانراو"
+                                                         as "جیاواز لە ڕێژەی ئێستا"
   from public.txs t
   join public.app_users u on u.id = t.partner_id
  where not t.deleted and t.partner_fee_snapshot is not null
