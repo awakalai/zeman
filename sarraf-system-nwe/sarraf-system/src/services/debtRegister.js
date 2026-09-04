@@ -212,32 +212,16 @@ export const DEBT_EVENT_KU = Object.freeze({
 });
 
 /**
- * «گەر دوای هەفتەیەک جواب نەبوو، ئۆتۆماتیکی بیکات.»
+ * There is no sendDueDebtReminders here any more, and its absence is deliberate.
  *
- * The server decides everything: which debts are a week without an answer, whether each one may
- * be told at all, and whether it has already been told this week. This only asks it to look.
+ *   «هیچ debt reminder ـی خۆکار مەبنێرە. تەنها کاتێک خاوەن یان کارمەند دوگمەی ناردن دەگرێت،
+ *    ئاگاداری بنێردرێت.»
  *
- * That division is the point. A browser deciding would send a second reminder on a second tab,
- * a third on a refresh, and nothing at all on the day the owner used a different phone. The
- * command key the server mints carries the debt and the week, so asking ten times in one day
- * sends one message.
+ * It existed because the owner had earlier asked for the opposite — a reminder that went out
+ * on its own after a week without an answer — and it was built, merged and applied to the live
+ * database. The product brief reverses that decision, so the sender is gone from here and
+ * dropped from the database in 202609020015.
  *
- * It is called when an administrator opens the app rather than on a schedule, because this
- * project cannot verify from here whether pg_cron is available on the Supabase plan — and a
- * schedule that silently never fires is worse than none, since the owner would believe
- * reminders were going out. If cron is added later it calls this same function and nothing
- * here changes.
- *
- * Mirrors public.sarraf_send_due_debt_reminders.
+ * remindDebtor above is untouched: one press, one person told, recorded in history. That was
+ * never the part in question, and it is now the only way a reminder can happen at all.
  */
-export async function sendDueDebtReminders(client, { afterDays = 7 } = {}) {
-  const { data, error } = await client.rpc("sarraf_send_due_debt_reminders", {
-    p_after_days: afterDays,
-  });
-  if (error) throw error;
-  return {
-    sent: Number(data?.sent) || 0,
-    skipped: Number(data?.skipped) || 0,
-    debtIds: Array.isArray(data?.debt_ids) ? data.debt_ids : [],
-  };
-}

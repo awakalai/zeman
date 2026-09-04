@@ -30,7 +30,6 @@ import { unrealizedPnl, unrealizedReasonText } from "./services/unrealizedPnl";
 import { EARNING_KINDS, earningsByKind } from "./services/earningsByKind";
 import { capitalEventsFrom, investorShare, investorsTotalByCurrency, profitEventsFrom, sharedCostEventsFrom } from "./services/investorShare";
 import { batchStage, todaysWork } from "./services/todaysWork.js";
-import { sendDueDebtReminders } from "./services/debtRegister.js";
 import { crossRate, fromUsdAsOf, rateAsOf, rateErrorText, rateOf, unpricedCurrencies, usdFromAsOf, validateRate } from "./services/currencyRate";
 import {
   DIRECTION_REFUSED, mayEditExtraction, mayUploadDirection,
@@ -1342,24 +1341,12 @@ export default function App() {
     return { data: result.data, error: result.error };
   };
 
-  // «گەر دوای هەفتەیەک جواب نەبوو، ئۆتۆماتیکی بیکات.» Asked once per session rather than on
-  // every refresh: the server will not send twice in a week whatever it is asked, but there is
-  // no reason to ask it forty times a day either. Failures are swallowed on purpose — a
-  // reminder that could not go out must never be the reason the app does not open.
-  const remindersAsked = useRef(false);
-
   const loadAll = async (activeProfile = profile) => {
     const sequence = ++loadSequence.current;
     setRefreshing(true);
     try {
       reloadBatches();
       const adminMode = activeProfile?.role === "admin";
-      if (adminMode && !remindersAsked.current) {
-        remindersAsked.current = true;
-        sendDueDebtReminders(supabase).catch((error) => {
-          console.warn("overdue debt reminders could not be sent", error);
-        });
-      }
       const noQuery = Promise.resolve({ data: [], error: null });
       const [c, u, l, t, a, ac, rh, apr, ape, tv, ctrl, rm, rt] = await Promise.all([
         // Not the currencies table. That row's rate belongs to the installation, and reading it
