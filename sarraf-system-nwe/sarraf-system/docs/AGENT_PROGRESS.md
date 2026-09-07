@@ -40,10 +40,8 @@ not called complete because its code exists; the status below names the evidence
 The next implementation batch is the receipt Command Center: one clear ready/attention/archive
 workflow, batch-safe selection, and direct actions without exposing OCR internals on daily cards.
 
-## Batch 2 — Smart Work Inbox and Universal Search
-
-**Status:** Implemented in this branch; local source verification passed. Database/browser proof is
-still pending production credentials and dependency restoration.
+**Status:** Implemented in the merged PR #147; local source verification passed. Database/browser
+proof remains pending production credentials.
 
 ### Acceptance criteria
 
@@ -57,22 +55,21 @@ still pending production credentials and dependency restoration.
   stable user-facing groups.
 - Existing multilingual labels, direct receipt focus, and query-string-safe navigation remain
   intact.
+=======
+**Status:** Implemented in the merged PR #147; local source verification passed. Database/browser
+proof remains pending production credentials.
+>>>>>>> origin/main
 
 ### Evidence
 
-- `src/services/operationalControl.js` contains `safeInboxAction` and deterministic search
-  grouping; `test/globalSearch.test.js` and `test/operationalCenters.test.js` cover bounds,
-  grouping, authorization-shaped actions, and rejection of data-bearing paths.
-- `supabase/migrations/202609070001_smart_work_inbox.sql` adds the bounded owner/staff read RPC
-  with authenticated execution only and no mutation statements.
-- `npm run verify:source` passed. The focused tests for global search and operational centers
-  passed; the broader test command also exposed pre-existing missing dependency/path failures.
+- `src/services/operationalControl.js` contains bounded inbox/search derivation and
+  `test/globalSearch.test.js` and `test/operationalCenters.test.js` cover the behavior.
+- `supabase/migrations/202609070001_smart_work_inbox.sql` adds the authenticated read RPC.
+- `npm run verify:source` passed.
 
 ### Limits
 
 - Live RPC and browser proof require the project's Supabase credentials.
-- `npm run build` is blocked in this checkout because dependencies (`vite`, `@supabase/supabase-js`)
-  are not installed; no dependency manifest was changed.
 
 ## Batch 3 — Party 360 profiles and cash reconciliation
 
@@ -96,3 +93,31 @@ still pending production credentials and dependency restoration.
   discrepancy preservation, and refusal propagation.
 - `src/components/accounting/Party360.jsx` and `CashReconciliation.jsx` are reachable from the
   People and Money navigation groups.
+
+## Batch 4 — Document, health, and offline safety
+
+**Status:** Implemented in this branch; database and PDF-dependent work remains blocked.
+
+### Implemented
+
+- Document bundle export now refuses while offline before calling the server release RPC. This
+  prevents an offline document action from being mistaken for a completed authorization or
+  release, and leaves authoritative server state unchanged.
+- Manager overview and server reconciliation failures use the shared user-facing error mapping
+  rather than exposing raw database or transport details.
+- Added focused coverage proving the offline bundle guard makes no server call.
+
+### Evidence
+
+- `test/receiptBundleTransfer.test.js` covers the offline refusal and zero RPC calls.
+- `src/services/receiptBundleTransfer.js` performs the online check before
+  `sarraf_release_receipts_for_bundle`.
+- `src/components/accounting/ManagerOverview.jsx` and the Backup health panel use
+  `userFacingServiceError`.
+
+### Blocked / not claimed
+
+- Branded RTL PDF generation remains blocked because the authoritative ZEMAN logic PDF and a
+  supported PDF business/export contract are absent from this repository.
+- No live migration, backup/PITR change, or offline financial command queue was added. Financial
+  commands remain server-authoritative and offline-blocked.

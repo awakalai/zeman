@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { AlertTriangle, Gauge, History, Loader2, RefreshCw, Users } from "lucide-react";
 import { loadManagerOverview } from "../../services/managerConsole.js";
 import { rankName } from "../../services/adminRanks.js";
-import { errorText } from "../../services/userFacingError";
+import { userFacingServiceError } from "../../services/userFacingError";
 import "./debt-center.css";
 
 /**
@@ -85,7 +85,7 @@ export function ManagerOverview({ client, lang = "ku" }) {
       setOverview(await loadManagerOverview(client));
       setState("ready");
     } catch (error) {
-      setFailure(errorText(error).slice(0, 200));
+      setFailure(userFacingServiceError(error, lang, copy.failed).slice(0, 200));
       setState("error");
     }
   }, [client]);
