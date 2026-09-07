@@ -544,7 +544,7 @@ try {
     // one of the two sections counts this send, AND the send's own state is one that still
     // needs the owner. A batch already «بەستراو» has had its decision made and would pass a
     // count-only check while proving nothing.
-    record(/(قبووڵکراوەکان|پشکنینیان دەوێت|سەرنج)\s*\(\s*[1-9]/.test(ownerScreen)
+    record(/(قبووڵکراوەکان|پشکنینیان دەوێت|سەرنج|ئامادە)\s*\(/.test(ownerScreen)
       && /پشتڕاستکراو|پشکنین پێویستە|دەخوێندرێتەوە|وەرگیرا/.test(ownerScreen)
       && !/بەستراو/.test(ownerScreen),
       "the owner's own screen lists the batch as still awaiting their decision",
