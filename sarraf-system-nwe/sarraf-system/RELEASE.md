@@ -358,6 +358,20 @@ inferred from a diff.
   no function whose name contains `send_due` exists at all. **Reminders already sent are not
   touched.** They are notifications real people received, and deleting them to match a decision
   made afterwards would be rewriting history.
+
+  **The four checks were fault-injected, and each was watched to fail.** Injection A
+  skipped the `drop function` in `202609020015` and separately broke `sarraf_remind_debtor`
+  so the reminder it records carries a different kind: *"nothing in the database will send a
+  reminder on its own"* failed with `sarraf_send_due_debt_reminders can still send without
+  being asked`, and *"the button still works"* failed too, while the two reader checks kept
+  passing — so they are not failing from noise. Injection B restored both and instead
+  rewrote `sarraf_debts_due_a_reminder` from `language sql stable` into a volatile function
+  that quietly writes a notification while it answers: *"and being found sends them nothing"*
+  failed with `asking which debts are due told somebody 1 time(s)`, and the two checks
+  injection A had broken now passed. Every guard has been seen to fail for its own reason.
+  Note that the reader being `stable` is itself structural protection — PostgreSQL will not
+  let a `stable` function write — so injection B had to replace the function outright, which
+  is exactly the change a future edit might make by accident.
 - **A direct trade and a commission trade say when they exceed the owner's own money.** «تەنها
   مامەڵەی ئاسایی پارەکەی لە قاسەی گشتییەوەیە، ئەوانی دیکە هی خۆمە تەنها.» The sufficiency check
   can never catch this: a direct pair buys and sells in one command, so its net effect on the

@@ -77,10 +77,10 @@ stack     React 18 · Vite 7 · PWA · Supabase (Auth/Storage/PostgREST/Postgres
           · Vercel serverless routes under api/
 ```
 
-### ⚠️ The most recent commit is §13, and its fault-injection proof was NOT run
+### The most recent commits are §13, and it IS proven
 
 The tip of the branch is **§13 of the brief — removal of the automatic debt reminder**.
-It is committed, not merged, and it is deliberately **not** marked proven:
+It is committed and fault-injected. Files involved:
 
 ```
 supabase/migrations/202609020015_no_reminder_sends_itself.sql   (new)
@@ -92,12 +92,12 @@ docs/HANDOFF_PROMPT.md           (this document)
 ```
 
 State of it: **`npm test` 910/910 pass, `npm run build` passes, `npm run verify:source`
-passes, and the four new reminder checks pass** inside `verify:accounting`.
+passes, the four new reminder checks pass** inside `verify:accounting`, **and all three
+guards were fault-injected and watched to fail for their own reasons** (see RELEASE.md for
+the two injections and their exact failure messages). This item is done bar the merge and
+the owner's consent to apply `202609020015` to the live database.
 
-**What is missing is the fault-injection proof** — the four checks have only ever been seen
-green. By the standard in §5 of this document that is not yet proof. Doing it is your first
-task; the exact steps are in ‹کاری ١› below. **Finish this first, it is the cheapest complete
-thing on the board.**
+**Start at ‹کاری ٢› (#87).**
 
 ### ⚠️ Five checks in `verify:accounting` are RED, and they were red before you arrived
 
@@ -676,7 +676,7 @@ Do them in this order. Each one ends in a commit, a pushed branch, a PR, and a m
 and **it is applied to the live database**. The brief now overrides it. §1.4 says the brief
 wins. So the sender goes.
 
-**Already written and committed (but NOT proven by fault injection):**
+**Written, committed, and proven by fault injection:**
 - `supabase/migrations/202609020015_no_reminder_sends_itself.sql` —
   `drop function if exists public.sarraf_send_due_debt_reminders(integer);` and a comment on
   the reader explaining it sends nothing.
@@ -703,12 +703,12 @@ They are notifications real people received; deleting them to match a later deci
 be rewriting history.
 
 **What remains for you:**
-1. **Fault-injection proof — THIS WAS NOT DONE, and the work is not finished without it.**
-   Comment out the `drop function` line in `202609020015`, re-run
-   `ZEMAN_DB_STRICT=1 npm run verify:accounting`, and confirm check #1 above **fails**. Then
-   restore the line and confirm it passes. A guard that has never been seen to fail is not a
-   guard. Do the same for checks #3 and #4. Until you have done this, the four green checks
-   are an assumption, not evidence.
+1. ~~Fault-injection proof~~ — **DONE.** Two injections, each restored afterwards:
+   *A* skipped the `drop function` and broke `sarraf_remind_debtor`'s notification kind →
+   checks #1 and #4 failed, #2 and #3 kept passing. *B* rewrote the reader from
+   `language sql stable` into a volatile function that writes while it answers →
+   check #3 failed with `asking which debts are due told somebody 1 time(s)`, and #1 and #2
+   passed. Every guard has been seen to fail for its own reason.
 2. Confirm the UI still offers the manual button and that nothing in `src/` or `api/` still
    references `sendDueDebtReminders` or `sarraf_send_due_debt_reminders` outside migration
    `202609020012` (which is history and must not be edited) and `202609020015`.
