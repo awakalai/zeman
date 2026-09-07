@@ -2688,6 +2688,132 @@ try {
     if (Number(profit) !== 10) throw new Error(`direct profit is ${profit}, expected 150 - 140`);
   });
 
+  // ── «لە چەند کەسێکی دەکڕم و بەڵام بە یەک کەسی دەفرۆشم» ─────────────────────────────────────
+  //
+  // The same trade, gathered from several sellers. Three rows or more, one pair, one sale, and
+  // every purchase carrying its own seller and its own price — which is the reason for doing it.
+  const manyToOne = (pair, legs, sale) => {
+    const rows = legs.map((leg, i) => `jsonb_build_object('id','${pair}-b${i}','type','buy',
+      'cp_id','${leg.from}','cur_id','cny','amount',${leg.amount},'rate',${leg.rate},
+      'against_id','usd','total',${(leg.amount * leg.rate).toFixed(10)},'status','completed',
+      'direct',true,'own_money',true,'pair_id','${pair}','direct_role','buy')`);
+    rows.push(`jsonb_build_object('id','${pair}-s','type','sell','cp_id','${sale.to}',
+      'cur_id','cny','amount',${sale.amount},'rate',${sale.rate},'against_id','usd',
+      'total',${(sale.amount * sale.rate).toFixed(10)},'status','completed',
+      'direct',true,'own_money',true,'pair_id','${pair}','direct_role','sell')`);
+    return `public.sarraf_commit_transactions(jsonb_build_array(${rows.join(",")}),
+      '[]'::jsonb, null, 'cmd-${pair}', 'direct trade', 'many sellers, one buyer')`;
+  };
+
+  check("a direct trade may be bought from several people and sold to one", () => {
+    psql(`insert into public.app_users(id,name,role,tenant_id) values
+            ('cust-m1','Seller One','customer','t-sarkhel'),
+            ('cust-m2','Seller Two','customer','t-sarkhel'),
+            ('cust-m3','Seller Three','customer','t-sarkhel'),
+            ('cust-mb','The Buyer','customer','t-sarkhel')
+          on conflict (id) do nothing`);
+    psql(`select ${manyToOne("pair-m1",
+      [{ from: "cust-m1", amount: 400, rate: 0.14 },
+       { from: "cust-m2", amount: 300, rate: 0.145 },
+       { from: "cust-m3", amount: 300, rate: 0.138 }],
+      { to: "cust-mb", amount: 1000, rate: 0.15 })}`);
+    const shape = psql(`select count(*)||'|'||count(*) filter(where type='buy')||'|'||
+                               count(*) filter(where type='sell')||'|'||
+                               count(distinct cp_id)||'|'||
+                               coalesce(bool_and(business_flow='owner_cashbox'),false)::text
+                          from public.txs where pair_id='pair-m1' and not deleted`).trim();
+    if (shape !== "4|3|1|4|true") {
+      throw new Error(`the trade was booked as ${shape}, expected 4 rows, 3 buys, 1 sale, 4 people`);
+    }
+  });
+
+  check("each seller is named on their own leg, at their own price", () => {
+    // «لە چەند کەسێکی دەکڕم» is only worth anything if the books remember which one.
+    const legs = psql(`select string_agg(cp_id||'@'||round(rate,4)::text||'x'||round(amount,0)::text,
+                                        ',' order by cp_id)
+                         from public.txs where pair_id='pair-m1' and type='buy' and not deleted`).trim();
+    if (legs !== "cust-m1@0.1400x400,cust-m2@0.1450x300,cust-m3@0.1380x300") {
+      throw new Error(`the legs were recorded as ${legs}`);
+    }
+  });
+
+  check("the earning counts every purchase, not the first one", () => {
+    // 400 at 0.14 is 56, 300 at 0.145 is 43.50, 300 at 0.138 is 41.40 — 140.90 in all, against
+    // a sale of 150. Pricing the sale against one leg would have called most of the cost profit.
+    const profit = Number(psql(`select profit from public.txs where id='pair-m1-s'`).trim());
+    if (Math.abs(profit - 9.1) > 1e-9) {
+      throw new Error(`the earning is ${profit}, expected 150 - 140.90`);
+    }
+  });
+
+  check("what it sells must be exactly what it bought", () => {
+    // More would be selling something the trade never acquired; less would leave a remainder
+    // with no cost and nowhere to sit.
+    let refused = false;
+    try {
+      psql(`select ${manyToOne("pair-m2",
+        [{ from: "cust-m1", amount: 400, rate: 0.14 }, { from: "cust-m2", amount: 300, rate: 0.14 }],
+        { to: "cust-mb", amount: 900, rate: 0.15 })}`);
+    } catch { refused = true; }
+    if (!refused) throw new Error("it sold 900 having bought 700");
+    if (psql(`select count(*)::text from public.txs where pair_id='pair-m2'`).trim() !== "0") {
+      throw new Error("the refused trade was written anyway");
+    }
+  });
+
+  check("two sales in one direct trade are refused", () => {
+    // «بە یەک کەسی دەفرۆشم» — one buyer. Two would be two trades sharing a cost nobody split.
+    let refused = false;
+    try {
+      psql(`select public.sarraf_commit_transactions(jsonb_build_array(
+        jsonb_build_object('id','pair-m3-b','type','buy','cp_id','cust-m1','cur_id','cny',
+          'amount',1000,'rate',0.14,'against_id','usd','total',140,'status','completed',
+          'direct',true,'own_money',true,'pair_id','pair-m3','direct_role','buy'),
+        jsonb_build_object('id','pair-m3-s1','type','sell','cp_id','cust-mb','cur_id','cny',
+          'amount',500,'rate',0.15,'against_id','usd','total',75,'status','completed',
+          'direct',true,'own_money',true,'pair_id','pair-m3','direct_role','sell'),
+        jsonb_build_object('id','pair-m3-s2','type','sell','cp_id','cust-m2','cur_id','cny',
+          'amount',500,'rate',0.15,'against_id','usd','total',75,'status','completed',
+          'direct',true,'own_money',true,'pair_id','pair-m3','direct_role','sell')),
+        '[]'::jsonb, null, 'cmd-pair-m3', 'direct trade', 'two buyers')`);
+    } catch { refused = true; }
+    if (!refused) throw new Error("a direct trade sold to two people at once");
+  });
+
+  check("a partner's custody cannot be dragged into one", () => {
+    // The rule that made this a separate kind of trade in the first place, restated for the
+    // new shape: the money never leaves the owner's hands, so no partner may be named.
+    let refused = false;
+    try {
+      psql(`select public.sarraf_commit_transactions(jsonb_build_array(
+        jsonb_build_object('id','pair-m4-b1','type','buy','cp_id','cust-m1','cur_id','cny',
+          'amount',500,'rate',0.14,'against_id','usd','total',70,'status','completed',
+          'direct',true,'own_money',true,'pair_id','pair-m4','direct_role','buy'),
+        jsonb_build_object('id','pair-m4-b2','type','buy','cp_id','cust-m2','cur_id','cny',
+          'amount',500,'rate',0.14,'against_id','usd','total',70,'status','completed',
+          'direct',true,'own_money',true,'pair_id','pair-m4','direct_role','buy','partner_id','p-1'),
+        jsonb_build_object('id','pair-m4-s','type','sell','cp_id','cust-mb','cur_id','cny',
+          'amount',1000,'rate',0.15,'against_id','usd','total',150,'status','completed',
+          'direct',true,'own_money',true,'pair_id','pair-m4','direct_role','sell')),
+        '[]'::jsonb, null, 'cmd-pair-m4', 'direct trade', 'partner smuggled in')`);
+    } catch { refused = true; }
+    if (!refused) throw new Error("a partner's custody funded a direct trade");
+  });
+
+  check("deleting one seller's leg cannot leave the rest standing", () => {
+    // The trigger that stops half a direct trade being alive had to learn the new shape too.
+    // Without it a three-row trade would be refused outright; with it wrong, a leg could be
+    // retired and the sale would still claim to have bought what it sold.
+    let refused = false;
+    try {
+      psql(`update public.txs set deleted = true where id='pair-m1-b0'`);
+    } catch { refused = true; }
+    if (!refused) throw new Error("one purchase was retired and the sale was left standing");
+    const still = psql(`select count(*)::text from public.txs
+                          where pair_id='pair-m1' and not deleted`).trim();
+    if (still !== "4") throw new Error(`the trade now has ${still} live rows`);
+  });
+
   // The whole point of the type: the money never leaves the owner's hands, so no partner may be
   // named on it and no partner balance may move because of it.
   mustFail("a direct trade cannot name a partner",
