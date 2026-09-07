@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, ArrowLeft, CheckCircle2, CircleGauge, Inbox, RefreshCw, ShieldAlert } from "lucide-react";
-import { loadActionInbox, safeInboxAction } from "../../services/operationalControl";
+import { loadActionInbox, loadIntegrityCenter, safeInboxAction } from "../../services/operationalControl";
 import { userFacingServiceError } from "../../services/userFacingError";
 import "./operational-centers.css";
 

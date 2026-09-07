@@ -59,4 +59,8 @@ revoke all on function public.sarraf_action_inbox_v3(integer) from public, anon;
 grant execute on function public.sarraf_action_inbox_v3(integer) to authenticated;
 comment on function public.sarraf_action_inbox_v3(integer) is
   'Bounded owner/staff read queue. Returned actions are navigation only; mutations use command RPCs.';
+
+grant create on schema public to sarraf_definer;
+alter function public.sarraf_action_inbox_v3(integer) owner to sarraf_definer;
+revoke create on schema public from sarraf_definer;
 commit;
