@@ -39,3 +39,31 @@ not called complete because its code exists; the status below names the evidence
 
 The next implementation batch is the receipt Command Center: one clear ready/attention/archive
 workflow, batch-safe selection, and direct actions without exposing OCR internals on daily cards.
+
+## Batch 2 — Transaction money timeline
+
+**Status:** Implemented on the transaction-money-timeline branch; pending PR review.
+
+### Acceptance criteria
+
+- Transaction details show a readable chronological sequence for creation, pending/settled payment,
+  and authorized operational money movements.
+- Customer and partner views use only the transaction milestones already visible to that portal;
+  they do not receive ledger rows, profit, commissions, unrelated parties, or raw payloads.
+- No accounting, ledger, tenant-isolation, role-boundary, or RPC behavior was changed.
+
+### Evidence
+
+- `src/services/transactionTimeline.js` derives a minimal timeline from the already-authorized
+  transaction and (owner-only) ledger rows.
+- `test/transactionTimeline.test.js` covers chronology, transaction scoping, and portal redaction.
+- `npm run verify:source` passed: 391 tracked files, 128 migrations, and 4 service-key routes.
+- The focused timeline tests passed when the full Node test command reached them: 3 passing tests.
+- `git diff --check` passed.
+
+### Limitations
+
+- The package installation/build could not be completed in this environment because declared npm
+  dependencies were absent and `npm install` did not finish within the available run.
+- The broader test command also has pre-existing environment failures in API tests that import
+  `@supabase/supabase-js`, plus one Windows absolute-path assumption in an existing i18n test.
