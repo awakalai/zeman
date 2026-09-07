@@ -55,11 +55,6 @@ proof remains pending production credentials.
   stable user-facing groups.
 - Existing multilingual labels, direct receipt focus, and query-string-safe navigation remain
   intact.
-=======
-**Status:** Implemented in the merged PR #147; local source verification passed. Database/browser
-proof remains pending production credentials.
->>>>>>> origin/main
-
 ### Evidence
 
 - `src/services/operationalControl.js` contains bounded inbox/search derivation and
