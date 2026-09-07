@@ -11,6 +11,7 @@ import {
 } from "../../services/debtRegister";
 import "./debt-center.css";
 import { errorText } from "../../services/userFacingError";
+import { debtReminderWhatsapp } from "../../services/whatsapp.js";
 
 const COPY = {
   ku: {
@@ -29,6 +30,8 @@ const COPY = {
     voucher: "پسووڵە", pickTwo: "دوو قەرز هەڵبژێرە بۆ دانانەوە",
     reasonHint: (n) => `لانیکەم ${n} پیت`,
     settle: "سفرکردنەوە", remind: "بیرخستنەوە", amount: "بڕ", place: "شوێن", cash: "کاش",
+    whatsapp: "بە واتساپ",
+    whatsappNoPhone: "ژمارەی مۆبایلی ئەم کەسە نەنووسراوە، بۆیە واتساپ ناکرێتەوە",
     settleAll: "هەموو ئەوەی ماوە", settleDone: "قەرزەکە دایەوە", remindDone: "بیرخستنەوەکە نێردرا",
     settleHint: "پارەکە بەڕاستی دەجوڵێت — بەخشینی قەرز شتێکی ترە",
     remindHint: "ئەم کەسە ئاگادار دەکرێتەوە کە ئەوەندەی لەسەرە",
@@ -50,6 +53,8 @@ const COPY = {
     voucher: "Voucher", pickTwo: "Select two debts to offset",
     reasonHint: (n) => `at least ${n} characters`,
     settle: "Settle", remind: "Remind", amount: "Amount", place: "Place", cash: "Cash",
+    whatsapp: "By WhatsApp",
+    whatsappNoPhone: "This person has no phone number saved, so WhatsApp cannot open",
     settleAll: "All that is left", settleDone: "The debt was paid", remindDone: "Reminder sent",
     settleHint: "The money really moves — writing a debt off is a different thing",
     remindHint: "They are told what is still outstanding",
@@ -71,6 +76,8 @@ const COPY = {
     voucher: "سند", pickTwo: "اختر دينين للمقاصّة",
     reasonHint: (n) => `${n} حرفاً على الأقل`,
     settle: "تسديد", remind: "تذكير", amount: "المبلغ", place: "المكان", cash: "نقد",
+    whatsapp: "عبر واتساب",
+    whatsappNoPhone: "لا يوجد رقم هاتف محفوظ لهذا الشخص، لذا لا يمكن فتح واتساب",
     settleAll: "كل ما تبقّى", settleDone: "تم تسديد الدين", remindDone: "أُرسل التذكير",
     settleHint: "المال ينتقل فعلاً — إعدام الدين شيء آخر",
     remindHint: "يُبلَّغ بما لا يزال مستحقاً عليه",
@@ -95,7 +102,9 @@ function CurrencyTotals({ totals, tone }) {
   );
 }
 
-export function DebtCenter({ client, lang = "ku", partyId = null, nameOf = (id) => id, canAct = false, flash }) {
+export function DebtCenter({ client, lang = "ku", partyId = null, nameOf = (id) => id,
+                             phoneOf = () => null, businessName = null,
+                             canAct = false, flash }) {
   const copy = COPY[localeKey(lang)];
   const [state, setState] = useState("loading");
   const [debts, setDebts] = useState([]);
@@ -344,6 +353,28 @@ export function DebtCenter({ client, lang = "ku", partyId = null, nameOf = (id) 
                                 {copy.remind}
                               </button>
                             )}
+                            {/* «دوگمەی ئاگاداری قەرز بە یەک کلیک... WhatsApp بە پەیامێکی پڕ
+                              * و ئامادە بکاتەوە.» Nothing is sent from here and nothing can
+                              * be: it is a link, and opening it is something the person does.
+                              * «بەبێ کلیکی خاوەن/کارمەند هیچ WhatsApp ـێک خۆکار مەبنێرە.»
+                              *
+                              * An absent number hides the button rather than offering a dead
+                              * one — wa.me with a number it does not know lands on "not on
+                              * WhatsApp", which reads as the customer's fault and is not. */}
+                            {d.debtorType !== "zeman" && (() => {
+                              const wa = debtReminderWhatsapp(d, {
+                                phone: phoneOf(d.debtorId), lang,
+                                debtorName: nameOf(d.debtorId), businessName,
+                              });
+                              return wa ? (
+                                <a href={wa.href} target="_blank" rel="noopener noreferrer"
+                                   className="debt-action" title={wa.message.split("\n")[0]}>
+                                  {copy.whatsapp}
+                                </a>
+                              ) : (
+                                <span className="debt-card-note">{copy.whatsappNoPhone}</span>
+                              );
+                            })()}
                             <button type="button" onClick={() => { setAction({ kind: "write_off", debtId: d.id }); setReason(""); }}>
                               {copy.writeOff}
                             </button>

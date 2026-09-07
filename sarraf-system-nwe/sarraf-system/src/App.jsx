@@ -3586,7 +3586,17 @@ export default function App() {
             {page === "integrity" && <div className="mt-4"><DeferredPanel><FaultList client={supabase} lang={lang} /></DeferredPanel></div>}
             {page === "export-audit" && <DeferredPanel><ExportAuditCenter client={supabase} lang={lang} /></DeferredPanel>}
             {page === "debt-center" && <DeferredPanel><DebtCenter client={supabase} lang={lang}
-              nameOf={(id) => usr(id).name} canAct={isAdmin} flash={flash} /></DeferredPanel>}
+              nameOf={(id) => usr(id).name}
+              // «WhatsApp بە پەیامێکی پڕ و ئامادە بکاتەوە» needs a number to write to. Read
+              // from the same record the name comes from, so a customer whose number was never
+              // entered simply has no WhatsApp button rather than a broken one.
+              phoneOf={(id) => usr(id).phone || null}
+              // The name that signs the message. BRAND.name, not a settings key: there is no
+              // per-business name in the loaded data, and reaching for one that does not exist
+              // would have quietly signed every reminder «— ZEMAN» while looking as though it
+              // read the business's own name.
+              businessName={BRAND.name}
+              canAct={isAdmin} flash={flash} /></DeferredPanel>}
             {page === "receipt-review" && <DeferredPanel><ReceiptReviewWorkspace client={supabase} lang={lang}
               actorId={profile?.id || null} flash={flash}
               signedUrlFor={async (path) => {
