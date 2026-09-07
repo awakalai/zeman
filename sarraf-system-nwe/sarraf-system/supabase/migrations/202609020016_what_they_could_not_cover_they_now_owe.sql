@@ -131,4 +131,22 @@ $$;
 comment on function public.sarraf_take_sale_from_vault(text,text,text,numeric,text,text,timestamptz) is
   'کاتێک کڕیارێک شتێک دەکڕێت، ئەوەندەی لە قاسەی خۆیدا هەیە لێی دەبردرێت — نە زیاتر — و ماوەکە دەبێتە قەرز.';
 
+-- ── The owner of the function, which 202609020014 forgot ────────────────────────────────────
+--
+-- It is SECURITY DEFINER, so it runs as whoever owns it, and nothing said who that was — which
+-- left it owned by postgres, a role that ignores every row-level security policy there is. A
+-- function that writes to vaults, the ledger, the journal and now the debt register, running as
+-- a role no policy applies to, is exactly what verify:isolation exists to refuse, and it
+-- refused it: "these run as a role that ignores every policy".
+--
+-- sarraf_definer is a role policies still apply to. Every other definer function in this system
+-- is owned by it, and this one should have been from the start.
+revoke all on function public.sarraf_take_sale_from_vault(text,text,text,numeric,text,text,timestamptz)
+  from public, anon, authenticated;
+
+grant create on schema public to sarraf_definer;
+alter function public.sarraf_take_sale_from_vault(text,text,text,numeric,text,text,timestamptz)
+  owner to sarraf_definer;
+revoke create on schema public from sarraf_definer;
+
 commit;
