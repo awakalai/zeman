@@ -3419,6 +3419,162 @@ try {
       if (!refused) throw new Error("an account paid out money it did not have");
     });
 
+    // ── «هەقی ئەم ئیشە... وە بۆ چ کەسێکی دەکەم» ─────────────────────────────────────────────
+    //
+    // The shape the owner actually described: the same amount out and in, and the earning is a
+    // figure they type rather than a difference between two prices. 202609020005 had written
+    // "There is no fee on the side" into the migration history; these are what that sentence
+    // being withdrawn has to mean in behaviour.
+    const feeOn = (txId) => Number(psql(
+      `select coalesce(sum(amount),0)::text from public.ledger
+        where tx_id='${txId}' and type='commission'`).trim());
+    const forWhom = (txId) => psql(
+      `select coalesce(cp_id,'nobody') from public.txs where id='${txId}'`).trim();
+
+    check("the same amount out and in still earns what the owner named", () => {
+      const before = earnedInto("acc-4100");
+      const cashBefore = safeIqd();
+      psql(`select public.sarraf_commission_trade('cmx-fib','iqd',40000,null,'iqd',40000,
+              'هەمان بڕ','commission:cmx-flat-with-fee',700,null,'cust-1')`);
+      const tx = psql(`select id from public.txs where note='هەمان بڕ' order by date desc limit 1`).trim();
+      // The movement is equal on both sides, which under the old model would be an earning of
+      // nothing at all.
+      const moved = Number(psql(
+        `select coalesce(sum(amount),0)::text from public.ledger
+          where tx_id='${tx}' and type in ('commission_out','commission_in')`).trim());
+      if (moved !== 0) throw new Error(`the two sides differ by ${moved}, and they were named equal`);
+      if (feeOn(tx) !== 700) throw new Error(`the fee recorded is ${feeOn(tx)}, expected 700`);
+      if (earnedInto("acc-4100") - before !== 700) {
+        throw new Error(`the books earned ${earnedInto("acc-4100") - before}, expected 700`);
+      }
+      if (safeIqd() - cashBefore !== 40700) {
+        throw new Error(`cash moved ${safeIqd() - cashBefore}, expected 40000 plus the 700 fee`);
+      }
+    });
+
+    check("and it says who the work was done for", () => {
+      const tx = psql(`select id from public.txs where note='هەمان بڕ' order by date desc limit 1`).trim();
+      if (forWhom(tx) !== "cust-1") throw new Error(`the trade was recorded for ${forWhom(tx)}`);
+    });
+
+    check("a trade done for nobody in particular is still allowed", () => {
+      // «ئاماژە بەوەش بکەم» is a thing the owner may do, not a thing they must do.
+      psql(`select public.sarraf_commission_trade('cmx-fib','iqd',5000,null,'iqd',5000,
+              'بێ کەس','commission:cmx-fee-no-party',100)`);
+      const tx = psql(`select id from public.txs where note='بێ کەس' order by date desc limit 1`).trim();
+      if (forWhom(tx) !== "nobody") throw new Error(`somebody was named: ${forWhom(tx)}`);
+      if (feeOn(tx) !== 100) throw new Error(`the fee recorded is ${feeOn(tx)}`);
+    });
+
+    check("naming no fee at all earns nothing, and is not an error", () => {
+      const before = earnedInto("acc-4100");
+      psql(`select public.sarraf_commission_trade('cmx-fib','iqd',3000,null,'iqd',3000,
+              'بێ هەقی کار','commission:cmx-no-fee-at-all')`);
+      const tx = psql(`select id from public.txs where note='بێ هەقی کار' order by date desc limit 1`).trim();
+      if (feeOn(tx) !== 0) throw new Error(`a trade with no fee recorded ${feeOn(tx)}`);
+      if (earnedInto("acc-4100") - before !== 0) {
+        throw new Error(`the books earned ${earnedInto("acc-4100") - before} on a trade that named no fee`);
+      }
+    });
+
+    check("a fee below zero is refused", () => {
+      let refused = false;
+      try {
+        psql(`select public.sarraf_commission_trade('cmx-fib','iqd',1000,null,'iqd',1000,
+                'هەقی کاری خوار سفر','commission:cmx-fee-negative',-5)`);
+      } catch { refused = true; }
+      if (!refused) throw new Error("a fee below zero was accepted");
+    });
+
+    check("a fee that is not a number is refused, in words a person can read", () => {
+      // Refusing it is not enough. Without the guard in the command, NaN travelled all the way
+      // to the journal and came back as "cannot post unbalanced journal entry je-cmxfee-cmx…
+      // (debit NaN, credit NaN, lines 2)" — a refusal, and one that section 2 forbids showing
+      // anybody: «هیچ UUID، ناوی table، RPC، stack trace، error code یان زمانی developer
+      // بەکارهێنەر نەبینێت». A fault injection removing the guard left this check green,
+      // because it only asked whether something threw.
+      //
+      // Note for anyone tempted to write `v_fee <> v_fee` again: numeric in PostgreSQL does not
+      // follow IEEE. NaN = NaN is TRUE and NaN sorts above every number, so neither the
+      // self-inequality trick nor a `< 0` test ever fires.
+      let message = null;
+      try {
+        psql(`select public.sarraf_commission_trade('cmx-fib','iqd',1000,null,'iqd',1000,
+                'هەقی کاری نەزانراو','commission:cmx-fee-nan','NaN'::numeric)`);
+      } catch (e) { message = errorDetail(e); }
+      if (message === null) throw new Error("a fee that is not a number was accepted");
+      const leaked = ["journal", "je-", "cmx", "debit", "lines "].filter((t) => message.includes(t));
+      if (leaked.length > 0) {
+        throw new Error(`the refusal shows the reader ${leaked.join(", ")} — ${message}`);
+      }
+    });
+
+    check("a person this business does not know cannot be named", () => {
+      let refused = false;
+      try {
+        psql(`select public.sarraf_commission_trade('cmx-fib','iqd',1000,null,'iqd',1000,
+                'کەسێکی نەناسراو','commission:cmx-unknown-party',10,null,'nobody-at-all')`);
+      } catch { refused = true; }
+      if (!refused) throw new Error("the work was recorded as done for somebody who does not exist");
+    });
+
+    check("a refused fee writes nothing at all", () => {
+      // A refusal that leaves a trade behind is worse than no refusal, because the money moved
+      // and the reason it was refused is nowhere.
+      const left = Number(psql(`select count(*)::text from public.txs
+                                 where note in ('هەقی کاری خوار سفر','هەقی کاری نەزانراو','کەسێکی نەناسراو')`).trim());
+      if (left !== 0) throw new Error(`${left} refused trade(s) were written anyway`);
+    });
+
+    check("the person it was done for is never shown what it earned", () => {
+      // Sections 10 and 16: «قازانجی ZEMAN نەبینێت». cp_id lets them see the transaction, which
+      // is wanted; the fee must not travel with it. It is kept off the row entirely and lives
+      // in the ledger, which ledger_tenant_read does not open to a customer.
+      const onRow = psql(`select coalesce(string_agg(column_name, ','), 'none')
+                            from information_schema.columns
+                           where table_schema='public' and table_name='txs'
+                             and column_name ~ 'fee|commission'`).trim();
+      if (onRow.includes("commission_fee")) {
+        throw new Error(`the fee is stored on the transaction row the customer can read: ${onRow}`);
+      }
+      // And measured, not argued: the customer whose work it was, asked as themselves with
+      // row-level security applied, sees none of the earning rows.
+      psql(`update public.app_users
+               set auth_id='cff00000-0000-0000-0000-0000000000c1' where id='cust-1'`);
+      // Later fixtures in this file pin auth.uid() to a fixed administrator so their own
+      // commands run as one. Probing as somebody else means putting the session-reading
+      // version back first, or the probe silently answers as the administrator — which it
+      // did, and reported this check green while measuring nothing. And it must be put back
+      // afterwards, or every check that follows fails with "not authorized" — which is what
+      // happened on the first attempt at this.
+      psql(`create table if not exists zz_authuid_backup as
+              select pg_get_functiondef('auth.uid'::regproc) as def`);
+      psql(`create or replace function auth.uid() returns uuid language sql stable
+            as $fn$ select nullif(current_setting('request.jwt.claim.sub', true),'')::uuid $fn$`);
+      const whoami = asUser('cff00000-0000-0000-0000-0000000000c1',
+        `select public.my_app_id()||'|'||public.is_admin()::text`);
+      const seen = asUser('cff00000-0000-0000-0000-0000000000c1',
+        `select count(*)::text from public.ledger where type='commission'`);
+      const theirs = asUser('cff00000-0000-0000-0000-0000000000c1',
+        `select count(*)::text from public.txs where cp_id='cust-1'`);
+      const restore = () => {
+        psql(`do $r$ declare d text; begin
+                select def into d from zz_authuid_backup limit 1;
+                if d is not null then execute d; end if;
+              end $r$`);
+        psql(`drop table if exists zz_authuid_backup`);
+      };
+      try {
+        if (whoami !== "cust-1|false") {
+          throw new Error(`the probe is running as ${whoami}, not as the customer`);
+        }
+        if (seen !== "0") throw new Error(`a customer can read ${seen} commission earning row(s)`);
+        if (Number(theirs) < 1) {
+          throw new Error("the customer cannot see the trade at all, so hiding the fee proves nothing");
+        }
+      } finally { restore(); }
+    });
+
     check("the same money in the same place on both sides is refused", () => {
       let refused = false;
       try {

@@ -282,10 +282,17 @@ inferred from a diff.
   currency, which was the cashbox exactly while nothing had ever named an account, and would
   have let a cash withdrawal be funded by money sitting in a bank the moment one did. On the
   live data both readings return the same number for every currency.
-- **`202609020005` — `sarraf_service_transaction` dropped.** It modelled a principal plus a
-  separate fee, which the owner said was a misreading. Only the command is dropped. Every ledger
-  row, journal entry and audit line any past service wrote stays where it is and keeps
-  reconciling.
+- **`202609020005` — `sarraf_service_transaction` dropped, and one sentence of it withdrawn.**
+  It modelled a principal passing through an account plus a separate fee, and the owner said the
+  model was a misreading. Only the command is dropped. Every ledger row, journal entry and audit
+  line any past service wrote stays where it is and keeps reconciling.
+  **The migration also wrote "There is no fee on the side", and that part is now wrong.** The
+  owner has since said the two sides of a commission trade are equal and the earning is a figure
+  they type in: «لە کوێوە دەردەچیت و بۆ کوێ دەچێت یەکسانە بڕەکەی، بەڵام دەبێت چوارگۆشەیەکی تر
+  هەبێت، کە بڕێکی تێدا دابنێم، هەقی ئەم ئیشە». `202609020017` adds that box, and the person it
+  was done for. Both shapes are now true — a commission trade may earn on the spread, or on a
+  stated fee, or on neither — and what was wrong was declaring one of them impossible.
+  `202609020005` itself is untouched; it is applied, and only its claim is withdrawn.
 - **`202609020006` — a debt can be paid.** The register could offset and forgive; it could not
   record money actually moving. Settlement goes through `debt_settlements`, which already owns
   the debt's balance and status, so there is one path for a payment and not two.
