@@ -81,7 +81,7 @@ for (const name of [
   "sarraf_control_snapshot", "sarraf_read_model_snapshot", "sarraf_runtime_contract",
   "sarraf_self_profile", "sarraf_reconciliation_report", "sarraf_system_health",
   "sarraf_set_maintenance_mode", "sarraf_tx_history_page", "sarraf_report_range",
-  "sarraf_inventory_snapshot", "sarraf_action_inbox_v2", "sarraf_integrity_center_v2",
+  "sarraf_inventory_snapshot", "sarraf_action_inbox_v2", "sarraf_action_inbox_v3", "sarraf_integrity_center_v2",
 ]) rpcNames.add(name);
 for (const name of [...rpcNames].sort()) {
   const definition = new RegExp(`create\\s+(?:or\\s+replace\\s+)?function\\s+public\\.${name}\\s*\\(`, "i");

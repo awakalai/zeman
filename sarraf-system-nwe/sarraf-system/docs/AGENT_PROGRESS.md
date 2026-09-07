@@ -35,12 +35,23 @@ not called complete because its code exists; the status below names the evidence
 - Browser proof for every external portal and the missing PDF-dependent requirements remains
   separate work.
 
-## Next batch
+## Batch 2 — Smart Work Inbox and Universal Search
 
-The next implementation batch is the receipt Command Center: one clear ready/attention/archive
-workflow, batch-safe selection, and direct actions without exposing OCR internals on daily cards.
+**Status:** Implemented in the merged PR #147; local source verification passed. Database/browser
+proof remains pending production credentials.
 
-## Batch 2 — Document, health, and offline safety
+### Evidence
+
+- `src/services/operationalControl.js` contains bounded inbox/search derivation and
+  `test/globalSearch.test.js` and `test/operationalCenters.test.js` cover the behavior.
+- `supabase/migrations/202609070001_smart_work_inbox.sql` adds the authenticated read RPC.
+- `npm run verify:source` passed.
+
+### Limits
+
+- Live RPC and browser proof require the project's Supabase credentials.
+
+## Batch 3 — Document, health, and offline safety
 
 **Status:** Implemented in this branch; database and PDF-dependent work remains blocked.
 

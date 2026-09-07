@@ -3,6 +3,21 @@ export function safeCommand(command) {
   return command && command.kind === "navigation" && typeof command.path === "string" && /^#\/[^?#]+$/.test(command.path);
 }
 
+export function safeInboxAction(item) {
+  const action = item?.action || (item?.path ? { kind: "navigation", path: item.path } : null);
+  return safeCommand(action) ? action : null;
+}
+
+export const SEARCH_GROUPS = Object.freeze([
+  "Command", "customer", "partner", "transaction", "receipt", "intake", "batch", "currency",
+]);
+
+export function groupSearchResults(results = []) {
+  return SEARCH_GROUPS
+    .map((type) => ({ type, results: results.filter((item) => item?.type === type) }))
+    .filter((group) => group.results.length);
+}
+
 export async function operationalSearch(client, query, { cursor = null, limit = SEARCH_LIMIT } = {}) {
   const q = String(query || "").normalize("NFKC").trim().slice(0, 80);
   if (q.length < 2) return { results: [], nextCursor: null };
@@ -28,7 +43,7 @@ async function loadOperationalCenter(client, rpc, limit = OPERATIONAL_CENTER_LIM
 }
 
 export function loadActionInbox(client, options = {}) {
-  return loadOperationalCenter(client, "sarraf_action_inbox_v2", options.limit);
+  return loadOperationalCenter(client, "sarraf_action_inbox_v3", options.limit);
 }
 
 export function loadIntegrityCenter(client, options = {}) {
