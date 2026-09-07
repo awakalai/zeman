@@ -4015,13 +4015,80 @@ try {
     });
 
     check("it takes what they have and never more", () => {
-      // 350 left, and they buy something for 900. They pay 350; the rest is not their money to
-      // pay with, and a vault must never be overdrawn into a debt nobody agreed to.
+      // 350 left, and they buy something for 900. They pay 350 and the vault stops at zero:
+      // a vault is never overdrawn, whatever the rest of the sale does.
       const held = vaultOf("cust-safe", "USD");
       sellTo("tx-vault-over", "cust-safe", 4500, 900);
       const after = vaultOf("cust-safe", "USD");
       if (after !== 0) throw new Error(`they were left holding ${after}, expected 0`);
       if (held <= 0) throw new Error("they had nothing to pay with, so this proves nothing");
+    });
+
+    // ── «ماوەکە ببێتە قەرز» ────────────────────────────────────────────────────────────────
+    //
+    // The sale above is the whole shape of it: they held 350, the sale was 900, so 550 was
+    // never paid. Before this the 550 simply vanished — the settlement row had already
+    // debited cash for the full 900 and nothing said anybody owed the difference.
+    const shortDebt = (txId) => psql(
+      `select coalesce(string_agg(
+                 debtor_id||'|'||currency||'|'||outstanding_principal::text||'|'||status::text, ','),
+               'none')
+         from public.debts where source_transaction_id='${txId}'`).trim();
+
+    check("what their own money could not cover, they now owe", () => {
+      const row = shortDebt("tx-vault-over");
+      if (row === "none") throw new Error("the shortfall opened no debt at all");
+      const [who, cur, amount, status] = row.split("|");
+      if (who !== "cust-safe") throw new Error(`the debt is against ${who}`);
+      if (cur !== "USD") throw new Error(`the debt is in ${cur}, and the sale was paid in USD`);
+      if (Number(amount) !== 550) throw new Error(`they owe ${amount}, expected 550`);
+      if (status !== "open") throw new Error(`the debt opened as ${status}`);
+    });
+
+    check("the money they could not pay is owed, not counted as cash that arrived", () => {
+      // The half that is easy to get wrong. Opening a debt and leaving the cash debit standing
+      // would say the business both received the 900 and is owed 550 of it.
+      const received = Number(psql(
+        `select coalesce(round(sum(case when l.side='debit' then l.amount else -l.amount end),2),0)::text
+           from public.journal_lines l join public.journal_entries e on e.id=l.entry_id
+          where l.account_id='acc-1000' and l.currency='USD' and e.status='posted'
+            and e.transaction_id='tx-vault-over'`).trim());
+      if (received !== 0) {
+        throw new Error(`the books say ${received} of cash arrived on a sale nothing was paid on`);
+      }
+      const owed = Number(psql(
+        `select coalesce(round(sum(case when l.side='debit' then l.amount else -l.amount end),2),0)::text
+           from public.journal_lines l join public.journal_entries e on e.id=l.entry_id
+          where l.account_id='acc-1200' and l.currency='USD' and e.status='posted'
+            and e.transaction_id='tx-vault-over'`).trim());
+      if (owed !== 550) throw new Error(`the receivable is ${owed}, expected 550`);
+    });
+
+    check("a customer who covers it in full owes nothing", () => {
+      // The counterweight. If every sale from a vault opened a debt this would still pass the
+      // two checks above, and be badly wrong.
+      psql(`insert into public.app_users(id,name,role,tenant_id)
+            values ('cust-rich','Covered Customer','customer','t-sarkhel') on conflict do nothing`);
+      psql(`select public.sarraf_customer_vault_move('cust-rich','USD',400,'in',1,
+              'پارەی خۆی','vault:enough-to-cover-it')`);
+      sellTo("tx-vault-covered", "cust-rich", 500, 100);
+      if (vaultOf("cust-rich", "USD") !== 300) {
+        throw new Error(`they were left holding ${vaultOf("cust-rich", "USD")}, expected 300`);
+      }
+      const row = shortDebt("tx-vault-covered");
+      if (row !== "none") throw new Error(`a customer who paid in full was given a debt: ${row}`);
+    });
+
+    check("a customer with no money of their own is given no debt either", () => {
+      // Section 11 read at its most literal would make every sale to every customer a debt,
+      // because a balance of zero is less than any sale. Section 12 says the payment route is
+      // chosen, and that chooser does not exist yet, so the narrow reading is what is built:
+      // a shortfall is only a shortfall when some of their own money was actually used.
+      psql(`insert into public.app_users(id,name,role,tenant_id)
+            values ('cust-novault-2','No Vault Two','customer','t-sarkhel') on conflict do nothing`);
+      sellTo("tx-vault-novault", "cust-novault-2", 500, 100);
+      const row = shortDebt("tx-vault-novault");
+      if (row !== "none") throw new Error(`a customer who never had a vault was given a debt: ${row}`);
     });
 
     check("a customer with no money of theirs is settled the way they always were", () => {
