@@ -77,6 +77,18 @@ jobs:
             exit 1
           fi
 
+          # A secret that is not a URL at all is a password.
+          #
+          # Asking somebody to create a second secret under a different name, on a phone, and
+          # then failing the run because they put the right value under the wrong name, is a
+          # failure of this file and not of theirs. If SUPABASE_DB_URL carries no scheme and no
+          # '@', it is read as the password itself and the parsing below is skipped — which is
+          # exactly the shape SUPABASE_DB_PASSWORD wants anyway.
+          case "$SECRET" in
+            *://*|*@*) : ;;
+            ?*) PLAIN_PASSWORD=${PLAIN_PASSWORD:-$SECRET}; SECRET= ;;
+          esac
+
           # Everything between the first ':' after the scheme and the last '@' is the password,
           # however many '@' it contains.
           body=${SECRET#postgresql://}
@@ -115,6 +127,11 @@ jobs:
           ref=$(printf '%s' "$host" | sed -nE 's#^db\.([a-z0-9]+)\.supabase\.co$#\1#p')
           [ -n "$ref" ] || ref=$(printf '%s' "$user" | sed -nE 's#^postgres\.([a-z0-9]+)$#\1#p')
           [ -n "$ref" ] || ref=$PROJECT_REF
+          # And a last resort that is not a secret at all: the project reference is in the app's
+          # own Supabase URL and ships in every built bundle. Knowing it here means a password on
+          # its own is enough to run this — no second secret, no repository variable, nothing
+          # else to find. SUPABASE_PROJECT_REF above still wins if the project ever moves.
+          [ -n "$ref" ] || ref=ohnwrnsyqiobxskerttc
 
           # What was read out of the secret, so a mistyped secret is visible rather than inferred.
           # The password itself is never printed — only whether one arrived, and from where. Its
