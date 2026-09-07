@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   moveCustomerVault, applyVaultToDebt, creditDebtToVault, previewDebtWaterfall,
   requireRateFor, summarizeDebts, agingBucketOf, loadDebts, loadTrialBalance,
-  creditPartnerFunds, disbursePartnerFunds, loadDailyAccountingRates,
+  creditPartnerFunds, disbursePartnerFunds, loadDailyAccountingRates, commissionTrade,
 } from "../src/services/accounting.js";
 
 const clientWith = (impl = {}) => ({
@@ -188,4 +188,68 @@ test("daily accounting rates take the newest immutable snapshot per currency", a
   assert.deepEqual(rates.CNY, { value: 7.25, effectiveDate: "2026-08-12", version: 2 });
   assert.equal(rates.IQD.value, 1410);
   assert.equal(rates.USD.value, 1);
+});
+
+
+// ── «هەقی ئەم ئیشە... وە بۆ چ کەسێکی دەکەم» ───────────────────────────────────────────────────
+//
+// The contract between the screen and the command. 202609020005 had written "There is no fee on
+// the side" into the migration history and 202609020017 withdrew it; these hold the withdrawal
+// in place from the browser's side.
+
+test("a commission trade carries the fee and the person it was for", async () => {
+  const c = clientWith({ rpc: { data: { transaction_id: "cmx1", code: 9 }, error: null } });
+  await commissionTrade(c, {
+    fromAccountId: "acc-fib", fromCurrencyId: "iqd", fromAmount: 40000,
+    toAccountId: null, toCurrencyId: "iqd", toAmount: 40000,
+    commandKey: "commission:with-a-fee-of-700",
+    feeAmount: 700, feeAccountId: null, forPartyId: "cust-1",
+  });
+  const { args } = c.calls[0];
+  assert.equal(args.p_fee_amount, 700);
+  assert.equal(args.p_fee_account_id, null);
+  assert.equal(args.p_for_party_id, "cust-1");
+  // The movement itself is untouched by the fee: equal on both sides is the shape the owner
+  // described, and it must reach the server as they typed it.
+  assert.equal(args.p_from_amount, 40000);
+  assert.equal(args.p_to_amount, 40000);
+});
+
+test("a commission trade with no fee and nobody named sends neither", async () => {
+  const c = clientWith();
+  await commissionTrade(c, {
+    fromCurrencyId: "iqd", fromAmount: 100, toCurrencyId: "iqd", toAmount: 110,
+    commandKey: "commission:no-fee-nobody-named",
+  });
+  const { args } = c.calls[0];
+  assert.equal(args.p_fee_amount, 0);
+  assert.equal(args.p_fee_account_id, null);
+  assert.equal(args.p_for_party_id, null);
+});
+
+test("the fee is sent as typed, not rounded or capped by the screen", async () => {
+  // «هیچ money amount یان calculated total ـێک لە client بەبێ server verification
+  // باوەڕپێنەکرێت.» The reverse of that rule also holds: a screen that quietly tidies a number
+  // before sending it has decided something the books never agreed to.
+  const c = clientWith();
+  await commissionTrade(c, {
+    fromCurrencyId: "iqd", fromAmount: 100, toCurrencyId: "iqd", toAmount: 100,
+    commandKey: "commission:an-awkward-fee", feeAmount: 0.123456789,
+  });
+  assert.equal(c.calls[0].args.p_fee_amount, 0.123456789);
+});
+
+test("what the command answers about the fee reaches the caller", async () => {
+  const c = clientWith({ rpc: { data: {
+    transaction_id: "cmx2", code: 10,
+    from: { name: "FIB", amount: 40000 }, to: { name: "کاش", amount: 40000 },
+    fee: { amount: 700, currency: "iqd", account: null, name: null },
+    for: { id: "cust-1", name: "کڕیاری یەکەم" },
+  }, error: null } });
+  const answer = await commissionTrade(c, {
+    fromCurrencyId: "iqd", fromAmount: 40000, toCurrencyId: "iqd", toAmount: 40000,
+    commandKey: "commission:answer-carries-the-fee",
+  });
+  assert.equal(answer.fee.amount, 700);
+  assert.equal(answer.for.name, "کڕیاری یەکەم");
 });

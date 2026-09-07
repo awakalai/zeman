@@ -13,8 +13,15 @@ import "./debt-center.css";
  *   «١٠٠ هەزار دینار ئێف ئایبی دەفرۆشم بە ١٠١ هەزار دیناری کاش، لە بەشی کاش زیاد دەبێت و
  *    لە بەشی ئێف ئایبی کەم دەکات.»
  *
- * Two places and two amounts, and the difference between them is the earning. Not a principal
- * with a fee on the side — that was the misreading this replaces.
+ * Two places and two amounts. The difference between them may be the earning, and so may a
+ * figure the owner types in:
+ *
+ *   «لە کوێوە دەردەچیت و بۆ کوێ دەچێت یەکسانە بڕەکەی، بەڵام دەبێت چوارگۆشەیەکی تر هەبێت،
+ *    کە بڕێکی تێدا دابنێم، هەقی ئەم ئیشە... وە ئاماژە بەوەش بکەم کە بۆ چ کەسێکی دەکەم.»
+ *
+ * So the screen offers both and neither is required. A trade may earn on the spread, on a
+ * stated fee, on both, or on nothing at all. 202609020005 once wrote "There is no fee on the
+ * side" into the migration history; 202609020017 withdrew it.
  *
  * ── Why the earning is not shown as one number here ──────────────────────────────────────────
  *
@@ -40,6 +47,10 @@ const COPY = {
     loss: "ئەمە زەرەرە، نەک خێر — دڵنیایت؟",
     ownMoney: "قاسەی تایبەتی خۆم",
     overOwn: "ئەم مامەڵەیە لە پارەی خۆت زیاترە — خێرەکەی هەمووی هی تۆیە بەڵام پارەکەی هی هەمووانە",
+    fee: "هەقی ئەم ئیشە", feeWhere: "هەقی کار بۆ کوێ چوو", feeFor: "ئیشەکە بۆ کێ کرا",
+    nobody: "بۆ کەسێکی دیاریکراو نییە",
+    feeHint: "بەتاڵ بهێڵەرەوە ئەگەر هەقی کارت نەگرتووە",
+    feePrivate: "ئەو کەسەی ناوی دەنووسیت مامەڵەکە دەبینێت، بەڵام هەقی کارەکە نا",
   },
   en: {
     title: "Commission trade",
@@ -55,6 +66,10 @@ const COPY = {
     loss: "This is a loss, not an earning — is that right?",
     ownMoney: "My own safe",
     overOwn: "This is more than your own money — the earning is all yours but the money is everyone's",
+    fee: "The fee for this work", feeWhere: "Where the fee went", feeFor: "Who the work was for",
+    nobody: "Nobody in particular",
+    feeHint: "Leave it empty if you charged nothing",
+    feePrivate: "The person you name sees the trade, but never the fee",
   },
   ar: {
     title: "معاملة عمولة",
@@ -70,6 +85,10 @@ const COPY = {
     loss: "هذه خسارة وليست ربحًا — هل هذا صحيح؟",
     ownMoney: "خزنتي الخاصة",
     overOwn: "هذه المعاملة تتجاوز مالك الخاص — الربح كله لك لكن المال للجميع",
+    fee: "أجر هذا العمل", feeWhere: "أين ذهب الأجر", feeFor: "لمن أُنجز العمل",
+    nobody: "لا أحد بعينه",
+    feeHint: "اتركه فارغًا إن لم تأخذ أجرًا",
+    feePrivate: "الشخص الذي تسميه يرى المعاملة، لكن لا يرى الأجر",
   },
 };
 
@@ -77,7 +96,8 @@ const localeKey = (lang) => (lang === "en" ? "en" : lang === "ar" ? "ar" : "ku")
 const money = (n) => Number(n || 0).toLocaleString("en-US",
   { maximumFractionDigits: 4 });
 
-export function CommissionTrade({ client, lang = "ku", currencies = [], ownMoney = null, onRecorded }) {
+export function CommissionTrade({ client, lang = "ku", currencies = [], ownMoney = null,
+                                  people = [], onRecorded }) {
   const copy = COPY[localeKey(lang)];
   const [state, setState] = useState("loading");
   const [accounts, setAccounts] = useState([]);
@@ -93,6 +113,10 @@ export function CommissionTrade({ client, lang = "ku", currencies = [], ownMoney
   const [toCur, setToCur] = useState(firstCurrency);
   const [toAmount, setToAmount] = useState("");
   const [note, setNote] = useState("");
+  // «هەقی ئەم ئیشە» and «بۆ چ کەسێکی دەکەم». Both optional, both judged on the server.
+  const [feeAmount, setFeeAmount] = useState("");
+  const [feePlace, setFeePlace] = useState("");
+  const [forParty, setForParty] = useState("");
 
   const load = useCallback(async () => {
     setState("loading");
@@ -135,6 +159,18 @@ export function CommissionTrade({ client, lang = "ku", currencies = [], ownMoney
   const overOwn = ownHere !== null && Number(fromAmount) > ownHere + 1e-9;
 
   const placeName = (id) => accounts.find((a) => a.id === id)?.name || copy.cash;
+
+  // The fee is earned in the currency that arrived, because that is the side the business is
+  // left holding — the same rule the command applies, said here so the label is not a guess.
+  const feeValid = feePlace === "" || placesFor(toCur).some((a) => a.id === feePlace);
+  const feeWhere = feeValid ? feePlace : "";
+  const fee = Number(feeAmount);
+  const feeNamed = feeAmount.trim() !== "" && Number.isFinite(fee) && fee > 0;
+  const feeCurrencyName = currencies.find((c) => c.id === toCur)?.code
+    || currencies.find((c) => c.id === toCur)?.name || "";
+  // A person who is not somebody this business knows would be refused by the server; the list
+  // only offers people it does know, so the refusal never has to happen.
+  const namedPerson = people.find((u) => u.id === forParty) || null;
 
   if (state === "loading") return (
     <section className="debt-panel"><p className="debt-empty">
@@ -225,6 +261,34 @@ export function CommissionTrade({ client, lang = "ku", currencies = [], ownMoney
       )}
       {!sameCurrency && <p className="debt-empty">{copy.earningAcross}</p>}
 
+      {/* «دەبێت چوارگۆشەیەکی تر هەبێت، کە بڕێکی تێدا دابنێم، هەقی ئەم ئیشە.» The box the owner
+          asked for. Nothing here is required: a trade the owner did for free is a trade. */}
+      <div className="cashbox-form">
+        <label>{copy.fee}{feeCurrencyName ? ` — ${feeCurrencyName}` : ""}
+          <input type="number" inputMode="decimal" min="0" value={feeAmount}
+                 aria-label={copy.fee} placeholder={copy.feeHint}
+                 onChange={(e) => setFeeAmount(e.target.value)} />
+        </label>
+        <label>{copy.feeWhere}
+          <select value={feeWhere} onChange={(e) => setFeePlace(e.target.value)}
+                  aria-label={copy.feeWhere} disabled={!feeNamed}>
+            <option value="">{copy.cash}</option>
+            {placesFor(toCur).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+          </select>
+        </label>
+        <label>{copy.feeFor}
+          <select value={forParty} onChange={(e) => setForParty(e.target.value)}
+                  aria-label={copy.feeFor}>
+            <option value="">{copy.nobody}</option>
+            {people.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+          </select>
+        </label>
+      </div>
+
+      {/* Said once, where the decision is made: sections 10 and 16 forbid showing a customer
+          what ZEMAN earned, and the fee is deliberately not stored on the transaction row. */}
+      {namedPerson && <p className="debt-empty">{copy.feePrivate}</p>}
+
       <div className="cashbox-form">
         <label>{copy.title}
           <input value={note} onChange={(e) => setNote(e.target.value)} aria-label={copy.title} />
@@ -238,9 +302,15 @@ export function CommissionTrade({ client, lang = "ku", currencies = [], ownMoney
               fromAccountId: from || null, fromCurrencyId: fromCur, fromAmount: Number(fromAmount),
               toAccountId: to || null, toCurrencyId: toCur, toAmount: Number(toAmount),
               note: note.trim() || null,
+              // Sent as typed. A blank box is no fee, not a zero the screen invented, and the
+              // amount is not rounded here — the books decide what a number means.
+              feeAmount: feeNamed ? fee : 0,
+              feeAccountId: feeNamed ? (feeWhere || null) : null,
+              forPartyId: forParty || null,
             });
             setDone(answer);
             setFromAmount(""); setToAmount(""); setNote("");
+            setFeeAmount(""); setFeePlace(""); setForParty("");
             await load();
             if (typeof onRecorded === "function") onRecorded(answer);
           } catch (error) {
@@ -261,6 +331,10 @@ export function CommissionTrade({ client, lang = "ku", currencies = [], ownMoney
             <span className="debt-card-note">
               <CheckCircle2 aria-hidden="true" />{" "}
               {done.from?.name} {money(done.from?.amount)} → {done.to?.name} {money(done.to?.amount)}
+              {Number(done.fee?.amount) > 0 && <>
+                {" — "}{copy.fee}: {money(done.fee.amount)}
+              </>}
+              {done.for?.name && <>{" — "}{copy.feeFor}: {done.for.name}</>}
             </span>
           </div>
         </div>

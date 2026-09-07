@@ -2688,6 +2688,132 @@ try {
     if (Number(profit) !== 10) throw new Error(`direct profit is ${profit}, expected 150 - 140`);
   });
 
+  // ── «لە چەند کەسێکی دەکڕم و بەڵام بە یەک کەسی دەفرۆشم» ─────────────────────────────────────
+  //
+  // The same trade, gathered from several sellers. Three rows or more, one pair, one sale, and
+  // every purchase carrying its own seller and its own price — which is the reason for doing it.
+  const manyToOne = (pair, legs, sale) => {
+    const rows = legs.map((leg, i) => `jsonb_build_object('id','${pair}-b${i}','type','buy',
+      'cp_id','${leg.from}','cur_id','cny','amount',${leg.amount},'rate',${leg.rate},
+      'against_id','usd','total',${(leg.amount * leg.rate).toFixed(10)},'status','completed',
+      'direct',true,'own_money',true,'pair_id','${pair}','direct_role','buy')`);
+    rows.push(`jsonb_build_object('id','${pair}-s','type','sell','cp_id','${sale.to}',
+      'cur_id','cny','amount',${sale.amount},'rate',${sale.rate},'against_id','usd',
+      'total',${(sale.amount * sale.rate).toFixed(10)},'status','completed',
+      'direct',true,'own_money',true,'pair_id','${pair}','direct_role','sell')`);
+    return `public.sarraf_commit_transactions(jsonb_build_array(${rows.join(",")}),
+      '[]'::jsonb, null, 'cmd-${pair}', 'direct trade', 'many sellers, one buyer')`;
+  };
+
+  check("a direct trade may be bought from several people and sold to one", () => {
+    psql(`insert into public.app_users(id,name,role,tenant_id) values
+            ('cust-m1','Seller One','customer','t-sarkhel'),
+            ('cust-m2','Seller Two','customer','t-sarkhel'),
+            ('cust-m3','Seller Three','customer','t-sarkhel'),
+            ('cust-mb','The Buyer','customer','t-sarkhel')
+          on conflict (id) do nothing`);
+    psql(`select ${manyToOne("pair-m1",
+      [{ from: "cust-m1", amount: 400, rate: 0.14 },
+       { from: "cust-m2", amount: 300, rate: 0.145 },
+       { from: "cust-m3", amount: 300, rate: 0.138 }],
+      { to: "cust-mb", amount: 1000, rate: 0.15 })}`);
+    const shape = psql(`select count(*)||'|'||count(*) filter(where type='buy')||'|'||
+                               count(*) filter(where type='sell')||'|'||
+                               count(distinct cp_id)||'|'||
+                               coalesce(bool_and(business_flow='owner_cashbox'),false)::text
+                          from public.txs where pair_id='pair-m1' and not deleted`).trim();
+    if (shape !== "4|3|1|4|true") {
+      throw new Error(`the trade was booked as ${shape}, expected 4 rows, 3 buys, 1 sale, 4 people`);
+    }
+  });
+
+  check("each seller is named on their own leg, at their own price", () => {
+    // «لە چەند کەسێکی دەکڕم» is only worth anything if the books remember which one.
+    const legs = psql(`select string_agg(cp_id||'@'||round(rate,4)::text||'x'||round(amount,0)::text,
+                                        ',' order by cp_id)
+                         from public.txs where pair_id='pair-m1' and type='buy' and not deleted`).trim();
+    if (legs !== "cust-m1@0.1400x400,cust-m2@0.1450x300,cust-m3@0.1380x300") {
+      throw new Error(`the legs were recorded as ${legs}`);
+    }
+  });
+
+  check("the earning counts every purchase, not the first one", () => {
+    // 400 at 0.14 is 56, 300 at 0.145 is 43.50, 300 at 0.138 is 41.40 — 140.90 in all, against
+    // a sale of 150. Pricing the sale against one leg would have called most of the cost profit.
+    const profit = Number(psql(`select profit from public.txs where id='pair-m1-s'`).trim());
+    if (Math.abs(profit - 9.1) > 1e-9) {
+      throw new Error(`the earning is ${profit}, expected 150 - 140.90`);
+    }
+  });
+
+  check("what it sells must be exactly what it bought", () => {
+    // More would be selling something the trade never acquired; less would leave a remainder
+    // with no cost and nowhere to sit.
+    let refused = false;
+    try {
+      psql(`select ${manyToOne("pair-m2",
+        [{ from: "cust-m1", amount: 400, rate: 0.14 }, { from: "cust-m2", amount: 300, rate: 0.14 }],
+        { to: "cust-mb", amount: 900, rate: 0.15 })}`);
+    } catch { refused = true; }
+    if (!refused) throw new Error("it sold 900 having bought 700");
+    if (psql(`select count(*)::text from public.txs where pair_id='pair-m2'`).trim() !== "0") {
+      throw new Error("the refused trade was written anyway");
+    }
+  });
+
+  check("two sales in one direct trade are refused", () => {
+    // «بە یەک کەسی دەفرۆشم» — one buyer. Two would be two trades sharing a cost nobody split.
+    let refused = false;
+    try {
+      psql(`select public.sarraf_commit_transactions(jsonb_build_array(
+        jsonb_build_object('id','pair-m3-b','type','buy','cp_id','cust-m1','cur_id','cny',
+          'amount',1000,'rate',0.14,'against_id','usd','total',140,'status','completed',
+          'direct',true,'own_money',true,'pair_id','pair-m3','direct_role','buy'),
+        jsonb_build_object('id','pair-m3-s1','type','sell','cp_id','cust-mb','cur_id','cny',
+          'amount',500,'rate',0.15,'against_id','usd','total',75,'status','completed',
+          'direct',true,'own_money',true,'pair_id','pair-m3','direct_role','sell'),
+        jsonb_build_object('id','pair-m3-s2','type','sell','cp_id','cust-m2','cur_id','cny',
+          'amount',500,'rate',0.15,'against_id','usd','total',75,'status','completed',
+          'direct',true,'own_money',true,'pair_id','pair-m3','direct_role','sell')),
+        '[]'::jsonb, null, 'cmd-pair-m3', 'direct trade', 'two buyers')`);
+    } catch { refused = true; }
+    if (!refused) throw new Error("a direct trade sold to two people at once");
+  });
+
+  check("a partner's custody cannot be dragged into one", () => {
+    // The rule that made this a separate kind of trade in the first place, restated for the
+    // new shape: the money never leaves the owner's hands, so no partner may be named.
+    let refused = false;
+    try {
+      psql(`select public.sarraf_commit_transactions(jsonb_build_array(
+        jsonb_build_object('id','pair-m4-b1','type','buy','cp_id','cust-m1','cur_id','cny',
+          'amount',500,'rate',0.14,'against_id','usd','total',70,'status','completed',
+          'direct',true,'own_money',true,'pair_id','pair-m4','direct_role','buy'),
+        jsonb_build_object('id','pair-m4-b2','type','buy','cp_id','cust-m2','cur_id','cny',
+          'amount',500,'rate',0.14,'against_id','usd','total',70,'status','completed',
+          'direct',true,'own_money',true,'pair_id','pair-m4','direct_role','buy','partner_id','p-1'),
+        jsonb_build_object('id','pair-m4-s','type','sell','cp_id','cust-mb','cur_id','cny',
+          'amount',1000,'rate',0.15,'against_id','usd','total',150,'status','completed',
+          'direct',true,'own_money',true,'pair_id','pair-m4','direct_role','sell')),
+        '[]'::jsonb, null, 'cmd-pair-m4', 'direct trade', 'partner smuggled in')`);
+    } catch { refused = true; }
+    if (!refused) throw new Error("a partner's custody funded a direct trade");
+  });
+
+  check("deleting one seller's leg cannot leave the rest standing", () => {
+    // The trigger that stops half a direct trade being alive had to learn the new shape too.
+    // Without it a three-row trade would be refused outright; with it wrong, a leg could be
+    // retired and the sale would still claim to have bought what it sold.
+    let refused = false;
+    try {
+      psql(`update public.txs set deleted = true where id='pair-m1-b0'`);
+    } catch { refused = true; }
+    if (!refused) throw new Error("one purchase was retired and the sale was left standing");
+    const still = psql(`select count(*)::text from public.txs
+                          where pair_id='pair-m1' and not deleted`).trim();
+    if (still !== "4") throw new Error(`the trade now has ${still} live rows`);
+  });
+
   // The whole point of the type: the money never leaves the owner's hands, so no partner may be
   // named on it and no partner balance may move because of it.
   mustFail("a direct trade cannot name a partner",
@@ -3419,6 +3545,162 @@ try {
       if (!refused) throw new Error("an account paid out money it did not have");
     });
 
+    // ── «هەقی ئەم ئیشە... وە بۆ چ کەسێکی دەکەم» ─────────────────────────────────────────────
+    //
+    // The shape the owner actually described: the same amount out and in, and the earning is a
+    // figure they type rather than a difference between two prices. 202609020005 had written
+    // "There is no fee on the side" into the migration history; these are what that sentence
+    // being withdrawn has to mean in behaviour.
+    const feeOn = (txId) => Number(psql(
+      `select coalesce(sum(amount),0)::text from public.ledger
+        where tx_id='${txId}' and type='commission'`).trim());
+    const forWhom = (txId) => psql(
+      `select coalesce(cp_id,'nobody') from public.txs where id='${txId}'`).trim();
+
+    check("the same amount out and in still earns what the owner named", () => {
+      const before = earnedInto("acc-4100");
+      const cashBefore = safeIqd();
+      psql(`select public.sarraf_commission_trade('cmx-fib','iqd',40000,null,'iqd',40000,
+              'هەمان بڕ','commission:cmx-flat-with-fee',700,null,'cust-1')`);
+      const tx = psql(`select id from public.txs where note='هەمان بڕ' order by date desc limit 1`).trim();
+      // The movement is equal on both sides, which under the old model would be an earning of
+      // nothing at all.
+      const moved = Number(psql(
+        `select coalesce(sum(amount),0)::text from public.ledger
+          where tx_id='${tx}' and type in ('commission_out','commission_in')`).trim());
+      if (moved !== 0) throw new Error(`the two sides differ by ${moved}, and they were named equal`);
+      if (feeOn(tx) !== 700) throw new Error(`the fee recorded is ${feeOn(tx)}, expected 700`);
+      if (earnedInto("acc-4100") - before !== 700) {
+        throw new Error(`the books earned ${earnedInto("acc-4100") - before}, expected 700`);
+      }
+      if (safeIqd() - cashBefore !== 40700) {
+        throw new Error(`cash moved ${safeIqd() - cashBefore}, expected 40000 plus the 700 fee`);
+      }
+    });
+
+    check("and it says who the work was done for", () => {
+      const tx = psql(`select id from public.txs where note='هەمان بڕ' order by date desc limit 1`).trim();
+      if (forWhom(tx) !== "cust-1") throw new Error(`the trade was recorded for ${forWhom(tx)}`);
+    });
+
+    check("a trade done for nobody in particular is still allowed", () => {
+      // «ئاماژە بەوەش بکەم» is a thing the owner may do, not a thing they must do.
+      psql(`select public.sarraf_commission_trade('cmx-fib','iqd',5000,null,'iqd',5000,
+              'بێ کەس','commission:cmx-fee-no-party',100)`);
+      const tx = psql(`select id from public.txs where note='بێ کەس' order by date desc limit 1`).trim();
+      if (forWhom(tx) !== "nobody") throw new Error(`somebody was named: ${forWhom(tx)}`);
+      if (feeOn(tx) !== 100) throw new Error(`the fee recorded is ${feeOn(tx)}`);
+    });
+
+    check("naming no fee at all earns nothing, and is not an error", () => {
+      const before = earnedInto("acc-4100");
+      psql(`select public.sarraf_commission_trade('cmx-fib','iqd',3000,null,'iqd',3000,
+              'بێ هەقی کار','commission:cmx-no-fee-at-all')`);
+      const tx = psql(`select id from public.txs where note='بێ هەقی کار' order by date desc limit 1`).trim();
+      if (feeOn(tx) !== 0) throw new Error(`a trade with no fee recorded ${feeOn(tx)}`);
+      if (earnedInto("acc-4100") - before !== 0) {
+        throw new Error(`the books earned ${earnedInto("acc-4100") - before} on a trade that named no fee`);
+      }
+    });
+
+    check("a fee below zero is refused", () => {
+      let refused = false;
+      try {
+        psql(`select public.sarraf_commission_trade('cmx-fib','iqd',1000,null,'iqd',1000,
+                'هەقی کاری خوار سفر','commission:cmx-fee-negative',-5)`);
+      } catch { refused = true; }
+      if (!refused) throw new Error("a fee below zero was accepted");
+    });
+
+    check("a fee that is not a number is refused, in words a person can read", () => {
+      // Refusing it is not enough. Without the guard in the command, NaN travelled all the way
+      // to the journal and came back as "cannot post unbalanced journal entry je-cmxfee-cmx…
+      // (debit NaN, credit NaN, lines 2)" — a refusal, and one that section 2 forbids showing
+      // anybody: «هیچ UUID، ناوی table، RPC، stack trace، error code یان زمانی developer
+      // بەکارهێنەر نەبینێت». A fault injection removing the guard left this check green,
+      // because it only asked whether something threw.
+      //
+      // Note for anyone tempted to write `v_fee <> v_fee` again: numeric in PostgreSQL does not
+      // follow IEEE. NaN = NaN is TRUE and NaN sorts above every number, so neither the
+      // self-inequality trick nor a `< 0` test ever fires.
+      let message = null;
+      try {
+        psql(`select public.sarraf_commission_trade('cmx-fib','iqd',1000,null,'iqd',1000,
+                'هەقی کاری نەزانراو','commission:cmx-fee-nan','NaN'::numeric)`);
+      } catch (e) { message = errorDetail(e); }
+      if (message === null) throw new Error("a fee that is not a number was accepted");
+      const leaked = ["journal", "je-", "cmx", "debit", "lines "].filter((t) => message.includes(t));
+      if (leaked.length > 0) {
+        throw new Error(`the refusal shows the reader ${leaked.join(", ")} — ${message}`);
+      }
+    });
+
+    check("a person this business does not know cannot be named", () => {
+      let refused = false;
+      try {
+        psql(`select public.sarraf_commission_trade('cmx-fib','iqd',1000,null,'iqd',1000,
+                'کەسێکی نەناسراو','commission:cmx-unknown-party',10,null,'nobody-at-all')`);
+      } catch { refused = true; }
+      if (!refused) throw new Error("the work was recorded as done for somebody who does not exist");
+    });
+
+    check("a refused fee writes nothing at all", () => {
+      // A refusal that leaves a trade behind is worse than no refusal, because the money moved
+      // and the reason it was refused is nowhere.
+      const left = Number(psql(`select count(*)::text from public.txs
+                                 where note in ('هەقی کاری خوار سفر','هەقی کاری نەزانراو','کەسێکی نەناسراو')`).trim());
+      if (left !== 0) throw new Error(`${left} refused trade(s) were written anyway`);
+    });
+
+    check("the person it was done for is never shown what it earned", () => {
+      // Sections 10 and 16: «قازانجی ZEMAN نەبینێت». cp_id lets them see the transaction, which
+      // is wanted; the fee must not travel with it. It is kept off the row entirely and lives
+      // in the ledger, which ledger_tenant_read does not open to a customer.
+      const onRow = psql(`select coalesce(string_agg(column_name, ','), 'none')
+                            from information_schema.columns
+                           where table_schema='public' and table_name='txs'
+                             and column_name ~ 'fee|commission'`).trim();
+      if (onRow.includes("commission_fee")) {
+        throw new Error(`the fee is stored on the transaction row the customer can read: ${onRow}`);
+      }
+      // And measured, not argued: the customer whose work it was, asked as themselves with
+      // row-level security applied, sees none of the earning rows.
+      psql(`update public.app_users
+               set auth_id='cff00000-0000-0000-0000-0000000000c1' where id='cust-1'`);
+      // Later fixtures in this file pin auth.uid() to a fixed administrator so their own
+      // commands run as one. Probing as somebody else means putting the session-reading
+      // version back first, or the probe silently answers as the administrator — which it
+      // did, and reported this check green while measuring nothing. And it must be put back
+      // afterwards, or every check that follows fails with "not authorized" — which is what
+      // happened on the first attempt at this.
+      psql(`create table if not exists zz_authuid_backup as
+              select pg_get_functiondef('auth.uid'::regproc) as def`);
+      psql(`create or replace function auth.uid() returns uuid language sql stable
+            as $fn$ select nullif(current_setting('request.jwt.claim.sub', true),'')::uuid $fn$`);
+      const whoami = asUser('cff00000-0000-0000-0000-0000000000c1',
+        `select public.my_app_id()||'|'||public.is_admin()::text`);
+      const seen = asUser('cff00000-0000-0000-0000-0000000000c1',
+        `select count(*)::text from public.ledger where type='commission'`);
+      const theirs = asUser('cff00000-0000-0000-0000-0000000000c1',
+        `select count(*)::text from public.txs where cp_id='cust-1'`);
+      const restore = () => {
+        psql(`do $r$ declare d text; begin
+                select def into d from zz_authuid_backup limit 1;
+                if d is not null then execute d; end if;
+              end $r$`);
+        psql(`drop table if exists zz_authuid_backup`);
+      };
+      try {
+        if (whoami !== "cust-1|false") {
+          throw new Error(`the probe is running as ${whoami}, not as the customer`);
+        }
+        if (seen !== "0") throw new Error(`a customer can read ${seen} commission earning row(s)`);
+        if (Number(theirs) < 1) {
+          throw new Error("the customer cannot see the trade at all, so hiding the fee proves nothing");
+        }
+      } finally { restore(); }
+    });
+
     check("the same money in the same place on both sides is refused", () => {
       let refused = false;
       try {
@@ -3783,10 +4065,14 @@ try {
   // while «قاسەی گشتی» says the owner's own money did not move. Confusing the two is how a
   // business spends a customer's deposit believing it is theirs, so it is pinned.
   const customerMoneyChecks = () => {
+    // Mirrors owner_safe_by_currency exactly, including the line that keeps a customer's money
+    // out of it. A customer row names no partner, no office and no account either, so without
+    // that line their deposit reads as the owner's own — which is the whole thing these checks
+    // are here to catch.
     const ownSafe = (cur) => Number(psql(
       `select coalesce(sum(amount),0)::text from public.ledger
         where cur_id='${cur}' and partner_id is null and office_id is null
-          and cash_account_id is null`).trim());
+          and cash_account_id is null and customer_id is null`).trim());
     const cashInBooks = () => Number(psql(
       `select coalesce(round(sum(case when l.side='debit' then l.amount else -l.amount end),2),0)::text
          from public.journal_lines l join public.journal_entries e on e.id=l.entry_id
@@ -3837,6 +4123,281 @@ try {
                 'زۆرتر لەوەی هەیەتی','vault:more-than-they-ever-had')`);
       } catch { refused = true; }
       if (!refused) throw new Error("a customer withdrew money they never deposited");
+    });
+
+    // «دەبێت پارەکە بۆ قاسەی گشتیش زیاد ببێت و بۆ قاسەی ئەویش.»
+    //
+    // Measured before anything was built on the assumption. The general safe every screen shows
+    // is the sum of public.ledger; a customer's deposit posts a journal entry and writes no
+    // ledger row at all. So the cash is physically in the drawer, the books know it, and the
+    // figure the owner reads does not.
+    check("a customer's deposit reaches the general safe the owner actually looks at", () => {
+      const generalSafe = () => Number(psql(
+        `select coalesce(sum(amount),0)::text from public.ledger where cur_id='usd'`).trim());
+      const vaultOf = (id) => Number(psql(
+        `select coalesce(available,0)::text from public.customer_vaults
+          where customer_id='${id}' and currency='USD'`).trim() || 0);
+      // A customer of its own: the check below reads a cumulative total of what is owed, and
+      // depositing for cust-1 here moved it from 1000 to 1250 and failed a check that was
+      // measuring something else entirely.
+      psql(`insert into public.app_users(id,name,role,tenant_id)
+            values ('cust-safe','Safe Customer','customer','t-sarkhel') on conflict do nothing`);
+      const before = generalSafe(), heldBefore = vaultOf("cust-safe");
+      psql(`select public.sarraf_customer_vault_move('cust-safe','USD',250,'in',1,
+              'کڕیارەکە پارەی هێنا','vault:it-must-show-in-the-general-safe')`);
+      if (vaultOf("cust-safe") - heldBefore !== 250) {
+        throw new Error(`their own safe moved by ${vaultOf("cust-safe") - heldBefore}, expected 250`);
+      }
+      if (generalSafe() - before !== 250) {
+        throw new Error(`the general safe moved by ${generalSafe() - before}, expected 250`);
+      }
+    });
+
+    check("and it is named as theirs, not left as an unexplained rise", () => {
+      // «لە وردەکاری قاسەی گشتیدا ئاماژەی پێبدات کە لای ئەوە و پارەی ئەوە.» A safe that went up
+      // by 250 with nothing saying why is worse than one that did not move: the owner would
+      // count it as theirs.
+      const snap = JSON.parse(psql("select public.sarraf_read_model_snapshot(3650)::text"));
+      const held = Number(snap.customer_held_by_currency?.usd || 0);
+      if (held < 250) throw new Error(`the snapshot says customers hold ${held}, expected at least 250`);
+      const owed = Number(psql(`select coalesce(sum(available),0)::text
+                                  from public.customer_vaults where currency='USD'`).trim());
+      if (Math.abs(held - owed) > 1e-8) {
+        throw new Error(`the safe says ${held} is theirs but their vaults hold ${owed}`);
+      }
+    });
+
+    check("the owner's own safe does not rise by a customer's deposit", () => {
+      // The same money, asked the other way. It is in the drawer and it is not his.
+      const mine = ownSafe("usd");
+      psql(`select public.sarraf_customer_vault_move('cust-safe','USD',300,'in',1,
+              'دووەم جار','vault:still-not-the-owners')`);
+      if (ownSafe("usd") !== mine) {
+        throw new Error(`the owner's safe moved by ${ownSafe("usd") - mine}`);
+      }
+    });
+
+    check("the snapshot's own owner-safe figure leaves the customers' money out too", () => {
+      // ownSafe() above re-implements owner_safe_by_currency rather than reading it, so the
+      // two can drift: taking the exclusion out of the snapshot left every check passing.
+      // This one reads the figure the screens are actually handed.
+      const snap = JSON.parse(psql("select public.sarraf_read_model_snapshot(3650)::text"));
+      const fromSnapshot = Number(snap.owner_safe_by_currency?.usd || 0);
+      const mirrored = ownSafe("usd");
+      if (Math.abs(fromSnapshot - mirrored) > 1e-8) {
+        throw new Error(`the snapshot says the owner's safe holds ${fromSnapshot}, the same question asked directly says ${mirrored}`);
+      }
+      const held = Number(snap.customer_held_by_currency?.usd || 0);
+      if (held <= 0) throw new Error("no customer money exists, so this proves nothing");
+    });
+
+    check("a trade cannot be funded with a customer's money", () => {
+      // «من نەتوانم مامەڵەی پێوە بکەم» — enforced, not remembered. cust-safe now holds 550 in
+      // the drawer; the owner's own dollars are what the sufficiency check may see, and a
+      // purchase larger than those must be refused even though the cash is physically there.
+      const mine = Number(psql(`select public.sarraf_locked_cash_balance('usd')::text`).trim());
+      const inDrawer = Number(psql(
+        `select coalesce(sum(amount),0)::text from public.ledger where cur_id='usd'`).trim());
+      if (inDrawer - mine < 550) {
+        throw new Error(`the drawer holds ${inDrawer} and the owner may spend ${mine} — the customers' 550 is not being held back`);
+      }
+    });
+
+    // ── «کاتێک شتی لە من کڕی ئۆتۆماتیکی پارەکە لەو بەشەی خۆی ببات» ────────────────────────────
+    //
+    // The other half. Their money is in the safe and is theirs; when they buy, it becomes the
+    // owner's without anybody pressing anything, and the drawer never moves — because nothing
+    // is carried in or out of it.
+    const vaultOf = (id, cur) => Number(psql(
+      `select coalesce(available,0)::text from public.customer_vaults
+        where customer_id='${id}' and currency='${cur}'`).trim() || 0);
+    const drawer = (cur) => Number(psql(
+      `select coalesce(sum(amount),0)::text from public.ledger where cur_id='${cur}'`).trim());
+    const cashInBooksNow = () => Number(psql(
+      `select coalesce(round(sum(case when l.side='debit' then l.amount else -l.amount end),2),0)::text
+         from public.journal_lines l join public.journal_entries e on e.id=l.entry_id
+        where l.account_id='acc-1000' and l.currency='USD' and e.status='posted'`).trim());
+
+    // Dinars, not yuan: an external currency has to name a custody partner even on a sale, and
+    // this is a check about vaults, not about custody.
+    const sellTo = (id, who, amount, total) => psql(`select public.sarraf_commit_transactions(
+      jsonb_build_array(jsonb_build_object('id','${id}','type','sell','cp_id','${who}',
+        'cur_id','iqd','amount',${amount},'rate',${(total / amount).toFixed(10)},
+        'against_id','usd','total',${total},'status','completed')),
+      '[]'::jsonb, null, 'cmd-${id}', 'فرۆشتن', 'vault settlement')`);
+
+    check("a customer buying pays from their own money without being asked", () => {
+      // Two things have to be true before a sale can happen at all, and neither has
+      // anything to do with vaults. Getting this wrong cost a day, so it is written down.
+      //
+      // First, INVENTORY. "sale would create negative inventory" is measured by
+      // sarraf_inventory_snapshot_at, which walks public.txs — not public.ledger. A bare
+      // ledger row raises the cash but leaves the inventory at zero, so the sale is refused
+      // for a reason that looks like this check failing and is not. Only a recorded purchase
+      // creates sellable stock, because a sale is priced against weighted-average cost and
+      // cost comes from a buy row.
+      //
+      // Second, the owner's OWN dollars. At this point in the run the drawer holds 1173 USD
+      // and the customers hold 1150 of it, so the owner may spend 23 — which is the customer
+      // separation above working exactly as intended. A purchase paid for in dollars must
+      // therefore be funded first, from the owner's own money, or the command refuses with
+      // "cash location has insufficient balance". The deposit below carries no customer_id,
+      // which is what makes it the owner's.
+      psql(`insert into public.ledger(id,type,cur_id,amount,date,tenant_id)
+            values ('led-vault-own-usd','capital','usd',5000,now(),'t-sarkhel')`);
+      psql(`select public.sarraf_commit_transactions(
+        jsonb_build_array(jsonb_build_object('id','tx-vault-stock','type','buy','cp_id','cust-1',
+          'cur_id','iqd','amount',20000,'rate',0.15,'against_id','usd','total',3000,
+          'status','completed')),
+        '[]'::jsonb, null, 'cmd-tx-vault-stock', 'کڕین', 'stock for the vault checks')`);
+      // cust-safe holds 550 from the deposits above. They buy something for 200.
+      const heldBefore = vaultOf("cust-safe", "USD");
+      const mineBefore = ownSafe("usd");
+      const drawerBefore = drawer("usd");
+      if (heldBefore < 200) throw new Error(`they hold ${heldBefore}, the check needs at least 200`);
+
+      sellTo("tx-vault-pay", "cust-safe", 1000, 200);
+
+      if (vaultOf("cust-safe", "USD") !== heldBefore - 200) {
+        throw new Error(`their money went from ${heldBefore} to ${vaultOf("cust-safe", "USD")}`);
+      }
+      // The owner is 200 better off, and the drawer is exactly where it was: the notes never
+      // moved, only whose they are.
+      if (ownSafe("usd") - mineBefore !== 200) {
+        throw new Error(`the owner's safe moved by ${ownSafe("usd") - mineBefore}, expected 200`);
+      }
+      if (drawer("usd") !== drawerBefore) {
+        throw new Error(`the drawer moved by ${drawer("usd") - drawerBefore} when nothing was carried in or out`);
+      }
+    });
+
+    check("and the books do not count cash that never arrived", () => {
+      // The sale's own entry debits acc-1000 for the whole total because money ordinarily
+      // arrives. Here it did not — it has been in the drawer since they deposited it. Without
+      // the offsetting credit the books would hold 200 of cash that does not exist.
+      //
+      // Measured as the CHANGE across one sale. The absolute figures cannot be compared in this
+      // database: most fixtures above write ledger rows straight in without a journal entry, so
+      // the two have never been equal here and never claimed to be.
+      const cashBefore = cashInBooksNow();
+      const drawerBefore = drawer("usd");
+      psql(`select public.sarraf_customer_vault_move('cust-safe','USD',300,'in',1,
+              'پارەی زیاتر','vault:before-the-books-check')`);
+      sellTo("tx-vault-books", "cust-safe", 1500, 300);
+      // Their 300 paid the whole sale, so no cash arrived and none should be recorded. The
+      // deposit itself did bring 300 in, which is the only movement either side should show.
+      const cashMoved = cashInBooksNow() - cashBefore;
+      const drawerMoved = drawer("usd") - drawerBefore;
+      if (Math.abs(cashMoved - 300) > 1e-6) {
+        throw new Error(`the books recorded ${cashMoved} of cash across a deposit of 300 and a sale paid from it`);
+      }
+      if (Math.abs(drawerMoved - 300) > 1e-6) {
+        throw new Error(`the drawer moved by ${drawerMoved}, expected 300`);
+      }
+    });
+
+    check("it takes what they have and never more", () => {
+      // 350 left, and they buy something for 900. They pay 350 and the vault stops at zero:
+      // a vault is never overdrawn, whatever the rest of the sale does.
+      const held = vaultOf("cust-safe", "USD");
+      sellTo("tx-vault-over", "cust-safe", 4500, 900);
+      const after = vaultOf("cust-safe", "USD");
+      if (after !== 0) throw new Error(`they were left holding ${after}, expected 0`);
+      if (held <= 0) throw new Error("they had nothing to pay with, so this proves nothing");
+    });
+
+    // ── «ماوەکە ببێتە قەرز» ────────────────────────────────────────────────────────────────
+    //
+    // The sale above is the whole shape of it: they held 350, the sale was 900, so 550 was
+    // never paid. Before this the 550 simply vanished — the settlement row had already
+    // debited cash for the full 900 and nothing said anybody owed the difference.
+    const shortDebt = (txId) => psql(
+      `select coalesce(string_agg(
+                 debtor_id||'|'||currency||'|'||outstanding_principal::text||'|'||status::text, ','),
+               'none')
+         from public.debts where source_transaction_id='${txId}'`).trim();
+
+    check("what their own money could not cover, they now owe", () => {
+      const row = shortDebt("tx-vault-over");
+      if (row === "none") throw new Error("the shortfall opened no debt at all");
+      const [who, cur, amount, status] = row.split("|");
+      if (who !== "cust-safe") throw new Error(`the debt is against ${who}`);
+      if (cur !== "USD") throw new Error(`the debt is in ${cur}, and the sale was paid in USD`);
+      if (Number(amount) !== 550) throw new Error(`they owe ${amount}, expected 550`);
+      if (status !== "open") throw new Error(`the debt opened as ${status}`);
+    });
+
+    check("the money they could not pay is owed, not counted as cash that arrived", () => {
+      // The half that is easy to get wrong. Opening a debt and leaving the cash debit standing
+      // would say the business both received the 900 and is owed 550 of it.
+      const received = Number(psql(
+        `select coalesce(round(sum(case when l.side='debit' then l.amount else -l.amount end),2),0)::text
+           from public.journal_lines l join public.journal_entries e on e.id=l.entry_id
+          where l.account_id='acc-1000' and l.currency='USD' and e.status='posted'
+            and e.transaction_id='tx-vault-over'`).trim());
+      if (received !== 0) {
+        throw new Error(`the books say ${received} of cash arrived on a sale nothing was paid on`);
+      }
+      const owed = Number(psql(
+        `select coalesce(round(sum(case when l.side='debit' then l.amount else -l.amount end),2),0)::text
+           from public.journal_lines l join public.journal_entries e on e.id=l.entry_id
+          where l.account_id='acc-1200' and l.currency='USD' and e.status='posted'
+            and e.transaction_id='tx-vault-over'`).trim());
+      if (owed !== 550) throw new Error(`the receivable is ${owed}, expected 550`);
+    });
+
+    check("a customer who covers it in full owes nothing", () => {
+      // The counterweight. If every sale from a vault opened a debt this would still pass the
+      // two checks above, and be badly wrong.
+      psql(`insert into public.app_users(id,name,role,tenant_id)
+            values ('cust-rich','Covered Customer','customer','t-sarkhel') on conflict do nothing`);
+      psql(`select public.sarraf_customer_vault_move('cust-rich','USD',400,'in',1,
+              'پارەی خۆی','vault:enough-to-cover-it')`);
+      sellTo("tx-vault-covered", "cust-rich", 500, 100);
+      if (vaultOf("cust-rich", "USD") !== 300) {
+        throw new Error(`they were left holding ${vaultOf("cust-rich", "USD")}, expected 300`);
+      }
+      const row = shortDebt("tx-vault-covered");
+      if (row !== "none") throw new Error(`a customer who paid in full was given a debt: ${row}`);
+    });
+
+    check("a customer with no money of their own is given no debt either", () => {
+      // Section 11 read at its most literal would make every sale to every customer a debt,
+      // because a balance of zero is less than any sale. Section 12 says the payment route is
+      // chosen, and that chooser does not exist yet, so the narrow reading is what is built:
+      // a shortfall is only a shortfall when some of their own money was actually used.
+      psql(`insert into public.app_users(id,name,role,tenant_id)
+            values ('cust-novault-2','No Vault Two','customer','t-sarkhel') on conflict do nothing`);
+      sellTo("tx-vault-novault", "cust-novault-2", 500, 100);
+      const row = shortDebt("tx-vault-novault");
+      if (row !== "none") throw new Error(`a customer who never had a vault was given a debt: ${row}`);
+    });
+
+    check("a customer with no money of theirs is settled the way they always were", () => {
+      const mineBefore = ownSafe("usd");
+      sellTo("tx-vault-none", "cust-2", 500, 100);
+      if (ownSafe("usd") - mineBefore !== 100) {
+        throw new Error(`the owner's safe moved by ${ownSafe("usd") - mineBefore}, expected 100`);
+      }
+      const touched = Number(psql(`select count(*)::text from public.ledger
+                                    where tx_id='tx-vault-none' and customer_id is not null`).trim());
+      if (touched !== 0) throw new Error("a vault was touched for somebody who has none");
+    });
+
+    check("buying FROM a customer does not reach into their money", () => {
+      // «کاتێک شتی لە من کڕی» is a sale. Money the owner pays out is a different question, and
+      // helping himself to their balance to fund it would be the worst answer to it.
+      psql(`select public.sarraf_customer_vault_move('cust-safe','USD',500,'in',1,
+              'پارەی نوێ','vault:before-a-purchase')`);
+      const held = vaultOf("cust-safe", "USD");
+      psql(`select public.sarraf_commit_transactions(
+        jsonb_build_array(jsonb_build_object('id','tx-vault-buy','type','buy','cp_id','cust-safe',
+          'cur_id','iqd','amount',140000,'rate',0.001,'against_id','usd','total',140,
+          'status','completed')),
+        '[]'::jsonb, null, 'cmd-tx-vault-buy', 'کڕین', 'not a sale')`);
+      if (vaultOf("cust-safe", "USD") !== held) {
+        throw new Error(`their money moved by ${vaultOf("cust-safe", "USD") - held} on a purchase`);
+      }
     });
   };
   customerMoneyChecks();
@@ -4247,110 +4808,63 @@ try {
   };
   commissionBalanceCheck();
 
-  // ── «گەر دوای هەفتەیەک جواب نەبوو، ئۆتۆماتیکی بیکات» ──────────────────────────────────────
+  // ── «هیچ debt reminder ـی خۆکار مەبنێرە» ──────────────────────────────────────────────────
   //
-  // The manual reminder was built and the automatic half was not, and was reported as done.
-  // These are what "automatic" has to mean before it can be claimed again: it finds the right
-  // debts on its own, it cannot tell somebody something untrue, and it cannot say it twice.
-  const autoReminderChecks = () => {
+  // These checks used to prove the opposite. The owner had asked for a reminder that went out
+  // on its own after a week, it was built and merged and applied to the live database, and
+  // eight checks held it in place. The product brief reverses that decision in one line, so the
+  // sender is dropped and these are what stand in its place: proof that nothing sends itself.
+  //
+  // The reader is kept and still measured. Knowing WHICH debts have gone a week without an
+  // answer is what puts the manual button in front of the owner; it is the sending that was
+  // never wanted.
+  const reminderIsManualOnly = () => {
     asAdmin();
-    const due = () => psql(`select coalesce(string_agg(debt_id, ',' order by debt_id),'none')
-                              from public.sarraf_debts_due_a_reminder(7)`).trim();
+    const debt = (id, days) => psql(
+      `insert into public.debts(id,debtor_type,debtor_id,creditor_type,creditor_id,currency,
+         original_principal,outstanding_principal,source_type,reason,created_by,opened_at)
+       values ('${id}','customer','cust-1','zeman',null,'IQD',50000,50000,
+               'unpaid_transaction','مامەڵەی نەدراوە','u-a',
+               statement_timestamp() - make_interval(days => ${days}))`);
     const told = (id) => Number(psql(`select count(*)::text from public.zeman_notifications
                                        where subject_kind='debt' and subject_id='${id}'
                                          and kind='debt_reminder'`).trim());
-    const debt = (id, days, extra = "") => psql(
-      `insert into public.debts(id,debtor_type,debtor_id,creditor_type,creditor_id,currency,
-         original_principal,outstanding_principal,source_type,reason,created_by,opened_at${extra ? ",status" : ""})
-       values ('${id}','customer','cust-1','zeman',null,'IQD',50000,50000,
-               'unpaid_transaction','مامەڵەی نەدراوە','u-a',
-               statement_timestamp() - make_interval(days => ${days})${extra})`);
 
-    check("a debt nobody has answered for a week is found on its own", () => {
-      debt("d-auto-old", 9);
-      debt("d-auto-fresh", 2);
-      const list = due();
-      if (!list.includes("d-auto-old")) throw new Error(`the week-old debt is not in ${list}`);
-      if (list.includes("d-auto-fresh")) throw new Error(`a two-day-old debt is in ${list}`);
+    check("nothing in the database will send a reminder on its own", () => {
+      const senders = psql(`select coalesce(string_agg(p.proname, ', '), 'none')
+                              from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+                             where n.nspname='public' and p.proname like '%send_due%'`).trim();
+      if (senders !== "none") throw new Error(`${senders} can still send without being asked`);
     });
 
-    check("a debt already settled is never chased", () => {
-      // Telling somebody they owe money they have paid is worse than telling them nothing.
-      debt("d-auto-paid", 30, ",'settled'");
-      if (due().includes("d-auto-paid")) throw new Error("a settled debt was queued for a reminder");
+    check("a debt a week old is still found, so the owner can be shown it", () => {
+      // The reader stays: «تەنها کاتێک خاوەن یان کارمەند دوگمەی ناردن دەگرێت» needs the owner to
+      // be able to see which ones are waiting, or the button is one nobody knows to press.
+      debt("d-manual-old", 9);
+      const due = psql(`select coalesce(string_agg(debt_id, ',' order by debt_id),'none')
+                          from public.sarraf_debts_due_a_reminder(7)`).trim();
+      if (!due.includes("d-manual-old")) throw new Error(`the week-old debt is not in ${due}`);
     });
 
-    check("a debt the business itself owes is never chased", () => {
-      psql(`insert into public.debts(id,debtor_type,debtor_id,creditor_type,creditor_id,currency,
-              original_principal,outstanding_principal,source_type,reason,created_by,opened_at)
-            values ('d-auto-ours','zeman',null,'customer','cust-1','IQD',9000,9000,
-                    'unpaid_transaction','ئێمە قەرزارین','u-a',
-                    statement_timestamp() - make_interval(days => 40))`);
-      if (due().includes("d-auto-ours")) throw new Error("we queued a reminder to ourselves");
-    });
-
-    check("a debtor with no account is not queued, because nothing would reach them", () => {
-      psql(`insert into public.debts(id,debtor_type,debtor_id,creditor_type,creditor_id,currency,
-              original_principal,outstanding_principal,source_type,reason,created_by,opened_at)
-            values ('d-auto-ghost','customer','nobody-at-all','zeman',null,'IQD',700,700,
-                    'unpaid_transaction','کەسێکی نەناسراو','u-a',
-                    statement_timestamp() - make_interval(days => 40))`);
-      if (due().includes("d-auto-ghost")) throw new Error("a reminder was queued for nobody");
-    });
-
-    check("running it sends the reminder", () => {
-      const before = told("d-auto-old");
-      const out = JSON.parse(psql("select public.sarraf_send_due_debt_reminders(7)::text"));
-      if (!(out.sent >= 1)) throw new Error(`it sent ${out.sent}`);
-      if (told("d-auto-old") !== before + 1) {
-        throw new Error(`the debt was told ${told("d-auto-old")} times, expected ${before + 1}`);
+    check("and being found sends them nothing", () => {
+      // Reading the list must have no side effect at all. A reader that quietly sends is the
+      // automatic reminder wearing a different name.
+      psql("select * from public.sarraf_debts_due_a_reminder(7)");
+      psql("select * from public.sarraf_debts_due_a_reminder(7)");
+      if (told("d-manual-old") !== 0) {
+        throw new Error(`asking which debts are due told somebody ${told("d-manual-old")} time(s)`);
       }
     });
 
-    check("running it again the same week sends nothing more", () => {
-      // The whole hazard of an unattended sender: an administrator opening the app three times
-      // must not be three messages to somebody who has already been told once.
-      const before = told("d-auto-old");
-      psql("select public.sarraf_send_due_debt_reminders(7)");
-      psql("select public.sarraf_send_due_debt_reminders(7)");
-      if (told("d-auto-old") !== before) {
-        throw new Error(`it went from ${before} to ${told("d-auto-old")}`);
+    check("the button still works, because that is the only way left", () => {
+      psql(`select public.sarraf_remind_debtor('d-manual-old',null,
+              'debt-reminder:the-owner-pressed-it')`);
+      if (told("d-manual-old") !== 1) {
+        throw new Error(`pressing send told them ${told("d-manual-old")} time(s), expected 1`);
       }
-    });
-
-    check("and having been told, the debt leaves the queue until the next week", () => {
-      if (due().includes("d-auto-old")) {
-        throw new Error("a debt reminded today is still queued for a reminder today");
-      }
-    });
-
-    check("a debtor whose account is closed drops out and the others are still told", () => {
-      // This runs unattended, so one debt that cannot be reminded must not mean every debt
-      // after it is silently never chased. The first attempt at this check tried to break a
-      // debt by pointing it at a person who does not exist — and could not, because a debt's
-      // identity is immutable, which is a protection doing its job. Closing the person's
-      // account is the way this actually happens.
-      psql(`insert into public.app_users(id,name,role,tenant_id)
-            values ('cust-closing','Leaving Customer','customer','t-sarkhel')
-            on conflict (id) do update set deleted = false`);
-      psql(`insert into public.debts(id,debtor_type,debtor_id,creditor_type,creditor_id,currency,
-              original_principal,outstanding_principal,source_type,reason,created_by,opened_at)
-            values ('d-auto-closed','customer','cust-closing','zeman',null,'IQD',400,400,
-                    'unpaid_transaction','قەرزی کەسێکی ڕۆیشتوو','u-a',
-                    statement_timestamp() - make_interval(days => 20))`);
-      debt("d-auto-b", 20);
-      // Queued while they still had an account, then the account is closed.
-      if (!due().includes("d-auto-closed")) throw new Error("the debt was never queued to begin with");
-      psql(`update public.app_users set deleted = true where id='cust-closing'`);
-      if (due().includes("d-auto-closed")) throw new Error("a closed account is still queued");
-
-      const out = JSON.parse(psql("select public.sarraf_send_due_debt_reminders(7)::text"));
-      if (told("d-auto-closed") !== 0) throw new Error("a closed account was sent a reminder");
-      if (told("d-auto-b") < 1) throw new Error("the other debt was never reminded");
-      if (!Number.isFinite(out.sent)) throw new Error(JSON.stringify(out));
     });
   };
-  autoReminderChecks();
+  reminderIsManualOnly();
 
   check("a second reset cannot empty a system that has since gone live", () => {
     const out = JSON.parse(psql("select public.sarraf_reset_installation()::text"));

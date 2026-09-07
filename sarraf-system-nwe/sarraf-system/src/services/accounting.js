@@ -409,6 +409,7 @@ export async function commissionTrade(client, {
   fromAccountId = null, fromCurrencyId, fromAmount,
   toAccountId = null, toCurrencyId, toAmount,
   note = null, commandKey,
+  feeAmount = 0, feeAccountId = null, forPartyId = null,
 }) {
   const key = commandKey || commissionCommandKey(fromAccountId || "cash");
   const { data, error } = await client.rpc("sarraf_commission_trade", {
@@ -420,6 +421,13 @@ export async function commissionTrade(client, {
     p_to_amount: toAmount,
     p_note: note,
     p_command_key: key,
+    // «دەبێت چوارگۆشەیەکی تر هەبێت، کە بڕێکی تێدا دابنێم، هەقی ئەم ئیشە... وە ئاماژە بەوەش
+    // بکەم کە بۆ چ کەسێکی دەکەم.» Both are optional and both are judged on the server; the
+    // amount is not rounded, capped or validated here, because a number this screen decided
+    // was acceptable is not a number the books have agreed to.
+    p_fee_amount: feeAmount,
+    p_fee_account_id: feeAccountId,
+    p_for_party_id: forPartyId,
   });
   if (error) throw error;
   const answer = data || {};
@@ -428,6 +436,8 @@ export async function commissionTrade(client, {
     code: answer.code ?? null,
     from: answer.from || null,
     to: answer.to || null,
+    fee: answer.fee || null,
+    for: answer.for || null,
     replayed: answer.replayed === true,
   };
 }

@@ -30,7 +30,7 @@ import { unrealizedPnl, unrealizedReasonText } from "./services/unrealizedPnl";
 import { EARNING_KINDS, earningsByKind } from "./services/earningsByKind";
 import { capitalEventsFrom, investorShare, investorsTotalByCurrency, profitEventsFrom, sharedCostEventsFrom } from "./services/investorShare";
 import { batchStage, todaysWork } from "./services/todaysWork.js";
-import { sendDueDebtReminders } from "./services/debtRegister.js";
+import { directTradeLegs, filledSellers, firstIncompleteSeller } from "./services/directTrade.js";
 import { crossRate, fromUsdAsOf, rateAsOf, rateErrorText, rateOf, unpricedCurrencies, usdFromAsOf, validateRate } from "./services/currencyRate";
 import {
   DIRECTION_REFUSED, mayEditExtraction, mayUploadDirection,
@@ -1342,24 +1342,12 @@ export default function App() {
     return { data: result.data, error: result.error };
   };
 
-  // «گەر دوای هەفتەیەک جواب نەبوو، ئۆتۆماتیکی بیکات.» Asked once per session rather than on
-  // every refresh: the server will not send twice in a week whatever it is asked, but there is
-  // no reason to ask it forty times a day either. Failures are swallowed on purpose — a
-  // reminder that could not go out must never be the reason the app does not open.
-  const remindersAsked = useRef(false);
-
   const loadAll = async (activeProfile = profile) => {
     const sequence = ++loadSequence.current;
     setRefreshing(true);
     try {
       reloadBatches();
       const adminMode = activeProfile?.role === "admin";
-      if (adminMode && !remindersAsked.current) {
-        remindersAsked.current = true;
-        sendDueDebtReminders(supabase).catch((error) => {
-          console.warn("overdue debt reminders could not be sent", error);
-        });
-      }
       const noQuery = Promise.resolve({ data: [], error: null });
       const [c, u, l, t, a, ac, rh, apr, ape, tv, ctrl, rm, rt] = await Promise.all([
         // Not the currencies table. That row's rate belongs to the installation, and reading it
@@ -1657,6 +1645,10 @@ export default function App() {
       // and the figure a screen shows are the same number. verify:accounting runs a scenario
       // through both this and the browser's own derivation below and refuses to pass unless
       // they agree to the last unit.
+      // «لە وردەکاری قاسەی گشتیدا ئاماژەی پێبدات کە لای ئەوە و پارەی ئەوە.» In the drawer,
+      // counted in the total, and not the owner's to move.
+      const customerHeld = Object.fromEntries(
+        Object.entries(rm.customer_held_by_currency || {}).map(([k, v]) => [k, Number(v) || 0]));
       const ownMoney = rm.own_money_by_currency
         ? Object.fromEntries(Object.entries(rm.own_money_by_currency).map(([k,v]) => [k, Number(v) || 0]))
         : null;
@@ -1743,7 +1735,7 @@ export default function App() {
         cashAccounts[x.cash_account_id][x.cur_id] = Number(x.amount) || 0;
       }
 
-      return { phys, partner, office, cashAccounts, atMe, invCap, invTotal, selfCap, ownMoney, invPaid, expenses, fees, cust, pending: cust, acctCash, acctDebt };
+      return { phys, partner, office, cashAccounts, atMe, invCap, invTotal, selfCap, ownMoney, customerHeld, invPaid, expenses, fees, cust, pending: cust, acctCash, acctDebt };
     }
 
     const phys = {}, partner = {}, invCap = {}, selfCap = {}, invPaid = {}, expenses = {}, fees = {};
@@ -1799,7 +1791,7 @@ export default function App() {
       const sign = t.type === "buy" ? +1 : -1;   // کڕین = قەرزاری ئەوم | فرۆشتن = ئەو قەرزارە
       acctDebt[t.cpId][t.againstId] = (acctDebt[t.cpId][t.againstId] || 0) + sign * t.total;
     }
-    return { phys, partner, atMe, invCap, invTotal, selfCap, ownMoney: null, invPaid, expenses, fees, cust, pending: cust, acctCash, acctDebt };
+    return { phys, partner, atMe, invCap, invTotal, selfCap, ownMoney: null, customerHeld: {}, invPaid, expenses, fees, cust, pending: cust, acctCash, acctDebt };
   }, [data]);
 
   const cur = (id) => data?.currencies.find((c) => c.id === id) || {};
@@ -2085,17 +2077,50 @@ export default function App() {
         return false;
       }
 
+      // Every extra seller must be a whole leg or none of it. A half-filled row would reach
+      // the server as a purchase of nothing from nobody and be refused there; refusing it here
+      // says which row is wrong.
+      const extras = filledSellers(f.extraSellers);
+      const incomplete = firstIncompleteSeller(f.extraSellers);
+      if (incomplete) {
+        const what = incomplete.missing === "person" ? tr("لە کێ دەیکڕیت؟")
+          : incomplete.missing === "amount" ? tr("بڕ دەبێت لە سفر گەورەتر بێت")
+          : tr("ڕەیتی کڕین پێویستە");
+        flash(`${tr("فرۆشیاری")} ${incomplete.position}: ${what}`);
+        return false;
+      }
+
       return await run(async () => {
         const bq = +f.buyQuote;
         const sq = +f.sellQuote;
         const displayBaseId = f.rateBaseId || preferredRateBaseId(f.curId, f.againstId);
         const buyStoredRate = displayRateToStored(bq, f.curId, f.againstId, displayBaseId);
         const sellStoredRate = displayRateToStored(sq, f.curId, f.againstId, displayBaseId);
-        const buyTotal = roundCur(amount * buyStoredRate, f.againstId);
-        const sellTotal = roundCur(amount * sellStoredRate, f.againstId);
-        const profit = roundCur(sellTotal - buyTotal, f.againstId);
         const pair = uid();
         const at = now();
+
+        // Every purchase, the sale, and what the trade came to — computed in one tested place
+        // rather than here. Each extra seller is priced at their own rate, in the same currency
+        // pair as the first.
+        const math = directTradeLegs({
+          amount, buyRate: buyStoredRate, sellRate: sellStoredRate,
+          extras: extras.map((x) => ({
+            amount: x.amount,
+            rate: displayRateToStored(+x.quote, f.curId, f.againstId, displayBaseId),
+          })),
+          curId: f.curId, againstId: f.againstId, rounder: roundCur,
+        });
+        const buyTotal = math.legs[0].total;
+        const { soldAmount, boughtTotal, sellTotal, profit } = math;
+
+        const extraLegs = math.legs.slice(1).map((leg, i) => ({
+          id: uid(), code: null, type: "buy", direct: true, pairId: pair, directRole: "buy",
+          ownMoney: true, cpId: extras[i].cpId || null, cpName: extras[i].cpId ? null : extras[i].cpName,
+          curId: f.curId, amount: leg.amount, rate: leg.rate, againstId: f.againstId,
+          total: leg.total,
+          partnerId: null, status: f.buyStatus || "completed", paidAt: null,
+          profit: null, profitCurId: null, note: f.note || "", date: at, edited: false,
+        }));
 
         const t1 = {
           id: uid(), code: null, type: "buy", direct: true, pairId: pair, directRole: "buy",
@@ -2107,14 +2132,17 @@ export default function App() {
         const t2 = {
           id: uid(), code: null, type: "sell", direct: true, pairId: pair, directRole: "sell",
           ownMoney: true, cpId: f.toId || null, cpName: f.toId ? null : f.toName,
-          curId: f.curId, amount, rate: sellStoredRate, againstId: f.againstId, total: sellTotal,
-          buyRate: buyStoredRate, buyTotal, partnerId: null, status: f.sellStatus || "completed", paidAt: null,
+          curId: f.curId, amount: soldAmount, rate: sellStoredRate, againstId: f.againstId, total: sellTotal,
+          buyRate: roundCur(boughtTotal / soldAmount, f.againstId), buyTotal: boughtTotal,
+          partnerId: null, status: f.sellStatus || "completed", paidAt: null,
           profit, profitCurId: f.againstId, note: f.note || "", date: at, edited: false,
         };
 
         const detail = `${fmt(amount)} ${cur(f.curId).code} · خێر ${fmt(profit)} ${cur(f.againstId).code}`;
         const result = await rpcStrict("sarraf_commit_transactions", {
-          p_txs: [TR(t1), TR(t2)],
+          // The sale goes last so the command reads the way the trade happened: bought, bought,
+          // bought, then sold.
+          p_txs: [TR(t1), ...extraLegs.map(TR), TR(t2)],
           // Phase 13C ignores browser accounting rows and calculates them on the server.
           p_ledger: [],
           p_batch_id: null,
@@ -3496,6 +3524,10 @@ export default function App() {
             {page === "newtx" && !pendingBatch && newTxKind === "commission" &&
               <DeferredPanel><CommissionTrade client={supabase} lang={lang}
                 currencies={data?.currencies || []} ownMoney={mySafe}
+                // «ئاماژە بەوەش بکەم کە بۆ چ کەسێکی دەکەم.» Only people this business actually
+                // knows, because the server refuses anybody else and a list that offers a
+                // refusal is a list that wastes the owner's press.
+                people={(data?.users || []).filter((u) => !u.deleted && u.role !== "admin")}
                 onRecorded={(answer) => flash(`${tr("مامەڵەی عمولە تۆمار کرا")} #${answer.code ?? ""}`)} /></DeferredPanel>}
             {page === "txs" && (editTx
               ? <TxForm {...shared} onSave={saveTx} editing={editTx} onCancel={() => setEditTx(null)} />
@@ -4351,6 +4383,20 @@ function CurrencyBreakdown({ curId, data, calc, cur, owners, ratesReady }) {
           {partners.every((p) => !((calc.partner[p.id] || {})[curId])) && (
             <div className="text-xs text-[var(--txt-3)] py-2">{tr("هیچی لای هاوبەشەکان نییە")}</div>
           )}
+          {/* «لە وردەکاری قاسەی گشتیدا ئاماژەی پێبدات کە لای ئەوە و پارەی ئەوە و من نەتوانم
+            * مامەڵەی پێوە بکەم.» It is in the drawer and it counts towards the total below —
+            * the day's count has to agree with it — and it is not the owner's to trade with.
+            * A rise in the safe with nothing naming it is worse than no rise at all, because
+            * it would be counted as his.
+            */}
+          {(calc.customerHeld?.[curId] || 0) !== 0 && (
+            <div className="flex justify-between items-center py-2.5 border-b border-[var(--line)]">
+              <span className="text-sm" style={{ color: "var(--warn)" }}>
+                {tr("پارەی کڕیاران — ناکرێت مامەڵەی پێ بکرێت")}
+              </span>
+              <Money v={calc.customerHeld[curId]} dec={0} />
+            </div>
+          )}
           <div className="flex justify-between items-center pt-3 font-bold">
             <span className="text-sm">{tr("کۆی گشتی")}</span><Money v={bal} dec={0} />
           </div>
@@ -5088,6 +5134,11 @@ function TxForm({ data, cur, calc, usr, mySafe, avgRate, inventoryPosition, usdV
     buyQuote: e && e.direct && e.buyRate ? storedRateToDisplay(e.buyRate, initialCurId, initialAgainstId, initialRateBaseId) : "",
     sellQuote: e && e.direct && e.rate ? storedRateToDisplay(e.rate, initialCurId, initialAgainstId, initialRateBaseId) : "",
     fromId: "", fromName: "", toId: "", toName: "",
+    // «لە جیاتی ئەوەی لە یەک کەسی بکڕم، لە چەند کەسێکی دەکڕم و بەڵام بە یەک کەسی دەفرۆشم.»
+    // Empty is the ordinary two-row direct trade, and that path is left exactly as it was.
+    // Each extra seller carries their own person, their own amount and their own price,
+    // because buying from four people at four prices is the whole reason for this.
+    extraSellers: [],
     buyStatus: "completed", sellStatus: "completed",
     status: e ? e.status : "completed",
     officeId: "",
@@ -5095,6 +5146,19 @@ function TxForm({ data, cur, calc, usr, mySafe, avgRate, inventoryPosition, usdV
   });
 
   const customers = data.users.filter((u) => u.role === "customer" && !u.deleted);
+
+  // What the screen says the trade adds up to. The server computes its own and refuses anything
+  // that disagrees; this exists so the owner sees the sum while they are typing it rather than
+  // being told afterwards. A row still being filled in contributes nothing.
+  // The same function that builds what is sent, so the figure the owner reads while typing and
+  // the figure the command carries cannot drift apart.
+  const directPreview = directTradeLegs({
+    amount: f.amount, buyRate: f.buyQuote, sellRate: f.sellQuote,
+    extras: filledSellers(f.extraSellers),
+    curId: f.curId, againstId: f.againstId,
+  });
+  const directSoldAmount = directPreview.soldAmount;
+  const directBoughtTotal = directPreview.boughtTotal;
   const partners = data.users.filter((u) => u.role === "partner" && !u.deleted);
   const offices = data.users.filter((u) => u.role === "office" && !u.deleted);
 
@@ -5597,6 +5661,16 @@ function TxForm({ data, cur, calc, usr, mySafe, avgRate, inventoryPosition, usdV
                 {customers.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
               </Sel>
               {!f.fromId && <Inp className="mt-2" value={f.fromName} onChange={(ev) => setF({ ...f, fromName: ev.target.value })} placeholder={tr("ناوی فرۆشیار…")} />}
+              {/* «لە چەند کەسێکی دەکڕم و بەڵام بە یەک کەسی دەفرۆشم.» One press adds a seller.
+                  With none added this is the two-row trade it has always been. */}
+              <button type="button" className="mt-2 px-2.5 py-1.5 rounded-lg text-[10.5px] font-semibold tap"
+                style={{ background:"var(--surf-3)", border:"1px solid var(--line)", color:"var(--txt-2)" }}
+                onClick={() => setF((x) => ({ ...x, extraSellers: [
+                  ...(x.extraSellers || []), { key: uid(), cpId: "", cpName: "", amount: "", quote: x.buyQuote },
+                ] }))}
+                disabled={(f.extraSellers || []).length >= 19}>
+                + {tr("فرۆشیارێکی تر")}
+              </button>
             </div>
             <div>
               <Lbl>{tr("بە کێ دەیفرۆشم؟")}</Lbl>
@@ -5607,6 +5681,53 @@ function TxForm({ data, cur, calc, usr, mySafe, avgRate, inventoryPosition, usdV
               {!f.toId && <Inp className="mt-2" value={f.toName} onChange={(ev) => setF({ ...f, toName: ev.target.value })} placeholder={tr("ناوی کڕیار…")} />}
             </div>
           </div>
+
+          {(f.extraSellers || []).length > 0 && (
+            <div className="space-y-3 pt-1">
+              {(f.extraSellers || []).map((x, i) => (
+                <div key={x.key} className="grid grid-cols-1 md:grid-cols-[1fr_auto_auto_auto] gap-3 items-end">
+                  <div>
+                    <Lbl>{tr("فرۆشیاری")} {i + 2}</Lbl>
+                    <Sel value={x.cpId} onChange={(ev) => setF((y) => ({ ...y, extraSellers:
+                      y.extraSellers.map((z) => z.key === x.key ? { ...z, cpId: ev.target.value, cpName: "" } : z) }))}>
+                      <option value="">{tr("— ناوێکی ئازاد —")}</option>
+                      {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    </Sel>
+                    {!x.cpId && <Inp className="mt-2" value={x.cpName} placeholder={tr("ناوی فرۆشیار…")}
+                      onChange={(ev) => setF((y) => ({ ...y, extraSellers:
+                        y.extraSellers.map((z) => z.key === x.key ? { ...z, cpName: ev.target.value } : z) }))} />}
+                  </div>
+                  <div>
+                    <Lbl>{tr("بڕ")}</Lbl>
+                    <Inp type="number" step="any" dir="ltr" value={x.amount}
+                      aria-label={`${tr("فرۆشیاری")} ${i + 2} — ${tr("بڕ")}`}
+                      onChange={(ev) => setF((y) => ({ ...y, extraSellers:
+                        y.extraSellers.map((z) => z.key === x.key ? { ...z, amount: ev.target.value } : z) }))} />
+                  </div>
+                  <div>
+                    <Lbl>{tr("ڕەیتی کڕین")}</Lbl>
+                    <Inp type="number" step="any" dir="ltr" value={x.quote}
+                      aria-label={`${tr("فرۆشیاری")} ${i + 2} — ${tr("ڕەیتی کڕین")}`}
+                      onChange={(ev) => setF((y) => ({ ...y, extraSellers:
+                        y.extraSellers.map((z) => z.key === x.key ? { ...z, quote: ev.target.value } : z) }))} />
+                  </div>
+                  <button type="button" className="px-2.5 py-2 rounded-lg text-[10.5px] font-semibold tap"
+                    aria-label={`${tr("سڕینەوەی")} ${tr("فرۆشیاری")} ${i + 2}`}
+                    style={{ background:"var(--surf-3)", border:"1px solid var(--line)", color:"var(--txt-2)" }}
+                    onClick={() => setF((y) => ({ ...y, extraSellers: y.extraSellers.filter((z) => z.key !== x.key) }))}>
+                    ✕
+                  </button>
+                </div>
+              ))}
+              {/* Computed, not typed: the sale is exactly what was bought, and the server
+                  refuses anything else. Showing it means the owner is never refused for
+                  arithmetic this screen could have done. */}
+              <div className="text-[11px]" style={{ color:"var(--txt-3)" }}>
+                {tr("بە یەک کەس دەفرۆشرێت")}: {fmt(directSoldAmount)} {cur(f.curId).code}
+                {" — "}{tr("کۆی کڕدراو")}: {fmt(directBoughtTotal)} {cur(f.againstId).code}
+              </div>
+            </div>
+          )}
         </Card>
       ) : (
         <Card className="p-5 space-y-3">

@@ -282,10 +282,17 @@ inferred from a diff.
   currency, which was the cashbox exactly while nothing had ever named an account, and would
   have let a cash withdrawal be funded by money sitting in a bank the moment one did. On the
   live data both readings return the same number for every currency.
-- **`202609020005` — `sarraf_service_transaction` dropped.** It modelled a principal plus a
-  separate fee, which the owner said was a misreading. Only the command is dropped. Every ledger
-  row, journal entry and audit line any past service wrote stays where it is and keeps
-  reconciling.
+- **`202609020005` — `sarraf_service_transaction` dropped, and one sentence of it withdrawn.**
+  It modelled a principal passing through an account plus a separate fee, and the owner said the
+  model was a misreading. Only the command is dropped. Every ledger row, journal entry and audit
+  line any past service wrote stays where it is and keeps reconciling.
+  **The migration also wrote "There is no fee on the side", and that part is now wrong.** The
+  owner has since said the two sides of a commission trade are equal and the earning is a figure
+  they type in: «لە کوێوە دەردەچیت و بۆ کوێ دەچێت یەکسانە بڕەکەی، بەڵام دەبێت چوارگۆشەیەکی تر
+  هەبێت، کە بڕێکی تێدا دابنێم، هەقی ئەم ئیشە». `202609020017` adds that box, and the person it
+  was done for. Both shapes are now true — a commission trade may earn on the spread, or on a
+  stated fee, or on neither — and what was wrong was declaring one of them impossible.
+  `202609020005` itself is untouched; it is applied, and only its claim is withdrawn.
 - **`202609020006` — a debt can be paid.** The register could offset and forgive; it could not
   record money actually moving. Settlement goes through `debt_settlements`, which already owns
   the debt's balance and status, so there is one path for a payment and not two.
@@ -344,17 +351,34 @@ inferred from a diff.
   13,930: seventy dollars that do not exist. So the arithmetic stands unchanged and only the
   presentation was fixed — the safes screen now says in one sentence what a minus sign there
   means, because a right number with no explanation beside it gets reported as a bug.
-- **`202609020012` — a debt a week without an answer reminds itself.** «گەر دوای هەفتەیەک جواب
-  نەبوو، ئۆتۆماتیکی بیکات.» `202609020007` built the half the owner presses and the automatic
-  half was never built — and was reported as done. `sarraf_send_due_debt_reminders` is that
-  half: it finds every open debt somebody else owes where seven days have passed since the last
-  reminder, or since the debt opened if there has been none, and reminds each one through the
-  same command the button uses, so it can never send something the manual path would refuse.
-  The key it mints carries the debt and the week, so asking it ten times in one day sends one
-  message. **It is called when an administrator opens the app, not on a schedule**, because
-  this project cannot verify whether `pg_cron` is on the Supabase plan — and a schedule that
-  silently never fires is worse than none, since the owner would believe reminders were going
-  out. The rule is one server function, so scheduling it later changes nothing else.
+- **`202609020012` then `202609020015` — the automatic debt reminder was built, then removed.**
+  The owner first said «گەر دوای هەفتەیەک جواب نەبوو، ئۆتۆماتیکی بیکات» and `202609020012` built
+  it: `sarraf_send_due_debt_reminders` found every open debt somebody else owed where seven days
+  had passed, and reminded each through the same command the button uses. It was merged and
+  applied to the live database. The product brief then says the opposite in one line — «هیچ debt
+  reminder ـی خۆکار مەبنێرە. تەنها کاتێک خاوەن یان کارمەند دوگمەی ناردن دەگرێت» — and states that
+  where it conflicts with existing code the brief wins. So `202609020015` drops the sender, and
+  the browser no longer calls it when an administrator opens the app. **The reader stays**:
+  `sarraf_debts_due_a_reminder` still answers which debts have gone a week without an answer,
+  because that is what puts the manual button in front of the owner, and answering a question
+  sends nothing — four checks in `verify:accounting` hold that line, including one that asserts
+  no function whose name contains `send_due` exists at all. **Reminders already sent are not
+  touched.** They are notifications real people received, and deleting them to match a decision
+  made afterwards would be rewriting history.
+
+  **The four checks were fault-injected, and each was watched to fail.** Injection A
+  skipped the `drop function` in `202609020015` and separately broke `sarraf_remind_debtor`
+  so the reminder it records carries a different kind: *"nothing in the database will send a
+  reminder on its own"* failed with `sarraf_send_due_debt_reminders can still send without
+  being asked`, and *"the button still works"* failed too, while the two reader checks kept
+  passing — so they are not failing from noise. Injection B restored both and instead
+  rewrote `sarraf_debts_due_a_reminder` from `language sql stable` into a volatile function
+  that quietly writes a notification while it answers: *"and being found sends them nothing"*
+  failed with `asking which debts are due told somebody 1 time(s)`, and the two checks
+  injection A had broken now passed. Every guard has been seen to fail for its own reason.
+  Note that the reader being `stable` is itself structural protection — PostgreSQL will not
+  let a `stable` function write — so injection B had to replace the function outright, which
+  is exactly the change a future edit might make by accident.
 - **A direct trade and a commission trade say when they exceed the owner's own money.** «تەنها
   مامەڵەی ئاسایی پارەکەی لە قاسەی گشتییەوەیە، ئەوانی دیکە هی خۆمە تەنها.» The sufficiency check
   can never catch this: a direct pair buys and sells in one command, so its net effect on the
