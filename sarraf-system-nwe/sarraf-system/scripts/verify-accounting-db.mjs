@@ -4361,6 +4361,61 @@ try {
       if (row !== "none") throw new Error(`a customer who paid in full was given a debt: ${row}`);
     });
 
+    // ── «شێوازی پارەدانی مامەڵە بە تەواوی لەلایەن خاوەن/کارمەند دیاری بکرێت» ────────────────
+    //
+    // Section 11 made the balance draw itself down; section 12 says the route is chosen. Until
+    // 202609020020 those two could not both be true, and the one that moved a customer's money
+    // was the one nobody could decline.
+    const sellRoute = (id, who, amount, total, route) => psql(
+      `select public.sarraf_commit_transactions(
+        jsonb_build_array(jsonb_build_object('id','${id}','type','sell','cp_id','${who}',
+          'cur_id','iqd','amount',${amount},'rate',${(total / amount).toFixed(10)},
+          'against_id','usd','total',${total},'status','completed'
+          ${route ? `,'payment_route','${route}'` : ""})),
+        '[]'::jsonb, null, 'cmd-${id}', 'فرۆشتن', 'a route was named')`);
+
+    check("naming the customer's balance draws on it", () => {
+      psql(`insert into public.app_users(id,name,role,tenant_id)
+            values ('cust-route','Route Customer','customer','t-sarkhel') on conflict (id) do nothing`);
+      psql(`select public.sarraf_customer_vault_move('cust-route','USD',300,'in',1,
+              'پارەی خۆی','vault:route-chosen')`);
+      const before = vaultOf("cust-route", "USD");
+      sellRoute("tx-route-balance", "cust-route", 500, 100, "customer_balance");
+      if (vaultOf("cust-route", "USD") !== before - 100) {
+        throw new Error(`their balance moved by ${vaultOf("cust-route", "USD") - before}, expected -100`);
+      }
+    });
+
+    check("naming any other route leaves their balance alone", () => {
+      // The point of the whole change. A customer who has money must not have it spent because
+      // the owner chose to pay the trade themselves.
+      const before = vaultOf("cust-route", "USD");
+      sellRoute("tx-route-owner", "cust-route", 500, 100, "owner_direct");
+      if (vaultOf("cust-route", "USD") !== before) {
+        throw new Error(`their balance moved by ${vaultOf("cust-route", "USD") - before} on a route that is not theirs`);
+      }
+    });
+
+    check("naming no route at all still means what it always meant", () => {
+      // Every command already recorded named no route, and this is what makes applying the
+      // change to a live database safe: silence keeps its old meaning.
+      const before = vaultOf("cust-route", "USD");
+      sellRoute("tx-route-silent", "cust-route", 500, 100, null);
+      if (vaultOf("cust-route", "USD") !== before - 100) {
+        throw new Error(`a transaction naming no route moved their balance by ${vaultOf("cust-route", "USD") - before}, expected -100`);
+      }
+    });
+
+    check("a route nobody recognises is refused, not treated as one of the others", () => {
+      let refused = false;
+      try { sellRoute("tx-route-nonsense", "cust-route", 500, 100, "whatever_i_typed"); }
+      catch { refused = true; }
+      if (!refused) throw new Error("an unknown route was accepted");
+      if (psql(`select count(*)::text from public.txs where id='tx-route-nonsense'`).trim() !== "0") {
+        throw new Error("the refused transaction was written anyway");
+      }
+    });
+
     check("a customer with no money of their own is given no debt either", () => {
       // Section 11 read at its most literal would make every sale to every customer a debt,
       // because a balance of zero is less than any sale. Section 12 says the payment route is

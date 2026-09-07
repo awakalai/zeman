@@ -11,6 +11,7 @@ import { currencyDecimals as currencyDecimalsOf, formatMoney, formatNumber, roun
 import { errorText, errorTextOr } from "./services/userFacingError";
 import { flashIsGood } from "./services/flashTone.js";
 import { settlementChoices, settlementWords } from "./services/settlement.js";
+import { paymentRouteChoices, paymentRouteEffect, paymentRouteObjection, paymentRouteObjectionText } from "./services/paymentRoute.js";
 import { loadMoneyAtOffices, loadOfficeHoldings, moneyAtOfficeText, officeAdvance } from "./services/accounting.js";
 import { buildBundleForReceipts, bundleArchiveName, shareOrSaveBundle } from "./services/receiptBundleTransfer.js";
 import { reportFault } from "./services/faultReport.js";
@@ -1551,7 +1552,11 @@ export default function App() {
     return { id: t.id, code: t.code || null, type: t.type, direct: !!t.direct,
       pair_id: t.pairId ?? null, direct_role: t.directRole ?? null, own_money: !!t.ownMoney,
       business_flow: t.businessFlow,
-      buy_rate: t.buyRate ?? null, buy_total: t.buyTotal ?? null, cp_id: t.cpId, cp_name: t.cpName, cur_id: t.curId, amount: t.amount, rate: t.rate, against_id: t.againstId, total: t.total, partner_id: t.partnerId, partner_fee: t.partnerFee ?? null, status: t.status, paid_at: t.paidAt, profit: t.profit, profit_cur_id: t.profitCurId, note: t.note || null, date: t.date, edited: !!t.edited, deleted: !!t.deleted };
+      buy_rate: t.buyRate ?? null, buy_total: t.buyTotal ?? null, cp_id: t.cpId, cp_name: t.cpName, cur_id: t.curId, amount: t.amount, rate: t.rate, against_id: t.againstId, total: t.total, partner_id: t.partnerId, partner_fee: t.partnerFee ?? null, status: t.status, paid_at: t.paidAt, profit: t.profit, profit_cur_id: t.profitCurId, note: t.note || null, date: t.date, edited: !!t.edited, deleted: !!t.deleted,
+      // «شێوازی پارەدانی مامەڵە بە تەواوی لەلایەن خاوەن/کارمەند دیاری بکرێت.» Null when nobody
+      // named one, and the server then means what it always meant — which is what lets this
+      // reach a live database without changing anything already recorded.
+      payment_route: t.paymentRoute ?? null };
   };
 
   // One key per intent, kept until the outcome is actually known. A key minted fresh on each
@@ -2180,9 +2185,13 @@ export default function App() {
       flash("مامەڵەی چاوەڕوان دەبێت بە کڕیارێکی تۆمارکراو ببەسترێتەوە تا قەرزەکە خاوەن و ئاڕاستەی ڕوونی هەبێت");
       return false;
     }
-    if (f.type === "buy" && f.status === "pending" && !f.officeId) {
-      flash("بۆ کڕینی پارەنەدراو دەبێت نووسینگەی بەرپرسی پارەدان دیاری بکرێت");
-      return false;
+    // One place decides what a route needs, and it is the same place the screen reads to say
+    // so — a second copy here is how the two drift and the owner is refused for a rule no
+    // message explains.
+    if (!f.direct) {
+      const objection = paymentRouteObjection(f.paymentRoute,
+        { officeId: f.officeId, customerId: f.cpId });
+      if (objection) { flash(paymentRouteObjectionText(objection, activeLanguage())); return false; }
     }
     // دراوی دەرەوە: دەبێت لای تەرەفێک بێت
     if (cur(f.curId).external && !f.partnerId) { flash(`${cur(f.curId).name} دەبێت لای تەرەفێک دابنرێت`); return false; }
@@ -2247,6 +2256,7 @@ export default function App() {
           receiptIds: f.receiptIds,
           transaction: TR(t),
           officeId: f.officeId || null,
+          paymentRoute: f.paymentRoute || null,
           reason: String(f.note || "").trim() || "پشتڕاستکردنەوە و گۆڕینی فیشە پەسەندکراوەکان بۆ مامەڵە",
         });
       } else if (t.type === "buy" && t.status === "pending") {
@@ -5164,6 +5174,10 @@ function TxForm({ data, cur, calc, usr, mySafe, avgRate, inventoryPosition, usdV
     // because buying from four people at four prices is the whole reason for this.
     extraSellers: [],
     buyStatus: "completed", sellStatus: "completed",
+    // «شێوازی پارەدانی مامەڵە بە تەواوی لەلایەن خاوەن/کارمەند دیاری بکرێت.» The ordinary route
+    // is the one the owner takes most days, and it is the one that asks nothing of anybody —
+    // so it opens chosen rather than leaving the form in a state the server would refuse.
+    paymentRoute: "owner_direct",
     status: e ? e.status : "completed",
     officeId: "",
     note: e ? e.note : "",
@@ -5890,17 +5904,37 @@ function TxForm({ data, cur, calc, usr, mySafe, avgRate, inventoryPosition, usdV
               )}
             </div>
 
+            {/* «شێوازی پارەدانی مامەڵە بە تەواوی لەلایەن خاوەن/کارمەند دیاری بکرێت.»
+              *
+              * This was two buttons, «درا» and «نەدرا», and everything else was inferred:
+              * "not paid" meant an office on a purchase and a debt on a sale, and money came
+              * out of a customer's balance whenever they happened to have some. Three outcomes
+              * wearing one word, and the one that moved a customer's money was the one nobody
+              * chose. Each route is now named, and naming it is what makes it happen. */}
             <div>
-              <Lbl>{tr("دۆخی پارە")}</Lbl>
-              <div className="flex gap-2">
-                {settlementChoices(f.type, activeLanguage()).map(([k, l]) => (
-                  <button key={k} onClick={() => setF({ ...f, status: k, officeId: k === "pending" ? f.officeId : "" })}
-                    className="flex-1 py-2.5 rounded-[var(--r-sm)] text-[12.5px] font-medium tap"
-                    style={f.status === k
+              <Lbl>{tr("پارەکە کێ دەیدات؟")}</Lbl>
+              <div className="grid grid-cols-2 gap-2">
+                {paymentRouteChoices(f.type, activeLanguage()).map(([route, label]) => (
+                  <button key={route} type="button"
+                    onClick={() => setF({ ...f, paymentRoute: route,
+                      status: paymentRouteEffect(route).status,
+                      officeId: route === "office" ? f.officeId : "" })}
+                    className="py-2.5 px-2 rounded-[var(--r-sm)] text-[12.5px] font-medium tap"
+                    style={f.paymentRoute === route
                       ? { background: "var(--surf-3)", color: "var(--txt)", border: "1px solid var(--line-2)" }
-                      : { color: "var(--txt-3)", border: "1px solid var(--line)" }}>{l}</button>
+                      : { color: "var(--txt-3)", border: "1px solid var(--line)" }}>{label}</button>
                 ))}
               </div>
+              {/* Said before the press, not after the refusal. */}
+              {(() => {
+                const objection = paymentRouteObjection(f.paymentRoute,
+                  { officeId: f.officeId, customerId: f.cpId });
+                return objection ? (
+                  <div className="text-[11px] mt-2" style={{ color: "var(--warn, var(--txt-3))" }}>
+                    {paymentRouteObjectionText(objection, activeLanguage())}
+                  </div>
+                ) : null;
+              })()}
             </div>
 
             {f.type === "buy" && f.status === "pending" && (

@@ -1,4 +1,5 @@
 import test from "node:test";
+import { paymentRouteObjection } from "../src/services/paymentRoute.js";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
@@ -139,7 +140,16 @@ test("an office payment needs immutable uploaded evidence, not a typed reference
 });
 
 test("the UI requires an exact office, and the office pays in one press", () => {
-  assert.match(app, /f\.type === "buy" && f\.status === "pending" && !f\.officeId/);
+  // This used to grep App.jsx for the literal condition
+  //   f.type === "buy" && f.status === "pending" && !f.officeId
+  // which asserted the shape of the code and not what it does — so it broke the moment the
+  // rule moved into a module, while the rule itself was still enforced. The requirement is
+  // that an office payment cannot be recorded without naming which office, and that is now
+  // asked of the module the screen and the validation both read.
+  assert.equal(paymentRouteObjection("office", { customerId: "cust-1" }), "needOffice");
+  assert.equal(paymentRouteObjection("office", { customerId: "cust-1", officeId: "off-1" }), null);
+  assert.match(app, /paymentRouteObjection\(f\.paymentRoute/,
+    "the form must ask the same module the screen does, not carry a second copy of the rule");
   assert.match(app, /p_office_id: f\.officeId/);
   assert.doesNotMatch(app, /data\.users\.find\(\(u\) => u\.role === "office" && !u\.deleted\)/,
     "a pending purchase must not silently choose the first office");
