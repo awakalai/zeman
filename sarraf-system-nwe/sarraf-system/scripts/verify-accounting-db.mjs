@@ -3945,10 +3945,29 @@ try {
       '[]'::jsonb, null, 'cmd-${id}', 'فرۆشتن', 'vault settlement')`);
 
     check("a customer buying pays from their own money without being asked", () => {
-      // The main safe has to hold the yuan being sold, or the command refuses for a reason
-      // that has nothing to do with vaults.
+      // Two things have to be true before a sale can happen at all, and neither has
+      // anything to do with vaults. Getting this wrong cost a day, so it is written down.
+      //
+      // First, INVENTORY. "sale would create negative inventory" is measured by
+      // sarraf_inventory_snapshot_at, which walks public.txs — not public.ledger. A bare
+      // ledger row raises the cash but leaves the inventory at zero, so the sale is refused
+      // for a reason that looks like this check failing and is not. Only a recorded purchase
+      // creates sellable stock, because a sale is priced against weighted-average cost and
+      // cost comes from a buy row.
+      //
+      // Second, the owner's OWN dollars. At this point in the run the drawer holds 1173 USD
+      // and the customers hold 1150 of it, so the owner may spend 23 — which is the customer
+      // separation above working exactly as intended. A purchase paid for in dollars must
+      // therefore be funded first, from the owner's own money, or the command refuses with
+      // "cash location has insufficient balance". The deposit below carries no customer_id,
+      // which is what makes it the owner's.
       psql(`insert into public.ledger(id,type,cur_id,amount,date,tenant_id)
-            values ('led-vault-stock','buy','iqd',90000000,now(),'t-sarkhel')`);
+            values ('led-vault-own-usd','capital','usd',5000,now(),'t-sarkhel')`);
+      psql(`select public.sarraf_commit_transactions(
+        jsonb_build_array(jsonb_build_object('id','tx-vault-stock','type','buy','cp_id','cust-1',
+          'cur_id','iqd','amount',20000,'rate',0.15,'against_id','usd','total',3000,
+          'status','completed')),
+        '[]'::jsonb, null, 'cmd-tx-vault-stock', 'کڕین', 'stock for the vault checks')`);
       // cust-safe holds 550 from the deposits above. They buy something for 200.
       const heldBefore = vaultOf("cust-safe", "USD");
       const mineBefore = ownSafe("usd");

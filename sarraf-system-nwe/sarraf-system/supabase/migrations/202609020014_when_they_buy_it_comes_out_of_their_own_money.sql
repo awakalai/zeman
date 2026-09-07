@@ -59,8 +59,14 @@ begin
   v_take := least(v_available, p_amount);
   if v_take <= 0 then return 0; end if;
 
-  update public.customer_vaults set available = available - v_take where id = v_vault;
-
+  -- The vault is NOT written to here, and that is the whole point. customer_vault_events
+  -- carries an after-insert trigger, apply_customer_vault_event, which applies
+  -- available_delta to the vault itself. An explicit update as well took the money twice:
+  -- a customer with 550 who bought something for 200 was left holding 150, and the next two
+  -- sales were refused outright by customer_vaults_available_check for trying to go below
+  -- zero. Writing only the event keeps the balance and its own history in agreement by
+  -- construction — the balance cannot drift from the events that explain it, because the
+  -- events are the only thing that moves it.
   insert into public.customer_vault_events(
     vault_id, customer_id, currency, kind, available_delta,
     reason, actor_id, command_key)
