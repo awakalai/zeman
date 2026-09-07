@@ -124,17 +124,22 @@ try {
   // are correct here: every request to them is aborted, and what is under test is whether the
   // bundle parses, executes and renders under the deployed headers, not where it points.
   console.log(`Building the bundle to check, into ${dist}`);
-  const built = spawn(path.join(root, "node_modules", ".bin", "vite"),
+  const vite = path.join(root, "node_modules", ".bin", process.platform === "win32" ? "vite.cmd" : "vite");
+  const built = spawn(vite,
     ["build", "--outDir", dist, "--emptyOutDir"], {
       cwd: root,
       stdio: "inherit",
+      shell: process.platform === "win32",
       env: {
         ...process.env,
         VITE_SUPABASE_URL: "https://stub.supabase.co",
         VITE_SUPABASE_ANON_KEY: "stub-anon-key-for-bundle-verification",
       },
     });
-  const code = await new Promise((r) => built.on("close", r));
+  const code = await new Promise((resolve, reject) => {
+    built.once("error", reject);
+    built.once("close", resolve);
+  });
   if (code !== 0) throw new Error("the production build failed, so there is no bundle to load");
 
   const pw = await loadPlaywright();

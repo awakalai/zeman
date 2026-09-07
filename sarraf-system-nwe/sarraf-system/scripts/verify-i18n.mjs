@@ -41,6 +41,8 @@ const files = [];
   }
 })(ROOT);
 
+const relativeKey = (file) => file.split(path.sep).join("/");
+
 /* ─────────────────────────────────────────────────────────────────────────────
  * Part one, and it does not ratchet: every key the interface asks for by name
  * must exist in both dictionaries.
@@ -91,7 +93,7 @@ for (const file of files.sort()) {
 
   for (const m of text.matchAll(LITERAL_KEY)) note(m[1].replace(/\\"/g, '"'));
 
-  const registered = COMPUTED[file] || [];
+  const registered = COMPUTED[relativeKey(file)] || [];
   for (const m of text.matchAll(COMPUTED_KEY)) {
     const expression = m[1].trim();
     const known = registered.find(([starts]) => expression.startsWith(starts));
@@ -220,7 +222,7 @@ for (const file of files.sort()) {
     }
     n += 1;
   }
-  if (n) counts[file] = n;
+  if (n) counts[relativeKey(file)] = n;
 }
 
 // ── one name per thing, in the reader's own language ─────────────────────────────────────
