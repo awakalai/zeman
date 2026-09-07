@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, ArrowLeft, CheckCircle2, CircleGauge, Inbox, RefreshCw, ShieldAlert } from "lucide-react";
-import { loadActionInbox, loadIntegrityCenter } from "../../services/operationalControl";
+import { loadActionInbox, safeInboxAction } from "../../services/operationalControl";
 import { userFacingServiceError } from "../../services/userFacingError";
 import "./operational-centers.css";
 
@@ -102,7 +102,7 @@ function Center({ kind, client, lang = "ku", onNavigate }) {
               <h2>{item.title}</h2>
               <p>{item.detail || "—"}</p>
             </div>
-            {item.path && <button type="button" onClick={() => onNavigate(item.path)} aria-label={`${item.title} — ${common.open}`}>
+            {safeInboxAction(item) && <button type="button" onClick={() => onNavigate(safeInboxAction(item).path, item.focus || null)} aria-label={`${item.title} — ${common.open}`}>
               <span>{common.open}</span><ArrowLeft aria-hidden="true" />
             </button>}
           </article>;

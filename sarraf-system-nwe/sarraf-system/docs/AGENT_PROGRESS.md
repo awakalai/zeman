@@ -35,12 +35,46 @@ not called complete because its code exists; the status below names the evidence
 - Browser proof for every external portal and the missing PDF-dependent requirements remains
   separate work.
 
-## Next batch
+## Batch 2 — Smart Work Inbox and Universal Search
 
 The next implementation batch is the receipt Command Center: one clear ready/attention/archive
 workflow, batch-safe selection, and direct actions without exposing OCR internals on daily cards.
 
-## Batch 2 — Party 360 profiles and cash reconciliation
+## Batch 2 — Smart Work Inbox and Universal Search
+
+**Status:** Implemented in this branch; local source verification passed. Database/browser proof is
+still pending production credentials and dependency restoration.
+
+### Acceptance criteria
+
+- Owner and operational staff receive one bounded, role-gated action inbox through
+  `sarraf_action_inbox_v3`; returned actions are navigation-only and preserve the selected batch
+  focus without exposing identifiers in ordinary card copy.
+- Inbox cards validate their action before rendering a direct action, so a malformed or
+  mutation-shaped server response cannot become a browser-side financial command.
+- Universal search keeps the existing server-side tenant/role filtering and bounded RPC, while
+  presenting navigation, people, transactions, receipts, uploads, batches, and currencies in
+  stable user-facing groups.
+- Existing multilingual labels, direct receipt focus, and query-string-safe navigation remain
+  intact.
+
+### Evidence
+
+- `src/services/operationalControl.js` contains `safeInboxAction` and deterministic search
+  grouping; `test/globalSearch.test.js` and `test/operationalCenters.test.js` cover bounds,
+  grouping, authorization-shaped actions, and rejection of data-bearing paths.
+- `supabase/migrations/202609070001_smart_work_inbox.sql` adds the bounded owner/staff read RPC
+  with authenticated execution only and no mutation statements.
+- `npm run verify:source` passed. The focused tests for global search and operational centers
+  passed; the broader test command also exposed pre-existing missing dependency/path failures.
+
+### Limits
+
+- Live RPC and browser proof require the project's Supabase credentials.
+- `npm run build` is blocked in this checkout because dependencies (`vite`, `@supabase/supabase-js`)
+  are not installed; no dependency manifest was changed.
+
+## Batch 3 — Party 360 profiles and cash reconciliation
 
 **Status:** Implemented on the enhancement branch; verification and publication are in progress.
 
