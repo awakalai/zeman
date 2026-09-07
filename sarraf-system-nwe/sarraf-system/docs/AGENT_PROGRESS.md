@@ -5,7 +5,7 @@ not called complete because its code exists; the status below names the evidence
 
 ## Batch 1 — Today's Work and primary navigation
 
-**Status:** Implemented and verified in the merged PR #140.
+**Status:** Implemented and verified in the merged PR #141.
 
 ### Acceptance criteria
 
@@ -25,7 +25,7 @@ not called complete because its code exists; the status below names the evidence
   `test/todaysWork.test.js` covers empty, pending, deleted, office, and count semantics.
 - `src/App.jsx` consumes `todaysWork()` and derives desktop and mobile navigation from
   `NAV_GROUPS`.
-- GitHub CI for merged PR #140 passed the accounting, business-flow, receipt, tenant-isolation,
+- GitHub CI for merged PR #141 passed the accounting, business-flow, receipt, tenant-isolation,
   role-browser, journey, build, source, i18n, and shipped-bundle gates.
 
 ### Limits still recorded
