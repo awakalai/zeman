@@ -32,6 +32,7 @@ import { capitalEventsFrom, investorShare, investorsTotalByCurrency, profitEvent
 import { batchStage, todaysWork } from "./services/todaysWork.js";
 import { receiptWorkBuckets } from "./services/receiptCommandCenter.js";
 import { directTradeLegs, filledSellers, firstIncompleteSeller } from "./services/directTrade.js";
+import { transactionTimeline } from "./services/transactionTimeline.js";
 import { crossRate, fromUsdAsOf, rateAsOf, rateErrorText, rateOf, unpricedCurrencies, usdFromAsOf, validateRate } from "./services/currencyRate";
 import {
   DIRECTION_REFUSED, mayEditExtraction, mayUploadDirection,
@@ -6158,7 +6159,7 @@ function TxList({ data, cur, usr, onEdit, onDel, settle, unsettle, loadTxHistory
             <Card className="px-1 py-1">
               {items.map((t, i) => (
                 <div key={t.id} style={i ? { borderTop: "1px solid var(--line)" } : {}}>
-                  <TxRow t={t} cur={cur} usr={usr} onEdit={onEdit} onDel={onDel} settle={settle} unsettle={unsettle} />
+                  <TxRow t={t} cur={cur} usr={usr} ledger={data.ledger} onEdit={onEdit} onDel={onDel} settle={settle} unsettle={unsettle} />
                 </div>
               ))}
             </Card>
@@ -6180,7 +6181,7 @@ function TxList({ data, cur, usr, onEdit, onDel, settle, unsettle, loadTxHistory
 }
 
 /* flip = بینینی مامەڵەکە لە ڕوانگەی لایەنی بەرامبەرەوە / lite = بێ وردەکاری ناوخۆیی */
-function TxRow({ t, cur, usr, onEdit, onDel, flip, lite, settle, unsettle }) {
+function TxRow({ t, cur, usr, ledger = [], onEdit, onDel, flip, lite, settle, unsettle }) {
   // The state, the button and the flash are three views of one question, so they are asked once.
   const said = settlementWords({ type: t.type, flip, lang: activeLanguage() });
   const [open, setOpen] = useState(false);
@@ -6189,6 +6190,7 @@ function TxRow({ t, cur, usr, onEdit, onDel, flip, lite, settle, unsettle }) {
   const shown = flip ? (t.type === "buy" ? "sell" : "buy") : t.type;
   const pend = t.status === "pending";
   const isBuy = shown === "buy";
+  const timeline = transactionTimeline(t, { ledger, scope: lite ? "portal" : "owner" });
 
   return (
     <div className="rounded-[var(--r-sm)]" style={{ background: open ? "var(--surf-2)" : "transparent" }}>
@@ -6275,6 +6277,31 @@ function TxRow({ t, cur, usr, onEdit, onDel, flip, lite, settle, unsettle }) {
                 <Pill tone="amber">{said.unsettled}</Pill>
               </div>
             ) : null}
+
+            <div className="pt-2.5" style={{ borderTop: "1px solid var(--line)" }}>
+              <div className="text-[11px] font-semibold mb-2" style={{ color: "var(--txt-2)" }}>
+                {tr("ڕەوتی کات")}
+              </div>
+              <div className="space-y-2">
+                {timeline.map((event) => (
+                  <div key={event.id} className="flex items-start gap-2.5 text-[11px]">
+                    <span className="w-2 h-2 rounded-full mt-1.5 shrink-0"
+                      style={{ background: event.kind === "pending" ? "var(--warn)" : event.kind === "settled" ? "var(--pos)" : "var(--ac)" }} />
+                    <div className="min-w-0 flex-1">
+                      <div style={{ color: "var(--txt-2)" }}>
+                        {event.kind === "created" ? tr("مامەڵە تۆمار کرا") :
+                          event.kind === "pending" ? tr("پارەدان چاوەڕوانە") :
+                            event.kind === "settled" ? tr("پارەدان تۆمار کرا") : tr("جوڵەی پارە تۆمار کرا")}
+                      </div>
+                      <div className="text-[10px]" style={{ ...num, color: "var(--txt-3)" }}>
+                        {event.at ? new Date(event.at).toLocaleString("en-GB") : "—"}
+                        {event.amount != null && event.currency ? ` · ${fmt(Math.abs(event.amount), cur(event.currency).dec ?? 0)} ${cur(event.currency).code}` : ""}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
 
             <div className="flex gap-2 pt-2.5 flex-wrap" style={{ borderTop: "1px solid var(--line)" }}>
               <button onClick={(e) => { e.stopPropagation(); setQr(true); }}
@@ -10169,7 +10196,7 @@ function CustomerDetail({ id, back, data, calc, cur, usr, onSave, settle, flash,
         <>
           <TxFilterBar data={data} f={f} setF={setF} count={list.length} />
           {list.length === 0 ? <Card><Empty t={tr("هیچ مامەڵەیەک نەدۆزرایەوە")} /></Card> :
-            list.map((t) => <TxRow key={t.id} t={t} cur={cur} usr={usr} settle={settle} />)}
+            list.map((t) => <TxRow key={t.id} t={t} cur={cur} usr={usr} ledger={data.ledger} settle={settle} />)}
         </>
       )}
     </div>
