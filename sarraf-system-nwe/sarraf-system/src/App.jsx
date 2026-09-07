@@ -3487,6 +3487,10 @@ export default function App() {
             {page === "newtx" && !pendingBatch && newTxKind === "commission" &&
               <DeferredPanel><CommissionTrade client={supabase} lang={lang}
                 currencies={data?.currencies || []} ownMoney={mySafe}
+                // «ئاماژە بەوەش بکەم کە بۆ چ کەسێکی دەکەم.» Only people this business actually
+                // knows, because the server refuses anybody else and a list that offers a
+                // refusal is a list that wastes the owner's press.
+                people={(data?.users || []).filter((u) => !u.deleted && u.role !== "admin")}
                 onRecorded={(answer) => flash(`${tr("مامەڵەی عمولە تۆمار کرا")} #${answer.code ?? ""}`)} /></DeferredPanel>}
             {page === "txs" && (editTx
               ? <TxForm {...shared} onSave={saveTx} editing={editTx} onCancel={() => setEditTx(null)} />
