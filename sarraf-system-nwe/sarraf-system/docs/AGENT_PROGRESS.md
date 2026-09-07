@@ -39,3 +39,31 @@ not called complete because its code exists; the status below names the evidence
 
 The next implementation batch is the receipt Command Center: one clear ready/attention/archive
 workflow, batch-safe selection, and direct actions without exposing OCR internals on daily cards.
+
+## Batch 2 — Document, health, and offline safety
+
+**Status:** Implemented in this branch; database and PDF-dependent work remains blocked.
+
+### Implemented
+
+- Document bundle export now refuses while offline before calling the server release RPC. This
+  prevents an offline document action from being mistaken for a completed authorization or
+  release, and leaves authoritative server state unchanged.
+- Manager overview and server reconciliation failures use the shared user-facing error mapping
+  rather than exposing raw database or transport details.
+- Added focused coverage proving the offline bundle guard makes no server call.
+
+### Evidence
+
+- `test/receiptBundleTransfer.test.js` covers the offline refusal and zero RPC calls.
+- `src/services/receiptBundleTransfer.js` performs the online check before
+  `sarraf_release_receipts_for_bundle`.
+- `src/components/accounting/ManagerOverview.jsx` and the Backup health panel use
+  `userFacingServiceError`.
+
+### Blocked / not claimed
+
+- Branded RTL PDF generation remains blocked because the authoritative ZEMAN logic PDF and a
+  supported PDF business/export contract are absent from this repository.
+- No live migration, backup/PITR change, or offline financial command queue was added. Financial
+  commands remain server-authoritative and offline-blocked.

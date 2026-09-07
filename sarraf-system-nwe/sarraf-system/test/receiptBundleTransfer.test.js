@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  SIGNED_URL_SECONDS, buildBundleForReceipts, bundleArchiveName, bundleFileName,
+  SIGNED_URL_SECONDS, OFFLINE_BUNDLE_MESSAGE, buildBundleForReceipts, bundleArchiveName, bundleFileName,
   bundleManifestRow, releaseForBundle, shareOrSaveBundle, signReleasedPaths,
 } from "../src/services/receiptBundleTransfer.js";
 
@@ -61,6 +61,15 @@ test("asking for more than a hundred is refused before any server call", async (
   const client = clientWith([]);
   const many = Array.from({ length: 101 }, (_, i) => `r${i}`);
   await assert.rejects(() => releaseForBundle(client, many), /at most 100/);
+  assert.equal(client.calls.length, 0);
+});
+
+test("offline bundle preparation refuses before any authoritative release call", async () => {
+  const client = clientWith([doc("r1")]);
+  await assert.rejects(
+    () => buildBundleForReceipts(client, ["r1"], { navigatorImpl: { onLine: false } }),
+    (error) => error.code === "offline" && error.message === OFFLINE_BUNDLE_MESSAGE,
+  );
   assert.equal(client.calls.length, 0);
 });
 

@@ -3634,7 +3634,7 @@ export default function App() {
             {page === "audit" && <Audit data={data} />}
             {page === "insights" && <Insights {...shared} flash={flash} />}
             {page === "close" && <DayClose data={data} calc={calc} cur={cur} usr={usr} closeDay={closeDay} sumUsd={sumUsd} />}
-            {page === "backup" && <Backup data={data} calc={calc} cur={cur} downloadBackup={downloadBackup} flash={flash} sumUsd={sumUsd} mySafe={mySafe} owners={owners} ratesReady={ratesReady} isOwner={isOwner} runSystemHealth={runSystemHealth} setMaintenanceMode={setMaintenanceMode} />}
+            {page === "backup" && <Backup data={data} calc={calc} cur={cur} lang={lang} downloadBackup={downloadBackup} flash={flash} sumUsd={sumUsd} mySafe={mySafe} owners={owners} ratesReady={ratesReady} isOwner={isOwner} runSystemHealth={runSystemHealth} setMaintenanceMode={setMaintenanceMode} />}
           </main>
 
           {/* لیستی خوارەوە — تەنها لە مۆبایل */}
@@ -10957,7 +10957,7 @@ function Report({ data, calc, cur, usr, profitIn, investorsProfitIn, invShare, s
 
 
 /* ══════════════════ پاراستنی داتا و باکئەپ ══════════════════ */
-function Backup({ data, calc, cur, downloadBackup, flash, sumUsd, mySafe, owners, ratesReady, isOwner, runSystemHealth, setMaintenanceMode }) {
+function Backup({ data, calc, cur, lang = "ku", downloadBackup, flash, sumUsd, mySafe, owners, ratesReady, isOwner, runSystemHealth, setMaintenanceMode }) {
   const [busy, setBusy] = useState(false);
   const [recon, setRecon] = useState(null);
   const [reconErr, setReconErr] = useState("");
@@ -11016,7 +11016,7 @@ function Backup({ data, calc, cur, downloadBackup, flash, sumUsd, mySafe, owners
       setRecon(result?.reconciliation || result || null);
     } catch (e) {
       setRecon(null);
-      setReconErr(e?.message || "یەکسانکردنەوە سەرکەوتوو نەبوو");
+      setReconErr(userFacingServiceError(e, lang, "یەکسانکردنەوە سەرکەوتوو نەبوو"));
     } finally {
       setBusy(false);
     }
