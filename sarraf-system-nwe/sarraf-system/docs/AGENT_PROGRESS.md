@@ -37,9 +37,24 @@ not called complete because its code exists; the status below names the evidence
 
 ## Batch 2 — Smart Work Inbox and Universal Search
 
+The next implementation batch is the receipt Command Center: one clear ready/attention/archive
+workflow, batch-safe selection, and direct actions without exposing OCR internals on daily cards.
+
 **Status:** Implemented in the merged PR #147; local source verification passed. Database/browser
 proof remains pending production credentials.
 
+### Acceptance criteria
+
+- Owner and operational staff receive one bounded, role-gated action inbox through
+  `sarraf_action_inbox_v3`; returned actions are navigation-only and preserve the selected batch
+  focus without exposing identifiers in ordinary card copy.
+- Inbox cards validate their action before rendering a direct action, so a malformed or
+  mutation-shaped server response cannot become a browser-side financial command.
+- Universal search keeps the existing server-side tenant/role filtering and bounded RPC, while
+  presenting navigation, people, transactions, receipts, uploads, batches, and currencies in
+  stable user-facing groups.
+- Existing multilingual labels, direct receipt focus, and query-string-safe navigation remain
+  intact.
 ### Evidence
 
 - `src/services/operationalControl.js` contains bounded inbox/search derivation and
@@ -51,7 +66,30 @@ proof remains pending production credentials.
 
 - Live RPC and browser proof require the project's Supabase credentials.
 
-## Batch 3 — Document, health, and offline safety
+## Batch 3 — Party 360 profiles and cash reconciliation
+
+**Status:** Implemented on the enhancement branch; verification and publication are in progress.
+
+### Acceptance criteria
+
+- Staff can open a scoped Party 360 read model for customers, partners, offices, and investors.
+- The profile combines identity, per-currency balances, open debts, transactions, receipts, and
+  office payment assignments where the existing data model has them.
+- The server-side profile contract excludes profit and applies staff role and tenant isolation.
+- Cash reconciliation reports physical, system, held, and debt amounts per currency.
+- Discrepancies remain visible and are never silently corrected by the UI.
+
+### Evidence
+
+- `supabase/migrations/202609070001_party_profiles_and_reconciliation.sql` adds the two
+  read-only RPCs with explicit authorization and no mutation path.
+- `src/services/partyProfiles.js` normalizes server-owned values without recomputing financial
+  totals; `test/partyProfiles.test.js` covers scope forwarding, currency separation,
+  discrepancy preservation, and refusal propagation.
+- `src/components/accounting/Party360.jsx` and `CashReconciliation.jsx` are reachable from the
+  People and Money navigation groups.
+
+## Batch 4 — Document, health, and offline safety
 
 **Status:** Implemented in this branch; database and PDF-dependent work remains blocked.
 

@@ -48,7 +48,7 @@ import { BRAND } from "./brand/brand";
 import { BrandLogo } from "./brand/BrandLogo";
 import "./components/portal/portal.css";
 import {
-  LayoutDashboard, Vault, ArrowLeftRight, ListOrdered, Users, Handshake, Boxes,
+  LayoutDashboard, Vault, ArrowLeftRight, ListOrdered, Users, UserRound, Handshake, Boxes,
   TrendingUp, Building2, Banknote, UserCog, PieChart, History, Plus, Trash2, Pencil,
   CheckCircle2, AlertTriangle, Eye, LogOut, Wallet, ChevronLeft, Coins,
   Receipt, TrendingDown, ScanLine, Scale, Upload, XCircle, SlidersHorizontal, Search, MoreHorizontal, Zap, ArrowDownLeft, ArrowUpRight, X, Share2, Database, Download, ClipboardCheck, RotateCcw, MessageCircle, Moon, Sun, WifiOff, Wifi, EyeOff, Bell, QrCode, Camera, Fingerprint, ShieldCheck, KeyRound, Inbox, ShieldAlert, FileCheck2, Send, Clock, Gauge
@@ -80,6 +80,8 @@ const ReceiptReviewWorkspace = lazyNamed(() => import("./components/receipts/Rec
 const ReceiptForwardingCenter = lazyNamed(() => import("./components/receipts/ReceiptForwardingCenter"), "ReceiptForwardingCenter");
 const ForwardedReceipts = lazyNamed(() => import("./components/receipts/ForwardedReceipts"), "ForwardedReceipts");
 const BooksReconciliation = lazyNamed(() => import("./components/accounting/BooksReconciliation"), "BooksReconciliation");
+const Party360 = lazyNamed(() => import("./components/accounting/Party360"), "Party360");
+const CashReconciliation = lazyNamed(() => import("./components/accounting/CashReconciliation"), "CashReconciliation");
 const CanonicalBatchSummary = lazyNamed(() => import("./components/receipts/CanonicalBatchSummary"), "CanonicalBatchSummary");
 
 function DeferredPanel({ children, compact = false }) {
@@ -209,6 +211,7 @@ const ADMIN_CENTER_PAGE_IDS = new Set([
   "manager-overview",
   "receipt-review",
   "receipt-forwarding",
+  "cash-reconciliation",
   "backup",
 ]);
 
@@ -3168,12 +3171,14 @@ export default function App() {
         // people as the line above it, which is why it reads better here than under «فیش».
         ["receipt-forwarding", navSectionLabel("فۆرواردکراوەکان", "Forwarded", "المُحوَّلة"), Send],
         ["close", navSectionLabel("بەستنی ڕۆژ", "Close the day", "إقفال اليوم"), ClipboardCheck],
+        ["cash-reconciliation", navSectionLabel("ڕێکخستنەوەی قاسە", "Cash reconciliation", "مطابقة النقد"), Scale],
       ],
     },
     {
       label: navSectionLabel("خەڵک", "People", "الأشخاص"),
       items: [
         ["people", tr("بەکارهێنەران"), Users],
+        ["party-360", navSectionLabel("پڕۆفایلی لایەن", "Party 360", "ملف الطرف"), UserRound],
         ["cashbox", navSectionLabel("قاسەی کڕیاران", "Customer cashbox", "خزنة الزبائن"), Wallet],
         ["partner-accounts", navSectionLabel("حسابی هاوبەشان", "Partner accounts", "حسابات الشركاء"), Handshake],
       ],
@@ -3536,6 +3541,7 @@ export default function App() {
             {page === "receipts" && <ReceiptsHub {...shared} batches={batches} batchLoadError={batchLoadError} reloadBatches={reloadBatches} flash={flash} profile={profile}
               searchFocus={searchFocus} onMakeTx={(b) => { setPendingBatch(b); setPage("newtx"); }} />}
             {page === "people" && <PeopleHub {...shared} accountMove={accountMove} accountTransfer={accountTransfer} profile={profile} detailId={detailId} setDetailId={setDetailId} onSave={saveTx} transfer={transfer} officePay={officePay} officeSettle={officeSettle} settle={settle} createUser={createUser} deleteUser={deleteUser} setUserRate={setUserRate} flash={flash} />}
+            {page === "party-360" && <DeferredPanel><Party360 client={supabase} lang={lang} parties={(data?.users || []).filter((u) => !u.deleted && u.role !== "admin")} /></DeferredPanel>}
             {page === "report" && <Report {...shared} />}
             {/* The admin centre is one business's world. A manager belongs to no business, so
                 for them it is not a page they should not open — it is a page with no meaning. */}
@@ -3568,6 +3574,7 @@ export default function App() {
             {page === "integrity" && <DeferredPanel><IntegrityCenter client={supabase} lang={lang} onNavigate={(path) => setPage(path.slice(2))} /></DeferredPanel>}
             {/* Two records of the same money are only safe while they agree. */}
             {page === "integrity" && <div className="mt-4"><DeferredPanel><BooksReconciliation client={supabase} lang={lang} flash={flash} /></DeferredPanel></div>}
+            {page === "cash-reconciliation" && <DeferredPanel><CashReconciliation client={supabase} lang={lang} /></DeferredPanel>}
             {/* AppErrorBoundary has been writing these since 202608280022 and nothing ever read
                 them. A crash on a customer's phone reached the database and stopped there. */}
             {page === "integrity" && <div className="mt-4"><DeferredPanel><FaultList client={supabase} lang={lang} /></DeferredPanel></div>}
