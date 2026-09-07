@@ -1150,6 +1150,14 @@ const mapTxRecord = (r) => ({
   edited: r.edited, deleted: r.deleted,
 });
 
+// «2FA بۆ خاوەن و کارمەند لەم قۆناغەدا پێویست نییە» — section 6, and the owner said it again in
+// as many words. Empty means no role is held at a second-factor gate. It was ["admin","office"],
+// which meant an administrator who had not enrolled could sign in and then be refused by the
+// four commands the job is actually made of. Put a role back in this set and the gate returns
+// for it: MfaGate, the enrolment screen and Supabase's own factor handling are all still here.
+// 202609020019 lifts the matching refusals on the server and names what still guards them.
+const MFA_REQUIRED_ROLES = new Set([]);
+
 export default function App() {
   const [session, setSession] = useState(undefined);
   const [data, setData] = useState(null);
@@ -1506,7 +1514,13 @@ export default function App() {
         if (cancelled) return;
         setProfile(gateProfile);
 
-        if (gateProfile.role === "admin" || gateProfile.role === "office") {
+        // «2FA بۆ خاوەن و کارمەند لەم قۆناغەدا پێویست نییە.» Nobody is stopped at a
+        // second-factor gate any more. MFA_REQUIRED_ROLES is the whole of the decision: put a
+        // role back in it and the gate returns for that role, with everything behind it —
+        // MfaGate, the enrolment screen and Supabase's own factor handling — untouched and
+        // still working. 202609020019 removes the matching refusals on the server, and names
+        // what still protects those four commands without it.
+        if (MFA_REQUIRED_ROLES.has(gateProfile.role)) {
           const { data: aal, error: aalError } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
           if (aalError) throw aalError;
           if (aal?.currentLevel !== "aal2") {

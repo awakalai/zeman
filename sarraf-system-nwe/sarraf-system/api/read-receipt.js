@@ -683,12 +683,17 @@ async function requireSarrafUser(req, allowedRoles = null) {
 
   const claims = decodeJwtPayload(token);
   const aal = String(claims?.aal || "aal1");
-  if ((profile.role === "admin" || profile.role === "office") && aal !== "aal2") {
-    const e = new Error("multi-factor authentication required");
-    e.status = 403;
-    e.code = "mfa_required";
-    throw e;
-  }
+  // «2FA بۆ خاوەن و کارمەند لەم قۆناغەدا پێویست نییە» — section 6. This route used to refuse an
+  // administrator or an office at aal1, which after that decision would refuse them always,
+  // since a session cannot reach aal2 without an enrolled factor.
+  //
+  // The other three routes keep the sharper rule from api/_second-factor.js — a factor you
+  // enrolled must still be presented — and this one cannot: it talks to PostgREST by fetch with
+  // the caller's own token and holds no service key, so it has no way to ask whether a factor
+  // exists. Guessing would mean either refusing everyone again or pretending to check.
+  //
+  // What still stands here: an active account, and an explicit allowedRoles list checked above.
+  // `aal` is still returned, so a caller that wants to treat one factor differently can.
 
   return { user, profile, token, aal };
 }

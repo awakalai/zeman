@@ -6,6 +6,7 @@
 // a financial or receipt verdict.
 
 import { createHash, randomUUID } from "node:crypto";
+import { requireSecondFactorIfEnrolled } from "./_second-factor.js";
 import { ACTOR_COLUMNS, sameTenant, notFound } from "./_tenant.js";
 import { createClient } from "@supabase/supabase-js";
 import { readReceiptImage } from "./read-receipt.js";
@@ -130,8 +131,12 @@ async function requireActor(req, auth, service) {
     throw failure(403, "account_not_linked", "account is not linked");
   }
   const claims = decodeClaims(token);
-  if (actorResult.data.role === "admin" && String(claims.aal || "aal1") !== "aal2") {
-    throw failure(403, "mfa_required", "multi-factor authentication is required");
+  if (actorResult.data.role === "admin") {
+    // Section 6 does not require a second factor of an administrator; it is still required of
+    // one who enrolled a factor and then skipped it. api/_second-factor.js holds the rule.
+    try {
+      await requireSecondFactorIfEnrolled(service, authId, claims.aal);
+    } catch { throw failure(403, "mfa_required", "multi-factor authentication is required"); }
   }
   return { actor: actorResult.data, token };
 }

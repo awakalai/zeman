@@ -5,6 +5,7 @@
 // bytes, and records that attestation through a service-role-only database command.
 
 import { createHash, randomUUID } from "node:crypto";
+import { requireSecondFactorIfEnrolled } from "./_second-factor.js";
 import { createClient } from "@supabase/supabase-js";
 import { ACTOR_COLUMNS, sameTenant } from "./_tenant.js";
 
@@ -103,9 +104,11 @@ export default async function handler(req, res) {
     const actor = actorResult.data;
     if (actorResult.error) throw failure(503, "actor_lookup_failed", "account lookup is unavailable", true);
     if (!actor?.id || actor.role !== "office") throw failure(403, "office_required", "office account required");
-    if (String(decodeClaims(token).aal || "aal1") !== "aal2") {
-      throw failure(403, "mfa_required", "multi-factor authentication is required");
-    }
+    // Not required of an account with no factor — section 6 — but still required of one that
+    // has enrolled a factor and skipped it. The rule lives in api/_second-factor.js.
+    try {
+      await requireSecondFactorIfEnrolled(service, authId, decodeClaims(token).aal);
+    } catch { throw failure(403, "mfa_required", "multi-factor authentication is required"); }
     const ip = String(req.headers?.["x-forwarded-for"] || req.socket?.remoteAddress || "unknown").split(",")[0].trim();
     rateLimit(actor.id, ip);
 

@@ -210,13 +210,20 @@ try {
 
   browser = await pw.chromium.launch({ executablePath });
 
-  // §12 requires a second factor for the roles that operate the business. Each of those is run
-  // twice: once without it, where the interface must stop at the gate, and once with it.
-  const MFA_REQUIRED = new Set(["admin", "office"]);
+  // «2FA بۆ خاوەن و کارمەند لەم قۆناغەدا پێویست نییە» — section 6, confirmed by the owner.
+  //
+  // This used to run the operating roles twice: once without a second factor, where the gate
+  // had to stop them, and once with. The requirement is now the opposite, so the run without a
+  // factor stays and its expectation is inverted: an administrator and an office holding only
+  // one factor must REACH THEIR OWN SCREEN, and must see the same thing they would with two.
+  //
+  // Keeping the run rather than deleting it is the point. Deleting it would leave nothing
+  // measuring the change, and the gate would pass just as happily if the block came back.
+  const ONE_FACTOR_MUST_WORK = new Set(["admin", "office"]);
   const runs = [];
   for (const role of Object.keys(ROLE_EXPECTATIONS)) {
-    if (MFA_REQUIRED.has(role)) runs.push({ role, aal: "aal1", expectGate: true });
-    runs.push({ role, aal: MFA_REQUIRED.has(role) ? "aal2" : "aal1", expectGate: false });
+    if (ONE_FACTOR_MUST_WORK.has(role)) runs.push({ role, aal: "aal1", expectGate: false, oneFactor: true });
+    runs.push({ role, aal: "aal2", expectGate: false });
   }
   // ── and once on a phone ──────────────────────────────────────────────────────────────────
   //
@@ -228,10 +235,12 @@ try {
   // gate could see it because no gate had ever been narrow.
   runs.push({ role: "admin", aal: "aal2", expectGate: false, phone: true });
 
-  for (const { role, aal, expectGate, phone } of runs) {
+  for (const { role, aal, expectGate, phone, oneFactor } of runs) {
     const expect = ROLE_EXPECTATIONS[role];
     const me = USERS[role];
-    const label = phone ? `${role} on a phone` : expectGate ? `${role} without a second factor` : role;
+    const label = phone ? `${role} on a phone`
+      : oneFactor ? `${role} with only one factor`
+      : expectGate ? `${role} without a second factor` : role;
     const ctx = await browser.newContext({ locale: "ckb",
       viewport: phone ? { width: 390, height: 844 } : { width: 1280, height: 900 } });
     const page = await ctx.newPage();
@@ -328,11 +337,18 @@ try {
     const mounted = await page.evaluate(() => document.querySelector("#root")?.children.length || 0);
     record(mounted > 0, `${label}: the application renders`, mounted > 0 ? "" : "#root is empty");
 
-    // Without a second factor an operator role must be stopped, and must not be shown the
-    // business behind the gate.
-    // The gate names itself; relying on the absence of business text would pass for any
-    // screen that merely failed to load.
+    // The gate names itself; relying on the absence of business text would pass for any screen
+    // that merely failed to load.
     const gated = /پشتڕاستکردنەوەی پاراستن|Authenticator|قۆدی|2FA|MFA/i.test(body);
+
+    // One factor is enough now, and this is what says so. It is asserted before the ordinary
+    // per-role checks below, which then run against the same session — so this run proves both
+    // that they got in and that they saw exactly what their role should see.
+    if (oneFactor) {
+      record(!gated, `${label}: is not held at a second-factor gate`,
+        gated ? "an operator role was stopped for having one factor" : "");
+    }
+
     if (expectGate) {
       record(gated, `${label}: is stopped at the second-factor gate`,
         gated ? "" : "an operator role reached the system with one factor");
