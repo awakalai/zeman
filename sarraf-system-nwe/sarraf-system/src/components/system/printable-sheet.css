@@ -1,0 +1,78 @@
+/* ─────────────────────────────────────────────────────────────────────────────────────────────
+   کاغەزی چاپ — «PDF ـەکان براندکراو، کوردی، RTL و گونجاو بۆ چاپ بن» (بەشی ٢١)
+
+   The PDF is made by the browser, not by this application, and that is a decision rather than
+   a shortcut. jsPDF and pdfmake do not shape Arabic script: Kurdish printed through either
+   comes out as isolated letters in visual order, which looks like a defect in the business
+   rather than in the library. Embedding a font does not help — shaping is a separate problem
+   from glyphs. The browser already shapes, already has the fonts, already knows the direction,
+   and already offers "Save as PDF" on every phone and desktop this runs on.
+
+   So the deliverable is a page that prints correctly. What the reader saves is a real PDF.
+   ───────────────────────────────────────────────────────────────────────────────────────────── */
+
+.zeman-sheet {
+  background: #fff;
+  color: #111;
+  padding: 24px;
+  border-radius: 12px;
+  max-width: 820px;
+  margin: 0 auto;
+}
+
+.zeman-sheet__brand {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 2px solid #111;
+  padding-bottom: 10px;
+  margin-bottom: 14px;
+}
+.zeman-sheet__brand strong { font-size: 20px; letter-spacing: .02em; }
+.zeman-sheet__brand span { font-size: 12px; color: #444; }
+
+.zeman-sheet__party { display: grid; gap: 3px; margin-bottom: 16px; font-size: 13px; }
+.zeman-sheet__party b { font-size: 15px; }
+
+.zeman-sheet__section { margin-bottom: 18px; }
+.zeman-sheet__section h3 {
+  font-size: 13px; margin: 0 0 6px; padding-bottom: 4px; border-bottom: 1px solid #ddd;
+}
+
+.zeman-sheet table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.zeman-sheet th, .zeman-sheet td { padding: 6px 8px; border-bottom: 1px solid #eee; }
+.zeman-sheet th { text-align: start; font-weight: 600; background: #f6f6f6; }
+/* Amounts read left-to-right even on a right-to-left page: 1,250.50 USD is not a Kurdish
+   phrase, and mirroring it makes a number nobody can check against their own records. */
+.zeman-sheet td.num, .zeman-sheet th.num { direction: ltr; text-align: end; font-variant-numeric: tabular-nums; }
+.zeman-sheet__empty { font-size: 12px; color: #666; padding: 8px 0; }
+
+.zeman-sheet__totals { border-top: 2px solid #111; padding-top: 10px; font-size: 13px; }
+.zeman-sheet__totals div { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; }
+
+.zeman-sheet__foot { margin-top: 18px; font-size: 11px; color: #666; }
+
+/* ── چاپ ───────────────────────────────────────────────────────────────────────────────────── */
+@media print {
+  /* Everything except the sheet goes. Hiding by class would leave whatever nobody remembered
+     to mark; hiding the body's children and re-showing the sheet leaves nothing to forget. */
+  body > * { display: none !important; }
+  body > .zeman-print-root { display: block !important; }
+
+  @page { size: A4; margin: 14mm; }
+
+  html, body {
+    background: #fff !important;
+    color: #000 !important;
+    /* A page that keeps the app's dark theme wastes a cartridge and reads badly on paper. */
+    color-scheme: light;
+  }
+
+  .zeman-sheet { max-width: none; padding: 0; border-radius: 0; }
+  .zeman-sheet__section { break-inside: auto; }
+  .zeman-sheet tr { break-inside: avoid; }
+  .zeman-sheet thead { display: table-header-group; }   /* headings repeat on every page */
+  .zeman-sheet__totals { break-inside: avoid; }
+  .zeman-sheet a { text-decoration: none; color: inherit; }
+}

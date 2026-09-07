@@ -12,6 +12,7 @@ import { errorText, errorTextOr } from "./services/userFacingError";
 import { flashIsGood } from "./services/flashTone.js";
 import { settlementChoices, settlementWords } from "./services/settlement.js";
 import { paymentRouteChoices, paymentRouteEffect, paymentRouteObjection, paymentRouteObjectionText } from "./services/paymentRoute.js";
+import { partyStatement } from "./services/statement.js";
 import { loadMoneyAtOffices, loadOfficeHoldings, moneyAtOfficeText, officeAdvance } from "./services/accounting.js";
 import { buildBundleForReceipts, bundleArchiveName, shareOrSaveBundle } from "./services/receiptBundleTransfer.js";
 import { reportFault } from "./services/faultReport.js";
@@ -51,7 +52,7 @@ import {
   LayoutDashboard, Vault, ArrowLeftRight, ListOrdered, Users, Handshake, Boxes,
   TrendingUp, Building2, Banknote, UserCog, PieChart, History, Plus, Trash2, Pencil,
   CheckCircle2, AlertTriangle, Eye, LogOut, Wallet, ChevronLeft, Coins,
-  Receipt, TrendingDown, ScanLine, Scale, Upload, XCircle, SlidersHorizontal, Search, MoreHorizontal, Zap, ArrowDownLeft, ArrowUpRight, X, Share2, Database, Download, ClipboardCheck, RotateCcw, MessageCircle, Moon, Sun, WifiOff, Wifi, EyeOff, Bell, QrCode, Camera, Fingerprint, ShieldCheck, KeyRound, Inbox, ShieldAlert, FileCheck2, Send, Clock, Gauge
+  Receipt, TrendingDown, ScanLine, Scale, Upload, XCircle, SlidersHorizontal, Search, MoreHorizontal, Zap, ArrowDownLeft, ArrowUpRight, X, Share2, Database, Download, ClipboardCheck, RotateCcw, MessageCircle, Moon, Sun, WifiOff, Wifi, EyeOff, Bell, QrCode, Camera, Fingerprint, ShieldCheck, KeyRound, Inbox, ShieldAlert, FileCheck2, Send, Clock, Gauge, Printer
 } from "lucide-react";
 
 const lazyNamed = (loader, name) => React.lazy(() => loader().then((module) => ({ default: module[name] })));
@@ -70,6 +71,7 @@ const OfficePayments = lazyNamed(() => import("./components/accounting/OfficePay
 const PartnerAccounts = lazyNamed(() => import("./components/accounting/PartnerAccounts"), "PartnerAccounts");
 const CashAccounts = lazyNamed(() => import("./components/accounting/CashAccounts"), "CashAccounts");
 const CommissionTrade = lazyNamed(() => import("./components/accounting/CommissionTrade"), "CommissionTrade");
+const PrintableSheet = lazyNamed(() => import("./components/system/PrintableSheet"), "PrintableSheet");
 const ExplainBalance = lazyNamed(() => import("./components/accounting/ExplainBalance"), "ExplainBalance");
 const FaultList = lazyNamed(() => import("./components/system/FaultList"), "FaultList");
 const PartnerHoldings = lazyNamed(() => import("./components/accounting/PartnerHoldings"), "PartnerHoldings");
@@ -10152,6 +10154,10 @@ function Customers({ data, calc, cur, usr, detailId, setDetailId, onSave, settle
 function CustomerDetail({ id, back, data, calc, cur, usr, onSave, settle, flash, ...rest }) {
   const u = usr(id);
   const [stmt, setStmt] = useState(false);
+  // «PDF ـی براندکراو دابگرێت» — section 10. The document decides what may appear on it and
+  // never copies a row; the browser turns the page into the PDF, because it is the only thing
+  // here that shapes Kurdish correctly. See src/components/system/printable-sheet.css.
+  const [sheet, setSheet] = useState(false);
   const c = calc.cust[id] || { owe: {}, due: {} };
   const base = data.txs.filter((t) => !t.deleted && t.cpId === id).reverse();
   const [list, f, setF] = useTxFilter(base, cur, usr);
@@ -10174,9 +10180,21 @@ function CustomerDetail({ id, back, data, calc, cur, usr, onSave, settle, flash,
           <Btn kind="ghost" className="flex items-center gap-1.5" onClick={() => setStmt(true)}>
             <Share2 className="w-4 h-4" /> {tr("کەشف حساب")}
           </Btn>
+          <Btn kind="ghost" className="flex items-center gap-1.5" onClick={() => setSheet(true)}>
+            <Printer className="w-4 h-4" /> {tr("چاپ / PDF")}
+          </Btn>
         </div>
       </div>
       {stmt && <Statement u={u} txs={base} c={c} cur={cur} flash={flash} onClose={() => setStmt(false)} />}
+      {sheet && (
+        <DeferredPanel>
+          <PrintableSheet autoPrint lang={activeLanguage()} onClose={() => setSheet(false)} doc={partyStatement({
+            party: u, role: "customer", lang: activeLanguage(), businessName: BRAND.name,
+            transactions: base, debts: data.debts || [],
+            held: (data.customerVaults || []).filter((v) => v.customerId === id),
+          })} />
+        </DeferredPanel>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <Card className="p-4 border-[color-mix(in_srgb,var(--neg)_26%,transparent)] bg-[color-mix(in_srgb,var(--neg)_8%,transparent)]">
