@@ -30,6 +30,7 @@ import { unrealizedPnl, unrealizedReasonText } from "./services/unrealizedPnl";
 import { EARNING_KINDS, earningsByKind } from "./services/earningsByKind";
 import { capitalEventsFrom, investorShare, investorsTotalByCurrency, profitEventsFrom, sharedCostEventsFrom } from "./services/investorShare";
 import { batchStage, todaysWork } from "./services/todaysWork.js";
+import { receiptWorkBuckets } from "./services/receiptCommandCenter.js";
 import { directTradeLegs, filledSellers, firstIncompleteSeller } from "./services/directTrade.js";
 import { crossRate, fromUsdAsOf, rateAsOf, rateErrorText, rateOf, unpricedCurrencies, usdFromAsOf, validateRate } from "./services/currencyRate";
 import {
@@ -8235,12 +8236,14 @@ function ReceiptsHub({ data, usr, batches, batchLoadError, reloadBatches, flash,
   // one the owner reads it by. The four tabs before this — new, matched, upload-on-behalf, and
   // a second full list with its own filters — were four names for two questions and a job the
   // owner does not do.
-  const needsMe = (b) => lifecycleOf(b) === "needs_review" || lifecycleOf(b) === "reading";
-  const reviewBatches = (batches || []).filter(needsMe);
-  const acceptedBatches = (batches || []).filter((b) => !needsMe(b));
+  const workBuckets = receiptWorkBuckets(batches || []);
+  const reviewBatches = workBuckets.attention;
+  const acceptedBatches = workBuckets.ready;
+  const archivedBatches = workBuckets.archive;
   const TABS = [
-    ["accepted", `${l10n("قبووڵکراوەکان", "Accepted", "المقبولة")} (${acceptedBatches.length})`],
-    ["review", `${l10n("پشکنینیان دەوێت", "Need review", "بحاجة إلى مراجعة")} (${reviewBatches.length})`],
+    ["accepted", `${l10n("ئامادە", "Ready", "جاهزة")} (${acceptedBatches.length})`],
+    ["review", `${l10n("سەرنج", "Attention", "تحتاج انتباهًا")} (${reviewBatches.length})`],
+    ["archive", `${l10n("ئەرشیف", "Archive", "الأرشيف")} (${archivedBatches.length})`],
   ];
   const summary = (batches || []).reduce((out, b) => {
     const stage = lifecycleOf(b); out.total += Number(b.n) || 0; out[stage] = (out[stage] || 0) + (Number(b.n) || 0);
@@ -8256,7 +8259,7 @@ function ReceiptsHub({ data, usr, batches, batchLoadError, reloadBatches, flash,
     if (reviewBatches.length) setTab("review");
   }, [batches, reviewBatches.length]);
 
-  const filteredBatches = (tab === "review" ? reviewBatches : acceptedBatches).filter((b) => {
+  const filteredBatches = (tab === "review" ? reviewBatches : tab === "archive" ? archivedBatches : acceptedBatches).filter((b) => {
     const query = normalizeSearchText(batchSearch);
     const haystack = normalizeSearchText([b.id, b.customer_name, b.partner_id && usr(b.partner_id).name, b.source, b.currency].filter(Boolean).join(" "));
     return !query || haystack.includes(query);
@@ -8297,8 +8300,10 @@ function ReceiptsHub({ data, usr, batches, batchLoadError, reloadBatches, flash,
 
         {!pageBatches.length
           ? <StatePanel type="empty" compact title={tab === "review"
-              ? l10n("هیچ فیشێک چاوەڕێی تۆ نییە ✓", "Nothing is waiting for you ✓", "لا شيء بانتظارك ✓")
-              : l10n("هێشتا هیچ ناردنێک نەهاتووە", "No send has arrived yet", "لم تصل أي إرسالية بعد")} />
+              ? l10n("هیچ فیشێک چاوەڕێی تۆ نییە ✓", "Nothing needs your attention ✓", "لا شيء يحتاج انتباهك ✓")
+              : tab === "archive"
+                ? l10n("هیچ فیشێکی ئەرشیفکراو نییە", "No archived receipts", "لا توجد إيصالات مؤرشفة")
+                : l10n("هێشتا هیچ فیشێکی ئامادە نییە", "No ready receipts yet", "لا توجد إيصالات جاهزة بعد")} />
           : <div className="space-y-2">
               {pageBatches.map((b, i) => (
                 <Card key={b.id} className="p-4 rise" style={{ animationDelay: `${i * 40}ms` }} onClick={() => setSel(b.id)}>
