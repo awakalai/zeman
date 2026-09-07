@@ -660,6 +660,27 @@ repository actually has.
 
 ## 4. پێنج کارە کراوەکە / THE FIVE OPEN WORK ITEMS
 
+> **⚠️ FOUR OF THESE FIVE ARE NOW DONE.** This section is kept as written because it records
+> what was tried and why, which is worth more than a tidy summary — but for current status read
+> **`docs/WORK_STATUS.md`**, which is the live list.
+>
+> | | | |
+> |---|---|---|
+> | کاری ١ — §13, the automatic reminder | ✅ done, fault-injected | `d6ec53c` `6749747` |
+> | کاری ٢ — #87, the customer vault | ✅ done, fault-injected | `d32eef4` `15d8f00` `2e103bc` |
+> | کاری ٣ — #89, the commission fee | ✅ done, fault-injected | `c2b21f2` `858e167` |
+> | کاری ٤ — #88, many sellers | ✅ done, fault-injected | `d8de59f` `70d57cf` |
+> | کاری ٥ — #91, the requirement matrix | ⬜ **not started — this is the next task** |
+>
+> The five red checks کاری ٢ describes were two separate faults: the fixture stood up
+> inventory in `public.ledger` when `sarraf_inventory_snapshot_at` walks `public.txs`, and the
+> owner genuinely had only 23 USD of their own because the customer separation was working.
+> Underneath them was a real defect — the vault settlement took the money twice, because
+> `customer_vault_events` carries an after-insert trigger that applies the delta and the
+> function was also updating the vault directly. All of it is in the commit messages.
+>
+> `verify:accounting` now stands at **403 of 403**, `npm test` at **923**.
+
 These are agreed with the owner and are **in addition to** verifying all 28 sections.
 Do them in this order. Each one ends in a commit, a pushed branch, a PR, and a merge —
 **you create AND merge the PRs yourself; the owner does not.**
