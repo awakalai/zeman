@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 186202)
-Total output lines: 12606
-
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { supabase } from "./lib/supabase";
 import { createReceiptIngestionCommand, ingestReceiptBatch } from "./services/receiptIngestion";
@@ -2562,7 +2559,7645 @@ export default function App() {
     flash("ئەکاونت درووست کرا ✓");
   });
 
-  const d…116202 tokens truncated…px] font-semibold" style={{ color: "var(--txt)" }}>{u.name}</h2>}
+  const deleteUser = (u, reason) => run(async () => {
+      if (!u?.id || String(reason || "").trim().length < 3) {
+        flash("هۆکاری ناچالاککردن حەتمییە", "error");
+        return false;
+      }
+      await adminUserRequest({
+        action: "deactivate",
+        userId: u.id,
+        tenantId: u.tenantId,
+        reason: String(reason).trim(),
+      });
+      flash("ئەکاونت ناچالاک کرا ✓");
+      return true;
+    });
+
+  const setUserRate = (u, rate) => run(async () => {
+    const n = Number(rate);
+    if (!Number.isFinite(n) || n < 0 || n > 100) {
+      flash("ڕێژە دەبێت لە نێوان ٠ تا ١٠٠ بێت");
+      return false;
+    }
+    await adminUserRequest({ action: "update_rate", userId: u.id, rate: n, tenantId: u.tenantId });
+    flash("ڕێژە نوێ کرایەوە ✓");
+  });
+
+  const resetUserPassword = (u, password) => run(async () => {
+    if (!u?.id || String(password || "").length < 12) {
+      flash("وشەی نهێنیی نوێ لانیکەم ١٢ پیت بێت", "error");
+      return false;
+    }
+    await adminUserRequest({
+      action: "reset_password",
+      userId: u.id,
+      password: String(password),
+      tenantId: u.tenantId,
+    });
+    flash(`وشەی نهێنیی ${u.name} گۆڕدرا ✓`, "ok");
+    return true;
+  });
+
+  /* ── پارە دانان/دەرهێنان لە حسابی هەر کەسێک ── */
+  //  دوو لای هەیە: قاسەی گشتی + قاسەی خودی ئەو کەسە
+  const accountMove = (f) => {
+    // Fixed before the first attempt, so a retry moves the same money once, not twice.
+    const moveId = uid();
+    return run(async () => {
+    const amt = roundMoney(data, Math.abs(+f.amount), f.curId);
+    if (!(amt > 0)) { flash(tr("بڕ پێویستە")); return; }
+    if (!f.userId) { flash("کەسەکە دیاری بکە"); return; }
+    const u = usr(f.userId);
+    const sign = f.dir === "in" ? 1 : -1;
+    const at = now();
+
+    const ae = {
+      id: moveId, user_id: f.userId, kind: "cash", cur_id: f.curId, amount: sign * amt,
+      type: f.dir === "in" ? "deposit" : "withdraw", note: f.note || null,
+      created_by: profile?.id || null,
+    };
+
+    const ledgerRows = [
+      LR({ id: uid(), type: sign > 0 ? "acc_in" : "acc_out", curId: f.curId,
+        amount: sign * amt, note: `${sign > 0 ? "دانان لە" : "دەرهێنان بۆ"} ${u.name}`, date: at }),
+    ];
+    if (u.role === "investor") {
+      ledgerRows.push(LR({ id: uid(), type: sign > 0 ? "deposit" : "withdraw", owner: "investor",
+        investorId: f.userId, curId: f.curId, amount: sign * amt, note: f.note, date: at }));
+    }
+
+    const result = await rpcStrict("sarraf_account_move", {
+      p_account_row: ae,
+      p_ledger: [],
+      p_command_key: commandKey("account-move"),
+      p_action: f.dir === "in" ? "دانانی پارە" : "دەرهێنانی پارە",
+      p_detail: `${fmt(amt)} ${cur(f.curId).code} — ${u.name}`,
+    });
+    if (approvalQueued(result, f.dir === "in" ? "دانانی پارە" : "دەرهێنانی پارە")) return result;
+
+    await notify(f.userId, "transfer",
+      f.dir === "in" ? tr("پارە خرایە حسابەکەت") : tr("پارە لە حسابەکەت دەرهێنرا"),
+      `${fmt(amt, cur(f.curId).dec ?? 0)} ${cur(f.curId).code}`);
+    flash(tr("تۆمار کرا ✓"));
+    }, `account-move:${moveId}`);
+  };
+
+    /* ── گواستنەوەی پارە: حساب بۆ حساب ── */
+  //  لای یەکێک کەم، لای ئەوی تر زیاد — قاسەی گشتی نەگۆڕ دەمێنێتەوە
+  const accountTransfer = (f) => {
+    // Fixed before the first attempt, so a retry moves the same money once, not twice.
+    const ref = uid();
+    const [fromRowId, toRowId] = [uid(), uid()];
+    return run(async () => {
+    const amt = roundMoney(data, Math.abs(+f.amount), f.curId);
+    if (!(amt > 0)) { flash(tr("بڕ پێویستە")); return; }
+    if (!f.fromId || !f.toId) { flash("هەردوو لایەن دیاری بکە"); return; }
+    if (f.fromId === f.toId) { flash("ناکرێت بۆ هەمان کەس بگوازرێتەوە"); return; }
+    const a = usr(f.fromId), b = usr(f.toId);
+    const at = now();
+
+    const rows = [
+      { id: fromRowId, user_id: f.fromId, kind: "cash", cur_id: f.curId, amount: -amt, type: "transfer_out",
+        ref_id: ref, note: `بۆ ${b.name}${f.note ? " — " + f.note : ""}`, created_by: profile?.id || null },
+      { id: toRowId, user_id: f.toId, kind: "cash", cur_id: f.curId, amount: +amt, type: "transfer_in",
+        ref_id: ref, note: `لە ${a.name}${f.note ? " — " + f.note : ""}`, created_by: profile?.id || null },
+    ];
+    const transferRow = {
+      id: ref, from_id: f.fromId, from_name: a.name, to_id: f.toId, to_name: b.name,
+      cur_id: f.curId, amount: amt, note: f.note || null, created_by: profile?.id || null,
+    };
+
+    const inv = [];
+    if (a.role === "investor") inv.push(LR({ id: uid(), type: "withdraw", owner: "investor", investorId: f.fromId, curId: f.curId, amount: -amt, note: `بۆ ${b.name}`, date: at }));
+    if (b.role === "investor") inv.push(LR({ id: uid(), type: "deposit", owner: "investor", investorId: f.toId, curId: f.curId, amount: +amt, note: `لە ${a.name}`, date: at }));
+
+    const result = await rpcStrict("sarraf_account_transfer", {
+      p_account_rows: [],
+      p_transfer: transferRow,
+      p_ledger: [],
+      p_command_key: commandKey("account-transfer"),
+      p_action: "گواستنەوەی حساب",
+      p_detail: `${fmt(amt)} ${cur(f.curId).code} — لە ${a.name} بۆ ${b.name}`,
+    });
+    if (approvalQueued(result, "گواستنەوەی حساب")) return result;
+
+    await notify(f.fromId, "transfer", tr("پارە لە حسابەکەت دەرچوو"), `${fmt(amt, cur(f.curId).dec ?? 0)} ${cur(f.curId).code} → ${b.name}`);
+    await notify(f.toId, "transfer", tr("پارە هاتە حسابەکەت"), `${fmt(amt, cur(f.curId).dec ?? 0)} ${cur(f.curId).code} ← ${a.name}`);
+    flash("گواستنەوە تۆمار کرا ✓");
+    }, `account-transfer:${ref}`);
+  };
+
+  /* ── بەستنی ڕۆژ ── */
+  const closeDay = (lines, note, adjust) => {
+    // Fixed before the first attempt, so a retry closes the same day once, not twice.
+    const closeId = uid();
+    return run(async () => {
+    // The database refuses an unexplained difference; saying so here means the operator is
+    // stopped at the button with the reason, not at the server with an error.
+    const verdict = validateDayClose({ lines, note });
+    if (!verdict.ok) { flash(dayCloseMessage(verdict.code)); return false; }
+    const hasDiff = lines.some((l) => Math.abs(Number(l.diff) || 0) > 1e-9);
+    const closePayload = {
+      id: closeId, close_date: data.control?.business_date || new Date().toISOString().slice(0, 10),
+      // The server re-reads the ledger and derives expected/diff/USD exposure from counted.
+      lines, note: note || null,
+      adjust: !!adjust, closed_by: profile?.id || null,
+    };
+
+    const result = await rpcStrict("sarraf_close_day", {
+      p_close: closePayload,
+      p_ledger: [],
+      p_command_key: commandKey("day-close"),
+      p_action: "بەستنی ڕۆژ",
+      p_detail: lines.map((l) => `${cur(l.cur).code}: ${l.diff >= 0 ? "+" : ""}${fmtMoney(data, l.diff, l.cur)}`).join("، ") || "بێ جیاوازی",
+    });
+    if (approvalQueued(result, "بەستنی ڕۆژ")) return result;
+    flash(!hasDiff ? "ڕۆژ بەسترا — هیچ جیاوازییەک نییە ✓" : "ڕۆژ بەسترا ✓");
+    }, `day-close:${closeId}`);
+  };
+
+    /* ── هەڵوەشاندنەوەی پارەدان ── */
+  const unsettle = (t) => {
+    if (!window.confirm("پارەدانەکە بە تۆماری پێچەوانە هەڵبوەشێنرێتەوە؟ مامەڵەکە دەگەڕێتەوە بۆ «چاوەڕوان».")) return;
+    run(async () => {
+      const result = await rpcStrict("sarraf_unsettle_transaction", {
+        p_tx_id: t.id,
+        p_command_key: commandKey("unsettle"),
+        p_action: "هەڵوەشاندنەوەی پارەدان",
+        p_detail: `#${t.code || "—"} — ${fmt(t.total)} ${cur(t.againstId).code}`,
+      });
+      if (approvalQueued(result, "هەڵوەشاندنەوەی پارەدان")) return result;
+      flash("پارەدان بە تۆماری پێچەوانە هەڵوەشێندرایەوە ✓");
+    }, `unsettle:${t.id}`);
+  };
+
+  /* ── دروستکەر / پشکنەر + یەکسانکردنەوە ── */
+  const approveApproval = (r, note = "") => run(async () => {
+    const result = await rpcStrict("sarraf_approve_request", {
+      p_approval_id: r.id,
+      p_command_key: commandKey("approval-approve"),
+      p_note: note || null,
+    });
+    if (result?.ok === false) {
+      flash(result?.error || "جێبەجێکردنی داواکاری سەرکەوتوو نەبوو");
+    } else {
+      flash("داواکاری پەسەند کرا و جێبەجێ کرا ✓");
+      reloadBatches();
+    }
+    return result;
+  });
+
+  const rejectApproval = (r, note) => run(async () => {
+    const reason = String(note || "").trim();
+    if (reason.length < 3) { flash("هۆکاری ڕەتکردنەوە بنووسە"); return false; }
+    const result = await rpcStrict("sarraf_reject_request", {
+      p_approval_id: r.id,
+      p_command_key: commandKey("approval-reject"),
+      p_note: reason,
+    });
+    flash("داواکاری ڕەتکرایەوە ✓");
+    return result;
+  });
+
+  const cancelApproval = (r, note = "") => run(async () => {
+    const result = await rpcStrict("sarraf_cancel_approval_request", {
+      p_approval_id: r.id,
+      p_command_key: commandKey("approval-cancel"),
+      p_note: String(note || "").trim() || null,
+    });
+    flash("داواکاری هەڵوەشێندرایەوە ✓");
+    return result;
+  });
+
+  const ownerOverrideApproval = (r, reason) => run(async () => {
+    const why = String(reason || "").trim();
+    if (why.length < 12) { flash("هۆکاری دەسەڵاتی فریاکەوتنی خاوەن لانیکەم ١٢ پیت بێت"); return false; }
+    const result = await rpcStrict("sarraf_owner_override_approval", {
+      p_approval_id: r.id,
+      p_command_key: commandKey("owner-override"),
+      p_reason: why,
+    });
+    if (result?.ok === false) flash(result?.error || "دەسەڵاتی فریاکەوتنی خاوەن سەرکەوتوو نەبوو");
+    else {
+      flash("دەسەڵاتی فریاکەوتنی خاوەن جێبەجێ کرا ✓");
+      reloadBatches();
+    }
+    return result;
+  });
+
+  const saveControlSettings = (settings) => run(async () => {
+    const result = await rpcStrict("sarraf_update_control_settings", {
+      p_settings: settings,
+      p_command_key: commandKey("control-settings"),
+    });
+    flash("ڕێکخستنەکانی کۆنترۆڵ پاشەکەوت کران ✓");
+    return result;
+  });
+
+  const runReconciliation = async () => {
+    const { data: result, error } = await supabase.rpc("sarraf_reconciliation_report");
+    if (error) throw error;
+    return result;
+  };
+
+  const runSystemHealth = async () => {
+    const { data: result, error } = await supabase.rpc("sarraf_system_health");
+    if (error) throw error;
+    return result;
+  };
+
+  const setMaintenanceMode = async (enabled, reason) => {
+    const why = String(reason || "").trim();
+    if (why.length < 12) {
+      flash("هۆکاری ڕاگرتنی فریاکەوتن لانیکەم ١٢ پیت بێت");
+      return false;
+    }
+    setBusy(true);
+    try {
+      const result = await rpcStrict("sarraf_set_maintenance_mode", {
+        p_enabled: !!enabled,
+        p_reason: why,
+        p_command_key: commandKey(enabled ? "freeze-on" : "freeze-off"),
+      });
+      await loadAll();
+      flash(enabled ? "ڕاگرتنی فریاکەوتن چالاک کرا ✓" : "ڕاگرتنی فریاکەوتن ناچالاک کرا ✓");
+      return result;
+    } catch (e) {
+      console.error("maintenance-mode", e);
+      flash(errorTextOr(e, "نەتوانرا ڕاگرتنی فریاکەوتن بگۆڕدرێت"), "error");
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const loadTxHistoryPage = async ({ limit = 80, cursor = null, filters = {} } = {}) => {
+    const args = {
+      p_limit: limit,
+      p_before_date: cursor?.date || null,
+      p_before_id: cursor?.id || null,
+      p_type: filters.type && filters.type !== "all" ? filters.type : null,
+      p_status: filters.status && filters.status !== "all" ? filters.status : null,
+      p_cur_id: filters.cur && filters.cur !== "all" ? filters.cur : null,
+      p_from: filters.from || null,
+      p_to: filters.to || null,
+      p_search: filters.q ? String(filters.q).trim() : null,
+    };
+    const { data: result, error } = await supabase.rpc("sarraf_tx_history_page", args);
+    if (error) throw error;
+    return {
+      items: (result?.items || []).map(mapTxRecord),
+      hasMore: !!result?.has_more,
+      nextCursor: result?.next_cursor || null,
+      matchedCount: Number(result?.matched_count || 0),
+      totalsByAgainst: Array.isArray(result?.totals_by_against) ? result.totals_by_against : [],
+    };
+  };
+
+  const loadRangeReport = async ({ from, to } = {}) => {
+    const { data: result, error } = await supabase.rpc("sarraf_report_range", {
+      p_from: from || null,
+      p_to: to || null,
+    });
+    if (error) throw error;
+    return result || null;
+  };
+
+  const loadInventorySnapshot = async ({ curId, asOf = null, excludeTxId = null } = {}) => {
+    const { data: result, error } = await supabase.rpc("sarraf_inventory_snapshot", {
+      p_cur_id: curId,
+      p_as_of: asOf,
+      p_exclude_tx_id: excludeTxId,
+    });
+    if (error) throw error;
+    return result || null;
+  };
+
+  /* ── پاراستنی داتا / off-site export ──
+     A JSON export is a supplementary owner-controlled export, NOT a substitute
+     for Supabase platform backups/PITR. The old same-database "auto backup"
+     duplicated sensitive data inside the same failure domain and is disabled.
+  */
+  const downloadBackup = () => run(async () => {
+    if (!(profile?.role === "admin" && profile?.adminLevel === "owner")) {
+      flash("تەنها خاوەنی سیستەم دەتوانێت هەناردەی تەواوی داتا دابەزێنێت");
+      return false;
+    }
+
+    const tables = [
+      "currencies", "app_users", "txs", "ledger", "account_ledger",
+      "account_transfers", "day_closes", "rate_history", "receipts",
+      "receipt_batches", "approval_requests", "approval_events",
+      "tx_versions", "audit",
+    ];
+
+    const rows = {};
+    for (const table of tables) {
+      const result = await fetchAllRows(table, { orders: [{ column: "id", ascending: true }], pageSize: 500, maxAttempts: 2 });
+      if (result.error) throw result.error;
+      rows[table] = result.data || [];
+    }
+
+    // Sealed rather than merely written: the file carries a checksum over its own contents, so
+    // it can be read back later and proved intact instead of merely existing.
+    const payload = await sealBackup({
+      tables: rows,
+      takenAt: now(),
+      takenBy: profile?.id || null,
+      warning:
+        "Supplementary JSON export only. Auth credentials, Storage object bytes, database functions/policies, and WAL/PITR state are not included.",
+    });
+
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    const href = URL.createObjectURL(blob);
+    a.href = href;
+    a.download = `sarraf_offsite_export_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.json`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(href), 1000);
+    // Exporting the whole database is a privileged act and is recorded as one. A failure to
+    // record it must not silently discard the export the owner already has.
+    try {
+      await rpcStrict("sarraf_record_audit_event", {
+        p_action: "هەناردەی تەواوی داتا",
+        p_detail: `${Object.keys(payload.counts).length} خشتە · checksum ${String(payload.integrity?.checksum || "—").slice(0, 16)}`,
+        p_command_key: commandKey("audit-export"),
+      });
+    } catch (e) { console.error("backup audit", e); }
+    flash("هەناردەی داتا ئامادە کرا ✓");
+    return payload.integrity?.checksum || true;
+  });
+
+  /* ── ئاگادارکردنەوەکان ── */
+  const [notes, setNotes] = useState([]);
+  const [noteOpen, setNoteOpen] = useState(false);
+
+  /**
+   * One bell, both sources.
+   *
+   * `notes` has always been the notification centre. The receipt events added in 202608280009
+   * arrived in a table of their own and were given a SECOND bell beside the first — two bells in
+   * one header, each with its own unread count, and nobody could tell which was which. That was
+   * my mistake and this is the correction: one panel, one count, merged newest first.
+   *
+   * They are shaped differently on purpose — a note carries `seen`, a receipt event carries
+   * `read_at` — so they are mapped to one shape here rather than either table being changed.
+   */
+  const loadNotes = async () => {
+    const [own, receipts] = await Promise.all([
+      supabase.from("notes").select("*").order("created_at", { ascending: false }).limit(60),
+      loadNotifications(supabase, { limit: 60 }).catch((e) => { console.error("receipt notifications", e); return []; }),
+    ]);
+    if (own.error) console.error("loadNotes", own.error);
+    const asNote = (r) => ({
+      id: r.id, source: "receipt", kind: r.kind, title: r.title, body: r.body,
+      link: null, ref_id: r.subjectId, subject_kind: r.subjectKind,
+      seen: !r.unread, created_at: r.createdAt,
+    });
+    const merged = [
+      ...(own.data || []).map((n) => ({ ...n, source: "note" })),
+      ...(receipts || []).map(asNote),
+    ].sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
+    setNotes(merged.slice(0, 80));
+  };
+
+  // ناردنی ئاگاداری بۆ کەسێک (یان بۆ ئەدمین گەر userId = null)
+  const notify = async (userId, kind, title, body, link, refId) => {
+    try {
+      const r = await supabase.from("notes").insert({
+        id: uid(), user_id: userId || null, kind, title,
+        body: body || null, link: link || null, ref_id: refId || null,
+      });
+      if (r.error) throw r.error;
+    } catch (e) { console.error("notify", e); }
+  };
+
+  // ناردنی ئاگاداری بە واتساپ — دەکرێتەوە لە وێبگەڕەکە
+  const waNotify = (u, title, body) => {
+    const ph = String(u?.phone || "").replace(/\D/g, "");
+    if (!ph) { flash(tr("ژمارەی مۆبایلی ئەم کەسە نییە")); return; }
+    const num = ph.startsWith("00") ? ph.slice(2) : ph.startsWith("0") ? "964" + ph.slice(1) : ph;
+    const txt = `*${title}*\n${body || ""}`;
+    window.open(`https://wa.me/${num}?text=${encodeURIComponent(txt)}`, "_blank");
+  };
+
+  const seeNote = async (n) => {
+    setNotes((x) => x.map((y) => (y.id === n.id ? { ...y, seen: true } : y)));
+    try {
+      if (n.source === "receipt") await markNotificationRead(supabase, n.id);
+      else await supabase.from("notes").update({ seen: true }).eq("id", n.id);
+    } catch (e) { console.error("mark read", e); }
+    // A notification that leads nowhere is a note, not a notification.
+    if (n.source === "receipt") { if (openNotification({ subjectKind: n.subject_kind, subjectId: n.ref_id })) setNoteOpen(false); return; }
+    if (n.link) { setPage(n.link); setNoteOpen(false); }
+  };
+  const seeAll = async () => {
+    const ids = notes.filter((n) => !n.seen && n.source !== "receipt").map((n) => n.id);
+    const anyReceipt = notes.some((n) => !n.seen && n.source === "receipt");
+    if (!ids.length && !anyReceipt) return;
+    setNotes((x) => x.map((y) => ({ ...y, seen: true })));
+    try {
+      if (ids.length) await supabase.from("notes").update({ seen: true }).in("id", ids);
+      if (anyReceipt) await markAllNotificationsRead(supabase);
+    } catch (e) { console.error("mark all read", e); }
+  };
+  const unseen = notes.filter((n) => !n.seen).length;
+
+  const signOut = () => {
+    loadSequence.current += 1;
+    setData(null);
+    setBatches([]);
+    setRefreshedAt(null);
+    try { localStorage.removeItem("cache"); localStorage.removeItem("bio"); } catch {}
+    return supabase.auth.signOut();
+  };
+
+  /* ───────── ڕەندەر ───────── */
+  if (session === undefined) return <><Styles /><Splash t={tr("بارکردنی سیستەم…")} /></>;
+  if (!session) return <><Styles /><Login /></>;
+  if (accessState === "checking") return <><Styles /><Splash t={tr("پشکنینی پاراستنی ئەکاونت…")} signOut={signOut} /></>;
+  if (accessState === "error") return <><Styles /><Splash t={accessError || tr("هەڵە لە پشکنینی پاراستن")} signOut={signOut} /></>;
+  if (accessState === "missing" || !profile) return <><Styles /><Splash t={tr("ئەکاونتەکەت بە سیستەمەکە نەبەستراوە — پەیوەندی بە ئەدمینەوە بکە.")} signOut={signOut} /></>;
+  if (!data || !calc) return <><Styles /><Splash t={tr("بارکردنی داتا…")} signOut={signOut} /></>;
+
+  const isAdmin = profile.role === "admin";
+  // A manager outranks the business owner, so everything gated on isOwner admits them too.
+  // Written as a set rather than a comparison: the first place that says === "owner" is the
+  // place that locks the manager out of their own system.
+  const isOwner = isAdmin && ["owner", "manager"].includes(profile.adminLevel);
+  const isSystemManager = isAdmin && profile.adminLevel === "manager";
+  const va = viewAs ? usr(viewAs) : null;
+  const portalUser = !isAdmin ? profile : va;
+  const navSectionLabel = (ku, en, ar) => lang === "en" ? en : lang === "ar" ? ar : ku;
+
+  /**
+   * Open whatever a notification is about.
+   *
+   * A batch is a place on the receipts screen, so it opens there with the batch already found.
+   * A receipt belongs to whoever is looking: staff review it, and the person who sent it is
+   * already looking at their own list, so for them there is nowhere else to go and the panel
+   * simply closes. Returning false leaves the panel open, which is the honest answer when there
+   * is no screen for the thing.
+   */
+  const openNotification = (item) => {
+    if (!item?.subjectId) return false;
+    if (item.subjectKind === "batch") {
+      if (portalUser) return false;
+      setSearchFocus(item.subjectId);
+      setPage("receipts");
+      return true;
+    }
+    if (item.subjectKind === "receipt" && isAdmin && !portalUser) {
+      setPage("receipt-review");
+      return true;
+    }
+    return false;
+  };
+  const systemNeedsAttention = !online || !!stale || !!data?.runtime?.maintenance_mode;
+  const systemStatusLabel = systemNeedsAttention
+    ? (!online
+      ? navSectionLabel("ZEMAN ئۆفلاینە", "ZEMAN offline", "ZEMAN غير متصل")
+      : data?.runtime?.maintenance_mode
+        ? navSectionLabel("ZEMAN لە دۆخی وەستاندنی فریاکەوتندایە", "ZEMAN emergency freeze", "ZEMAN في وضع التجميد الطارئ")
+        : navSectionLabel("داتای ZEMAN پێویستی بە نوێکردنەوە هەیە", "ZEMAN data refresh required", "بيانات ZEMAN بحاجة إلى تحديث"))
+    : navSectionLabel("ZEMAN بەستراوە", "ZEMAN online", "ZEMAN متصل");
+  const systemStatusText = systemNeedsAttention
+    ? navSectionLabel("سەرنج", "Attention", "تنبيه")
+    : navSectionLabel("بەستراو", "Online", "متصل");
+
+  // The manager's own navigation, which is not the exchange's with two extra entries on it.
+  //
+  // They asked for this in as many words — their dashboard and every section of it different —
+  // and the reason is not presentation. A manager belongs to no business. "New transaction",
+  // "Transactions", "Reports" and the dashboard totals all mean *one business's*, and there is
+  // no such business for the person who sold the software. Offering them is offering an action
+  // with no correct answer.
+  //
+  // What a manager does have is the installation: which businesses run on it, who is in them,
+  // whether the schema is sound, and the default rates a new business inherits until it sets
+  // its own. Every id here already exists; what changes is that these are the whole of their
+  // world rather than a drawer inside somebody else's.
+  const MANAGER_NAV_GROUPS = [
+    {
+      label: navSectionLabel("دامەزراندن", "Installation", "التثبيت"),
+      items: [
+        // The installation at a glance. sarraf_manager_overview has answered this since
+        // 202608230001 and no screen had ever asked it — the manager had a console listing
+        // businesses and no way to see the whole of what they maintain.
+        ["manager-overview", navSectionLabel("سیستەم بە گشتی", "System at a glance", "النظام في لمحة"), Gauge],
+        ["manager-console", navSectionLabel("سەرخێڵەکان", "Businesses", "الأعمال"), Building2],
+        ["manager-center", navSectionLabel("ئەکاونت و پلەکان", "Accounts & ranks", "الحسابات والرتب"), KeyRound],
+      ],
+    },
+    {
+      label: navSectionLabel("تەندروستی", "Health", "الصحة"),
+      items: [
+        ["integrity", navSectionLabel("یەکپارچەیی", "Integrity", "السلامة"), ShieldAlert],
+        ["audit", navSectionLabel("تۆماری گۆڕانکاری", "Change log", "سجل التغييرات"), History],
+        ["backup", navSectionLabel("پاراستنی داتا", "Data protection", "حماية البيانات"), Database],
+      ],
+    },
+  ];
+
+  // ── the sections, and why there are six of them ──────────────────────────────────────────
+  //
+  //   «دەمەوێت بەشەکان زۆر بە ڕوونی جیا بکەیتەوە نەک ئاوا هەمووی لە یەک شوێن بێت.»
+  //
+  // There were four groups holding seven entries, and SIXTEEN more screens listed at the foot of
+  // one of them. So two thirds of the application was reachable only by opening «کاری ئەمڕۆ» and
+  // scrolling past the work to a grid of tools — which is not a section, it is a drawer, and a
+  // drawer is where things go when nobody has decided what they are.
+  //
+  // These six are the decision. Each is a question a person in this business actually has, and
+  // every screen belongs to exactly one of them:
+  //
+  //   ئەمڕۆ      what needs doing right now
+  //   مامەڵە     buying and selling
+  //   فیش        everything about receipts, in one place instead of three
+  //   پارە       where the money is and who owes whom
+  //   خەڵک       the people it is done with
+  //   ڕاپۆرت     what happened, and whether the books are sound
+  //
+  // Nothing was removed. What changed is that a screen is now found by asking what it is for
+  // rather than by remembering where it was put.
+  // ── The sections, ordered by the day rather than by the code ────────────────────────────────
+  //
+  //   «ئەو بەشانەی کە ئیشم پێێ نییە لایببیەیت.»
+  //
+  // Four screens the business cannot run without had no entry here at all: قاسە, where money
+  // goes in and out and expenses are recorded; نرخی ڕۆژ, which the owner sets every day and
+  // without which nothing can be valued; بەستنی ڕۆژ, the count against the books; and «خێر بە
+  // وردی», which could not be opened from anywhere in the application — a finished screen that
+  // nothing could reach. Meanwhile five administrative tools sat in the reports group as though
+  // they were part of the day.
+  //
+  // Only one entry is actually gone: «ئینباکسی کارەکان» is the same question «کاری ئەمڕۆ» asks,
+  // so it is one door now. Nothing else was deleted, deliberately — the change log and the
+  // export exist for the day somebody has to prove what happened, and losing that is not
+  // something the owner can undo. They are grouped away from the work instead, under a heading
+  // that says what they are.
+  const NAV_GROUPS = isSystemManager ? MANAGER_NAV_GROUPS : [
+    {
+      label: navSectionLabel("ئەمڕۆ", "Today", "اليوم"),
+      items: [
+        ["dash", tr("داشبۆرد"), LayoutDashboard],
+        ["admin-center", navSectionLabel("کاری ئەمڕۆ", "Today's work", "عمل اليوم"), Inbox],
+        ["approvals", navSectionLabel("پەسەندکردن", "Approvals", "الموافقات"), ShieldCheck],
+      ],
+    },
+    {
+      label: navSectionLabel("مامەڵە", "Trading", "التداول"),
+      items: [
+        ["newtx", tr("مامەڵەی نوێ"), ArrowLeftRight],
+        ["txs", tr("مامەڵەکان"), ListOrdered],
+        // «من نرخی ڕۆژ دادەنێم هەمیشە» — set daily, and nothing can be valued until it is. It
+        // was reachable only by noticing a warning on the dashboard.
+        ["rates", navSectionLabel("نرخی ڕۆژ", "Today's rates", "أسعار اليوم"), TrendingUp],
+      ],
+    },
+    {
+      // «تەنها دوو بەش هەیە کە پەیوەندی بە فیشەوە هەبێت. یەکەم ئەو فیشانەی کە یووسەرەکان
+      // ناردوویانە و دووەم ئەوانەی کە ئەوان ناردوویانە بەس پشکنینیان دەوێت.»
+      //
+      // Two, and only these two. «فۆرواردکراوەکان» used to sit here as a third: it is not
+      // receipt work, it is the record of which partner was sent which receipts, so it has
+      // moved to «پارە» beside «لای هاوبەشان», which is the same question about the same
+      // people. Nothing was removed — it changed neighbours.
+      label: navSectionLabel("فیش", "Receipts", "الإيصالات"),
+      items: [
+        ["receipts", navSectionLabel("فیشەکان", "Receipts", "الإيصالات"), ScanLine],
+        ["receipt-review", navSectionLabel("پشکنین", "Review", "المراجعة"), ClipboardCheck],
+      ],
+    },
+    {
+      label: navSectionLabel("پارە", "Money", "المال"),
+      items: [
+        // The screen the money actually moves through. It had two buttons on the dashboard and
+        // no entry of its own.
+        ["safes", navSectionLabel("قاسە", "Safes", "الخزائن"), Wallet],
+        ["debt-center", navSectionLabel("قەرز و قاسە", "Debt & cashbox", "الديون والخزنة"), Scale],
+        ["office-payments", navSectionLabel("نووسینگە", "Offices", "المكاتب"), Building2],
+        ["partner-holdings", navSectionLabel("لای هاوبەشان", "With partners", "لدى الشركاء"), Boxes],
+        // «بۆ بینینی ئەوەی فۆرۆرد کراوە» — which partner was sent which receipts. The same
+        // people as the line above it, which is why it reads better here than under «فیش».
+        ["receipt-forwarding", navSectionLabel("فۆرواردکراوەکان", "Forwarded", "المُحوَّلة"), Send],
+        ["close", navSectionLabel("بەستنی ڕۆژ", "Close the day", "إقفال اليوم"), ClipboardCheck],
+        ["cash-reconciliation", navSectionLabel("ڕێکخستنەوەی قاسە", "Cash reconciliation", "مطابقة النقد"), Scale],
+      ],
+    },
+    {
+      label: navSectionLabel("خەڵک", "People", "الأشخاص"),
+      items: [
+        ["people", tr("بەکارهێنەران"), Users],
+        ["party-360", navSectionLabel("پڕۆفایلی لایەن", "Party 360", "ملف الطرف"), UserRound],
+        ["cashbox", navSectionLabel("قاسەی کڕیاران", "Customer cashbox", "خزنة الزبائن"), Wallet],
+        ["partner-accounts", navSectionLabel("حسابی هاوبەشان", "Partner accounts", "حسابات الشركاء"), Handshake],
+      ],
+    },
+    {
+      // Named «ڕاپۆرت» because that is the name the owner asked for and verify:roles holds it.
+      // «خێر بە وردی» joins what is inside it; renaming the heading was not asked for.
+      label: navSectionLabel("ڕاپۆرت", "Reports", "التقارير"),
+      items: [
+        ["report", tr("ڕاپۆرت"), PieChart],
+        // Built, finished, and unreachable from anywhere in the application until now.
+        ["profit", navSectionLabel("خێر بە وردی", "Earnings in detail", "الأرباح بالتفصيل"), TrendingUp],
+        ["insights", navSectionLabel("ڕەوت و شیکاری", "Trends", "الاتجاهات"), TrendingUp],
+      ],
+    },
+    {
+      // Not the day's work. Kept, because the day somebody has to prove what happened is the
+      // day these matter, and grouped here so they are not in the way until then.
+      label: navSectionLabel("سیستەم", "System", "النظام"),
+      items: [
+        ["explain-balance", navSectionLabel("شیکردنەوەی باڵانس", "Explain a balance", "تفسير الرصيد"), Search],
+        ["integrity", navSectionLabel("یەکپارچەیی", "Integrity", "السلامة"), ShieldAlert],
+        ["audit", navSectionLabel("تۆماری گۆڕانکاری", "Change log", "سجل التغييرات"), History],
+        ["export-audit", navSectionLabel("هەناردە", "Export", "التصدير"), FileCheck2],
+        ["backup", navSectionLabel("پاراستنی داتا", "Data protection", "حماية البيانات"), Database],
+      ],
+    },
+  ];
+  const NAV = NAV_GROUPS.flatMap((g) => g.items);
+  // ── the phone gets the six sections too ────────────────────────────────────────────────
+  //
+  // «دەمەوێت بەشەکان زۆر بە ڕوونی جیا بکەیتەوە نەک ئاوا هەمووی لە یەک شوێن بێت.»
+  //
+  // That was done, and it was done on the desktop only. The phone flattened the same six
+  // groups into one list and put everything past the fourth entry behind «زیاتر» — twenty
+  // screens in a single unlabelled scroll, which is the drawer this overhaul deleted, moved
+  // to the device this business actually runs on.
+  //
+  // So: the bar carries the first section, and the sheet carries the rest WITH their
+  // headings. Both are read from NAV_GROUPS, so a section added to one is in the other.
+  // ── The four the owner named ───────────────────────────────────────────────────────────────
+  //
+  //   «ئەو بەشەی خوارەوەش ئاوا لێبکە: داشبۆرد / کاری ئەمڕۆ / بەکارهێنەران / مامەڵەکان»
+  //
+  // Named rather than taken as "the first four of the first group", which is how this was
+  // written and is why the bar read داشبۆرد · کاری ئەمڕۆ · ئینباکس · پەسەندکردن — four entries
+  // that happened to be adjacent in a list, not the four a person reaches for. A named list
+  // also cannot drift when a group is reordered.
+  // The four a person reaches for on a phone, which is not the four that happen to be first in
+  // a list. The owner's day is: see what is waiting, record a trade, deal with the receipts —
+  // «ئەمە زۆرترین کاری ڕۆژە». «بەکارهێنەران» and «مامەڵەکان» are opened when something needs
+  // looking up, which is what the sheet is for, and both keep their entry there.
+  const PHONE_BAR_IDS = ["dash", "admin-center", "newtx", "receipts"];
+  const BAR_NAV = PHONE_BAR_IDS
+    .map((id) => NAV_GROUPS.flatMap((g) => g.items).find(([itemId]) => itemId === id))
+    .filter(Boolean);
+  // Whatever the bar does not carry goes in the sheet, so nothing loses its only door — the
+  // mistake that once left the action inbox with nav:0 press:0.
+  const SHEET_GROUPS = NAV_GROUPS
+    .map((g) => ({ ...g, items: g.items.filter(([id]) => !PHONE_BAR_IDS.includes(id)) }))
+    .filter((g) => g.items.length);
+  // Exactly one entry lights up. It used to be that «کاری ئەمڕۆ» claimed every page in
+  // ADMIN_CENTER_PAGE_IDS, which was right while those pages had no entry of their own and is
+  // wrong now that they do — two lit entries tell a person they are in two places at once.
+  const isNavActive = (id) => id === "admin-center"
+    ? (page === "admin-center" || page === "action-inbox" || page === "close")
+    : page === id;
+  // Declared after isNavActive because it calls it: a const is not hoisted, and reading one
+  // above its declaration throws at render rather than at build.
+  const sheetHasActive = SHEET_GROUPS.some((g) => g.items.some(([id]) => isNavActive(id)));
+
+  // One door for every navigation entry — sidebar, phone bar, phone sheet. Written once
+  // because the thing it has to remember is easy to forget at a fourth call site: opening a
+  // page from the navigation means you did NOT come from the admin centre, so the «گەڕانەوە»
+  // link must not be offered.
+  const openPage = (id) => { setCameFromHub(false); setPage(id); setDetailId(null); setEditTx(null); setMore(false); };
+
+
+  const shared = { data, calc, cur, usr, mySafe, profitAll, profitIn, ownProfitIn, ownProfitAll,
+    investorsProfitIn, invShare, invUnpaid, autoRate, avgRate, inventoryPosition, usdValueAt, usdToCurrencyAt,
+    toUsd, sumUsd, ratesReady, owners, notify, waNotify, isOwner, flash,
+    readModel: data?.readModel || null, loadTxHistoryPage, loadRangeReport, loadInventorySnapshot,
+    // Whether this portal is being previewed by an administrator rather than lived in by the
+    // person it belongs to. Only the sender may put their own refused receipt away, so a screen
+    // that offers the button to a previewing administrator offers something the server refuses.
+    previewing: Boolean(va) };
+
+  return (
+    <div dir={LANGS[lang]?.dir || "rtl"} key={lang} className="zeman-shell min-h-screen" style={{ background: "var(--bg)", color: "var(--txt)" }}>
+      <Styles />
+      <a className="zeman-skip-link" href="#zeman-main-content">{navSectionLabel("بڕۆ بۆ ناوەڕۆکی سەرەکی", "Skip to main content", "الانتقال إلى المحتوى الرئيسي")}</a>
+
+      {(!online || stale) && (
+        <div className="sticky top-[57px] z-30 px-3 py-2 text-center text-[12px] font-semibold flex items-center justify-center gap-2"
+          style={{ background: "color-mix(in srgb, var(--warn) 92%, black)", color: "#fff" }}>
+          <WifiOff className="w-3.5 h-3.5" />
+          {online ? "پەیوەندی گەڕایەوە — نوێکردنەوە…" : "ئینتەرنێت نییە — داتای هەڵگیراو پیشان دەدرێت"}
+          {stale && <span className="opacity-75" style={num}>({new Date(stale).toLocaleTimeString("en-GB")})</span>}
+        </div>
+      )}
+      {isAdmin && data?.runtime?.maintenance_mode && (
+        <div className="sticky top-[57px] z-30 px-3 py-2.5 text-center text-[12px] font-bold flex items-center justify-center gap-2"
+          style={{ background: "color-mix(in srgb, var(--neg) 92%, black)", color: "#fff" }}>
+          <AlertTriangle className="w-4 h-4 shrink-0" />
+          <span>
+            ڕاگرتنی فریاکەوتن چالاکە — گۆڕانکاری دارایی قەدەغەیە
+            {data.runtime.maintenance_reason ? ` · ${data.runtime.maintenance_reason}` : ""}
+          </span>
+        </div>
+      )}
+      {msg && (
+        <div className="fixed top-0 right-0 left-0 z-[60] flex justify-center px-4" style={{ paddingTop: "calc(env(safe-area-inset-top) + 12px)" }}>
+          <div className={`drop flex items-center gap-2.5 px-5 py-3.5 rounded-[var(--r)] shadow-xl text-white font-bold text-sm max-w-md w-full justify-center ${flashIsGood(msg, msgTone) ? "bg-emerald-600" : "bg-slate-900"}`}>
+            {flashIsGood(msg, msgTone) ? <CheckCircle2 className="w-5 h-5 shrink-0" /> : <AlertTriangle className="w-5 h-5 shrink-0" />}
+            <span>{msg.replace(" ✓", "")}</span>
+          </div>
+        </div>
+      )}
+      {busy && <div className="fixed top-0 right-0 left-0 h-0.5 bg-emerald-600 animate-pulse z-50" />}
+
+      <header className="sticky top-0 z-40 sarraf-topbar"
+        style={{ paddingTop: "env(safe-area-inset-top)", borderInline: 0, borderTop: 0, borderBottom: "1px solid var(--line)" }}>
+        <div className={`px-4 md:px-7 py-3 flex items-center justify-between gap-3 mx-auto ${portalUser ? "max-w-[920px]" : "max-w-[1600px] md:ml-[260px]"}`}>
+          <div className="flex items-center gap-3 min-w-0">
+            {/* min-w-0 and a truncate, or eight action buttons push the name off its own
+                header and sit on top of it. */}
+            <div className="flex md:hidden items-center gap-2.5 me-1 min-w-0">
+              <BrandLogo variant="symbol" decorative className="w-9 h-9 shrink-0" />
+              <div className="min-w-0">
+                <div className="text-[15px] font-extrabold tracking-tight truncate" style={{color:"var(--txt)"}}>{BRAND.shortName}</div>
+                <BuildStamp />
+              </div>
+            </div>
+            <div className="hidden md:flex w-10 h-10 rounded-full items-center justify-center shrink-0"
+              style={{ background: "linear-gradient(155deg, var(--ac), var(--ac-2))",
+                       boxShadow: "0 4px 14px -3px rgba(var(--ac-gl),.55)" }}>
+              <span className="text-[15px] font-bold" style={{ color: "var(--ac-ink)" }}>{(profile.name || "?").slice(0, 1)}</span>
+            </div>
+            <div className="hidden md:block min-w-0">
+              <div className="text-[15px] font-semibold leading-tight truncate" style={{ color: "var(--txt)" }}>
+                {profile.name}
+              </div>
+              <div className="text-[11.5px] truncate" style={{ color: "var(--txt-3)" }}>
+                {va ? `${tr("بینین وەک")} · ${va.name}` : (isOwner ? tr("خاوەنی سیستەم") : tr(ROLE_KU[profile.role]))}
+              </div>
+            </div>
+            {!portalUser && <div className={`zeman-system-status ${systemNeedsAttention ? "is-attention" : "is-live"}`} role="status" aria-label={systemStatusLabel} title={systemStatusLabel}>
+              <span className="zeman-system-light is-green" aria-hidden="true" />
+              <span className="zeman-system-light is-red" aria-hidden="true" />
+              <span className="hidden lg:inline">{systemStatusText}</span>
+            </div>}
+          </div>
+
+          <div className="flex items-center gap-1.5 shrink-0">
+            {!portalUser && isAdmin && <React.Suspense fallback={null}><OperationalPalette client={supabase} lang={lang} onNavigate={(path, focus) => { setPage(path.slice(2)); setSearchFocus(focus || ""); }} /></React.Suspense>}
+            {isAdmin && va && (
+              <button onClick={() => setViewAs(null)}
+                className="flex items-center gap-1.5 text-[12px] font-semibold px-3 py-2 rounded-full tap"
+                style={{ background: "rgba(var(--ac-gl),.16)", color: "var(--ac)" }}>
+                <LogOut className="w-3.5 h-3.5" /> {tr("گەڕانەوە")}
+              </button>
+            )}
+            {/* زەنگی ئاگاداری */}
+            <div className="relative">
+              <button onClick={() => { setNoteOpen(!noteOpen); if (!noteOpen) setTimeout(seeAll, 1800); }}
+                aria-label={tr("ئاگادارییەکان")} aria-expanded={noteOpen} aria-controls="zeman-notifications-panel"
+                className="w-9 h-9 rounded-full tap flex items-center justify-center relative"
+                style={{ background: "var(--glass)", border: "1px solid var(--line)", color: "var(--txt-2)" }}>
+                <Bell className="w-4 h-4" />
+                {unseen > 0 && (
+                  <span className="absolute -top-0.5 -end-0.5 min-w-[17px] h-[17px] px-1 rounded-full text-[9.5px] font-bold flex items-center justify-center"
+                    style={{ background: "var(--neg)", color: "#fff", ...num }}>
+                    {unseen > 9 ? "9+" : unseen}
+                  </span>
+                )}
+              </button>
+              {noteOpen && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setNoteOpen(false)} />
+                  <div id="zeman-notifications-panel" className="fixed sm:absolute inset-x-3 sm:inset-x-auto top-[70px] sm:top-full sm:mt-2 sm:end-0 z-50 rounded-[var(--r)] overflow-hidden drop sm:w-[340px]"
+                    style={{ background: "var(--surf-2)", border: "1px solid var(--line)", boxShadow: "var(--sh-3)" }}>
+                    <div className="px-4 py-3 flex items-center justify-between" style={{ borderBottom: "1px solid var(--line)" }}>
+                      <span className="text-[13px] font-semibold" style={{ color: "var(--txt)" }}>{tr("ئاگادارییەکان")}</span>
+                      {unseen > 0 && (
+                        <button onClick={seeAll} className="text-[11.5px] font-semibold tap" style={{ color: "var(--ac)" }}>
+                          {tr("هەمووی بینراو")}
+                        </button>
+                      )}
+                    </div>
+                    <div className="max-h-[65vh] sm:max-h-[380px] overflow-y-auto">
+                      {notes.length === 0 ? <Empty t={tr("هیچ ئاگادارییەک نییە")} /> :
+                        notes.map((n) => (
+                          <button key={n.id} onClick={() => seeNote(n)}
+                            className="w-full text-start px-4 py-3 flex gap-3 tap"
+                            style={{ borderBottom: "1px solid var(--line)", background: n.seen ? "transparent" : "rgba(var(--ac-gl),.06)" }}>
+                            <span className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 mt-0.5"
+                              style={{ background: NOTE_ICON[n.kind]?.bg || "var(--glass-2)" }}>
+                              {(() => { const I = NOTE_ICON[n.kind]?.Ic || Bell;
+                                return <I className="w-[15px] h-[15px]" style={{ color: NOTE_ICON[n.kind]?.fg || "var(--txt-2)" }} />; })()}
+                            </span>
+                            <span className="min-w-0 flex-1">
+                              <span className="text-[13px] font-semibold block truncate" style={{ color: "var(--txt)" }}>{n.title}</span>
+                              {n.body && <span className="text-[11.5px] block truncate mt-0.5" style={{ color: "var(--txt-2)" }}>{n.body}</span>}
+                              <span className="text-[10px] block mt-1" style={{ ...num, color: "var(--txt-3)" }}>
+                                {relTime(n.created_at)}
+                              </span>
+                            </span>
+                            {!n.seen && <span className="w-2 h-2 rounded-full shrink-0 mt-2" style={{ background: "var(--ac)" }} />}
+                          </button>
+                        ))}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* Language and theme are hidden below md and live in the «زیاتر» sheet instead.
+              * Five 36px buttons on a 390px phone left the brand block 39 pixels for a name
+              * that needs 55, so ZEMAN — the name of the product being sold — rendered as
+              * «…AN» on every phone. Settings you touch once should not cost the header its
+              * identity on every open.
+              */}
+            {!portalUser && <div className="relative hidden md:block">
+              <button onClick={() => setLangOpen(!langOpen)}
+                aria-label={navSectionLabel("گۆڕینی زمان", "Change language", "تغيير اللغة")} aria-expanded={langOpen}
+                className="w-9 h-9 rounded-full text-[11px] font-bold tap flex items-center justify-center"
+                style={{ background: "var(--glass)", border: "1px solid var(--line)", color: "var(--txt-2)" }}>
+                {LANGS[lang]?.flag || "KU"}
+              </button>
+              {langOpen && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setLangOpen(false)} />
+                  <div className="absolute top-full mt-2 end-0 z-50 rounded-[var(--r-sm)] overflow-hidden min-w-[140px] drop"
+                    style={{ background: "var(--surf-2)", border: "1px solid var(--line)", boxShadow: "var(--sh-3)" }}>
+                    {Object.entries(LANGS).map(([k, v]) => (
+                      <button key={k} onClick={() => { changeLang(k); setLangOpen(false); }}
+                        className="w-full text-start px-4 py-2.5 text-[13px] flex items-center gap-2.5 tap"
+                        style={lang === k ? { background: "rgba(var(--ac-gl),.16)", color: "var(--ac)", fontWeight: 600 } : { color: "var(--txt-2)" }}>
+                        <span className="text-[10px] font-bold opacity-60">{v.flag}</span> {v.name}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>}
+            {!portalUser && <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+              aria-label={theme === "dark" ? navSectionLabel("ڕووناککردنی ڕووکار", "Use light theme", "استخدام المظهر الفاتح") : navSectionLabel("تاریککردنی ڕووکار", "Use dark theme", "استخدام المظهر الداكن")}
+              className="w-9 h-9 rounded-full tap hidden md:flex items-center justify-center"
+              style={{ background: "var(--glass)", border: "1px solid var(--line)", color: "var(--txt-2)" }}>
+              {theme === "dark" ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+            </button>}
+            <button onClick={signOut} aria-label={navSectionLabel("چوونەدەرەوە", "Sign out", "تسجيل الخروج")} className="w-9 h-9 rounded-full tap flex items-center justify-center"
+              style={{ background: "var(--glass)", border: "1px solid var(--line)", color: "var(--txt-2)" }}>
+              <LogOut className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {/* Before anything else on the page: a fix nobody is running is a fix nobody has. */}
+      <UpdateBanner lang={lang} />
+
+      {truncatedTables.length > 0 && (
+        <div role="alert" className="mx-4 md:mx-8 mt-3 rounded-[var(--r-sm)] px-4 py-3 text-[12px] leading-6"
+             style={{ background: "rgba(220,38,38,.12)", border: "1px solid var(--neg)", color: "var(--neg)" }}>
+          <b>{navSectionLabel("ژمارەکان تەواو نین", "The figures are incomplete", "الأرقام غير مكتملة")}</b>
+          {" — "}
+          {navSectionLabel(
+            `تۆمارەکانی ${truncatedTables.join("، ")} زۆرترن لەوەی بتوانرێت لە وێبگەڕدا بارببرێن. پەیوەندی بە پشتگیرییەوە بکە پێش ئەوەی پشت بەم ژمارانە ببەستیت.`,
+            `${truncatedTables.join(", ")} holds more rows than the browser can load. Contact support before relying on these figures.`,
+            `${truncatedTables.join("، ")} يحتوي على صفوف أكثر مما يمكن تحميله. تواصل مع الدعم قبل الاعتماد على هذه الأرقام.`)}
+        </div>
+      )}
+
+      {/* The offset lives in market-pulse.css, next to the rule it corrects. */}
+      {!portalUser && <DeferredPanel compact><MarketPulse currencies={data.currencies} lang={lang} online={online} /></DeferredPanel>}
+
+      {portalUser ? (
+        <main id="zeman-main-content" tabIndex={-1} className="px-4 pt-5 pb-28 md:px-8 md:pb-10 max-w-[920px] mx-auto"><Portal user={portalUser} {...shared} officePay={officePay} settle={settle} flash={flash} reloadBatches={reloadBatches} accountMove={accountMove} accountTransfer={accountTransfer} online={online} stale={stale} refreshing={refreshing} refreshedAt={refreshedAt} refresh={() => loadAll(profile)} /></main>
+      ) : (
+        <div className="flex flex-col md:flex-row">
+          {/* لیستی لاتەنیشت — تەنها لە شاشەی گەورە */}
+          <nav className="sarraf-sidebar hidden md:flex md:w-[236px] md:min-h-screen p-4 flex-col gap-1 fixed left-0 top-0 bottom-0 z-50 overflow-y-auto">
+            <div className="flex items-center gap-3 px-2 pt-2 pb-6">
+              <BrandLogo variant="symbol" decorative className="w-10 h-10" />
+              <div>
+                <div className="text-[16px] font-extrabold tracking-tight text-white">{BRAND.name}</div>
+                <div className="text-[9.5px] mt-0.5" style={{color:"#9CB4AF"}}>{BRAND.descriptor}</div>
+              </div>
+            </div>
+            <div className="space-y-4">
+              {NAV_GROUPS.map((group) => (
+                <div key={group.label}>
+                  <div className="sidebar-section-title px-3 pb-1.5">{group.label}</div>
+                  <div className="space-y-1">
+                    {group.items.map(([id, t, Ic]) => {
+                      const on = isNavActive(id);
+                      return (
+                        <button key={id} onClick={() => openPage(id)}
+                          style={on ? { color: "#07130D" } : { color: "#A9B0B8" }}
+                          className={`nav-item ${on ? "nav-active" : ""} flex w-full items-center gap-3 px-3.5 py-2.5 rounded-xl text-[12.5px] tap relative ${on ? "font-semibold" : "font-medium"}`}>
+                          <Ic className="w-[17px] h-[17px]" style={{ color: on ? "#07130D" : "#8F98A3" }} />
+                          <span className="truncate">{t}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+            {isAdmin && (
+              <div className="mt-5 pt-4" style={{ borderTop: "1px solid var(--line)" }}>
+                <div className="flex items-center gap-1.5 text-[11px] font-semibold mb-2 px-1" style={{ color: "var(--txt-3)" }}>
+                  <Eye className="w-3.5 h-3.5" /> {tr("بینین وەک")}
+                </div>
+                <ViewAsPicker users={data.users} onPick={setViewAs} compact />
+              </div>
+            )}
+          </nav>
+          <main id="zeman-main-content" tabIndex={-1} className="sarraf-main sarraf-desktop-content flex-1 px-4 pt-5 pb-28 md:px-8 md:pt-7 md:pb-10 max-w-[1600px] w-full mx-auto">
+            {/* Through openPage for the same reason the navigation does: a dashboard card is a
+              * fresh choice, not a step deeper into the admin centre.
+              */}
+            {page === "dash" && <Dashboard {...shared} batches={batches} go={openPage} />}
+            {page === "safes" && <><Back onClick={() => setPage("dash")} t={tr("گەڕانەوە بۆ داشبۆرد")} /><Safes {...shared} lang={lang} addDeposit={addDeposit} addExpense={addExpense} addCurrency={addCurrency} /></>}
+            {page === "rates" && <><Back onClick={() => setPage("dash")} t={tr("گەڕانەوە بۆ داشبۆرد")} /><Rates {...shared} saveRates={saveRates} /></>}
+            {page === "profit" && <><Back onClick={() => setPage("dash")} t={tr("گەڕانەوە بۆ داشبۆرد")} /><ProfitPage {...shared} /></>}
+            {/* «کاتێک کلیکم لەسەر مامەڵەی نوێ کرد ٣ ئۆپشن بهێنێ / مامەڵەی ئاسایی / مامەڵەی
+              * ڕاستەوخۆ / مامەڵەی عموولە». The first two are one form with a switch inside it
+              * and stay exactly as they were; the third moves money between places rather than
+              * buying or selling a currency, so it is its own form. A batch of receipts always
+              * becomes an ordinary trade, so it never has a choice to make. */}
+            {page === "newtx" && !pendingBatch && (
+              <div className="flex gap-2 mb-4">
+                {[["trade", tr("مامەڵەی کڕین و فرۆشتن")], ["commission", tr("مامەڵەی عمولە")]].map(([id, label]) => (
+                  <button key={id} onClick={() => setNewTxKind(id)}
+                    aria-pressed={newTxKind === id}
+                    className="flex-1 py-3.5 rounded-[var(--r-sm)] text-[14px] font-semibold tap"
+                    style={newTxKind === id
+                      ? { background: "var(--ac-bg)", color: "var(--ac)", border: "1px solid color-mix(in srgb, var(--ac) 34%, transparent)" }
+                      : { background: "var(--surf-2)", color: "var(--txt-3)", border: "1px solid var(--line)" }}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
+            {page === "newtx" && (pendingBatch || newTxKind === "trade") &&
+              <TxForm {...shared} onSave={saveTx} batch={pendingBatch} onClearBatch={() => setPendingBatch(null)} busy={busy} />}
+            {page === "newtx" && !pendingBatch && newTxKind === "commission" &&
+              <DeferredPanel><CommissionTrade client={supabase} lang={lang}
+                currencies={data?.currencies || []} ownMoney={mySafe}
+                // «ئاماژە بەوەش بکەم کە بۆ چ کەسێکی دەکەم.» Only people this business actually
+                // knows, because the server refuses anybody else and a list that offers a
+                // refusal is a list that wastes the owner's press.
+                people={(data?.users || []).filter((u) => !u.deleted && u.role !== "admin")}
+                onRecorded={(answer) => flash(`${tr("مامەڵەی عمولە تۆمار کرا")} #${answer.code ?? ""}`)} /></DeferredPanel>}
+            {page === "txs" && (editTx
+              ? <TxForm {...shared} onSave={saveTx} editing={editTx} onCancel={() => setEditTx(null)} />
+              : <TxList {...shared} onEdit={setEditTx} onDel={delTx} settle={settle} unsettle={unsettle} />)}
+            {page === "receipts" && <ReceiptsHub {...shared} batches={batches} batchLoadError={batchLoadError} reloadBatches={reloadBatches} flash={flash} profile={profile}
+              searchFocus={searchFocus} onMakeTx={(b) => { setPendingBatch(b); setPage("newtx"); }} />}
+            {page === "people" && <PeopleHub {...shared} accountMove={accountMove} accountTransfer={accountTransfer} profile={profile} detailId={detailId} setDetailId={setDetailId} onSave={saveTx} transfer={transfer} officePay={officePay} officeSettle={officeSettle} settle={settle} createUser={createUser} deleteUser={deleteUser} setUserRate={setUserRate} resetUserPassword={resetUserPassword} flash={flash} />}
+            {page === "party-360" && <DeferredPanel><Party360 client={supabase} lang={lang} parties={(data?.users || []).filter((u) => !u.deleted && u.role !== "admin")} /></DeferredPanel>}
+            {page === "report" && <Report {...shared} />}
+            {/* The admin centre is one business's world. A manager belongs to no business, so
+                for them it is not a page they should not open — it is a page with no meaning. */}
+            {page === "admin-center" && !isSystemManager && <AdminCenterHub lang={lang}
+              onNavigate={(id) => { setCameFromHub(true); setPage(id); }}
+              data={data} calc={calc} cur={cur} batches={batches} />}
+
+            {/* The way back, and the door the manager fell through. Integrity, the change log
+                and data protection are on the manager's own navigation and are also filed under
+                the admin centre, so this link appeared for them too and led straight into the
+                exchange's hub — every screen belonging to a business they are not part of. It
+                now returns each rank to where they came from. */}
+            {cameFromHub && ADMIN_CENTER_PAGE_IDS.has(page) && page !== "admin-center" && (
+              <Back onClick={() => setPage(isSystemManager ? "manager-console" : "admin-center")}
+                    t={isSystemManager
+                      ? navSectionLabel("گەڕانەوە بۆ سەرخێڵەکان", "Back to Businesses", "العودة إلى الأعمال")
+                      : navSectionLabel("گەڕانەوە بۆ ناوەندی بەڕێوەبردن", "Back to Admin Center", "العودة إلى مركز الإدارة")} />
+            )}
+            {/* «ئینباکسی کارەکان» is not a second screen any more. It asked the same question
+              * «کاری ئەمڕۆ» asks — what is waiting — and answered it from the server while the
+              * hub answered it from the browser. Two answers to one question, which could
+              * disagree and which the owner had to check twice. The server's list now sits at
+              * the foot of the hub, under the counts, and the route stays so an old link still
+              * lands somewhere real.
+              */}
+            {(page === "admin-center" || page === "action-inbox") && !isSystemManager && (
+              <div className="mt-6"><DeferredPanel><ActionInbox client={supabase} lang={lang}
+                onNavigate={(path) => setPage(path.slice(2))} /></DeferredPanel></div>
+            )}
+            {page === "integrity" && <DeferredPanel><IntegrityCenter client={supabase} lang={lang} onNavigate={(path) => setPage(path.slice(2))} /></DeferredPanel>}
+            {/* Two records of the same money are only safe while they agree. */}
+            {page === "integrity" && <div className="mt-4"><DeferredPanel><BooksReconciliation client={supabase} lang={lang} flash={flash} /></DeferredPanel></div>}
+            {page === "cash-reconciliation" && <DeferredPanel><CashReconciliation client={supabase} lang={lang} /></DeferredPanel>}
+            {/* AppErrorBoundary has been writing these since 202608280022 and nothing ever read
+                them. A crash on a customer's phone reached the database and stopped there. */}
+            {page === "integrity" && <div className="mt-4"><DeferredPanel><FaultList client={supabase} lang={lang} /></DeferredPanel></div>}
+            {page === "export-audit" && <DeferredPanel><ExportAuditCenter client={supabase} lang={lang} /></DeferredPanel>}
+            {page === "debt-center" && <DeferredPanel><DebtCenter client={supabase} lang={lang}
+              nameOf={(id) => usr(id).name} canAct={isAdmin} flash={flash} /></DeferredPanel>}
+            {page === "receipt-review" && <DeferredPanel><ReceiptReviewWorkspace client={supabase} lang={lang}
+              actorId={profile?.id || null} flash={flash}
+              signedUrlFor={async (path) => {
+                const { data } = await supabase.storage.from("receipts").createSignedUrl(path, 3600);
+                return data?.signedUrl || null;
+              }} /></DeferredPanel>}
+            {page === "receipt-forwarding" && <DeferredPanel><ReceiptForwardingCenter client={supabase} lang={lang} flash={flash}
+              people={(data?.users || []).filter((u) => !u.deleted)}
+              signedUrlFor={async (path) => {
+                const { data: signed } = await supabase.storage.from("receipts").createSignedUrl(path, 3600);
+                return signed?.signedUrl || null;
+              }} /></DeferredPanel>}
+            {page === "office-payments" && (() => {
+              // The office's own screen belongs to the office; this is the owner's side of it —
+              // every office, what it is owed, and the one press that pays it back.
+              const offices = data.users.filter((u) => u.role === "office" && !u.deleted);
+              return <div className="space-y-4">
+                <H sub={tr("پارەی من لای نووسینگە، و ئەوەی ئەوان لە پارەی خۆیانەوە داویانە")}>
+                  {tr("پارەدانی نووسینگە")}
+                </H>
+                {offices.length === 0
+                  ? <Card><Empty t={tr("هیچ نووسینگەیەکی چالاک نییە")} /></Card>
+                  : offices.map((o) => (
+                      <div key={o.id} className="grid gap-4 md:grid-cols-2">
+                        <OfficeDebts data={data} calc={calc} officeId={o.id}
+                          title={o.name} officeSettle={officeSettle} readOnly={!isAdmin} />
+                        <OfficeAdvance data={data} cur={cur} officeId={o.id}
+                          officeAdvanceTo={officeAdvanceTo} readOnly={!isAdmin} />
+                      </div>
+                    ))}
+              </div>;
+            })()}
+            {page === "explain-balance" && <DeferredPanel><ExplainBalance client={supabase} lang={lang}
+              currencies={data?.currencies || []} /></DeferredPanel>}
+            {page === "partner-accounts" && <DeferredPanel><PartnerAccounts client={supabase} lang={lang} flash={flash}
+              partners={(data?.users || []).filter((u) => u.role === "partner" && !u.deleted)} /></DeferredPanel>}
+            {page === "partner-holdings" && <DeferredPanel><PartnerHoldings client={supabase} lang={lang}
+              isStaff={isAdmin || profile?.role === "office"}
+              partners={(data?.users || []).filter((u) => u.role === "partner" && !u.deleted)} /></DeferredPanel>}
+            {page === "manager-center" && <DeferredPanel><ManagerCenter lang={lang}
+              users={data?.users || []} profile={profile} flash={flash}
+              request={adminUserRequest} onDone={loadAll} /></DeferredPanel>}
+            {page === "manager-console" && <DeferredPanel><ManagerConsole client={supabase}
+              lang={lang} isManager={isSystemManager} request={adminUserRequest} flash={flash} /></DeferredPanel>}
+            {page === "manager-overview" && <DeferredPanel><ManagerOverview client={supabase}
+              lang={lang} /></DeferredPanel>}
+            {page === "cashbox" && <DeferredPanel><CashboxPanel client={supabase} lang={lang} flash={flash}
+              customers={(data?.users || []).filter((u) => u.role === "customer" && !u.deleted)}
+              rateFor={(code) => { const c = (data?.currencies || []).find((x) => x.code === code);
+                const mid = rateOf(c);
+                return mid > 0 ? mid : null; }} /></DeferredPanel>}
+            {page === "approvals" && <ApprovalCenter
+              data={data} profile={profile} isOwner={isOwner} cur={cur}
+              approve={approveApproval} reject={rejectApproval} cancel={cancelApproval}
+              ownerOverride={ownerOverrideApproval} saveSettings={saveControlSettings}
+              reconcile={runReconciliation} busy={busy} flash={flash}
+            />}
+            {page === "audit" && <Audit data={data} />}
+            {page === "insights" && <Insights {...shared} flash={flash} />}
+            {page === "close" && <DayClose data={data} calc={calc} cur={cur} usr={usr} closeDay={closeDay} sumUsd={sumUsd} />}
+            {page === "backup" && <Backup data={data} calc={calc} cur={cur} lang={lang} downloadBackup={downloadBackup} flash={flash} sumUsd={sumUsd} mySafe={mySafe} owners={owners} ratesReady={ratesReady} isOwner={isOwner} runSystemHealth={runSystemHealth} setMaintenanceMode={setMaintenanceMode} />}
+          </main>
+
+          {/* لیستی خوارەوە — تەنها لە مۆبایل */}
+          <nav className="md:hidden fixed bottom-0 inset-x-0 z-40 px-3 pb-[max(env(safe-area-inset-bottom),10px)] pt-2 pointer-events-none">
+            <div className="flex glass rounded-full p-1.5 pointer-events-auto mx-auto max-w-md"
+              style={{ boxShadow: "var(--sh-3)" }}>
+              {BAR_NAV.map(([id, t, Ic]) => {
+                const on = isNavActive(id);
+                return (
+                  <button key={id} onClick={() => openPage(id)}
+                    className="flex-1 flex flex-col items-center gap-1 py-2 rounded-full tap"
+                    style={on ? { background: "var(--surf-3)" } : {}}>
+                    <Ic className="w-[19px] h-[19px]" style={{ color: on ? "var(--ac)" : "var(--txt-3)" }} />
+                    <span className="text-[9.5px] font-semibold" style={{ color: on ? "var(--txt)" : "var(--txt-3)" }}>{t}</span>
+                  </button>
+                );
+              })}
+              <button onClick={() => setMore(!more)}
+                className="flex-1 flex flex-col items-center gap-1 py-2 rounded-full tap"
+                style={sheetHasActive ? { background: "var(--surf-3)" } : {}}>
+                <MoreHorizontal className="w-[19px] h-[19px]"
+                  style={{ color: sheetHasActive ? "var(--ac)" : "var(--txt-3)" }} />
+                <span className="text-[9.5px] font-semibold" style={{ color: "var(--txt-3)" }}>{tr("زیاتر")}</span>
+              </button>
+            </div>
+          </nav>
+
+          {more && (
+            <div className="md:hidden fixed inset-0 z-50 bg-slate-900/40" onClick={() => setMore(false)}>
+              {/* Bounded, and scrolling in exactly one place. With the six sections, the
+                  settings row and the "view as" picker all stacked, the sheet grew past the
+                  height of the phone and pushed its own handle and close button off the top
+                  of the screen — a panel you cannot see the top of and cannot shut. */}
+              <div className="absolute bottom-0 right-0 left-0 rounded-t-[28px] px-4 pt-4 sheet flex flex-col"
+                style={{ background: "var(--surf)", boxShadow: "0 -8px 40px -8px rgba(13,17,23,.3)",
+                         maxHeight: "88vh", paddingBottom: "max(env(safe-area-inset-bottom),1.5rem)" }}
+                onClick={(e) => e.stopPropagation()}>
+                <div className="shrink-0">
+                  <div className="w-10 h-1 rounded-full mx-auto mb-4" style={{ background: "var(--line)" }} />
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="font-bold text-[var(--txt)]">{tr("بەشەکانی تر")}</div>
+                    <button onClick={() => setMore(false)} aria-label={tr("داخستنی بەشەکانی تر")}
+                      className="p-1.5 text-[var(--txt-3)]"><X className="w-5 h-5" /></button>
+                  </div>
+                </div>
+                <div className="overflow-y-auto -mx-1 px-1">
+                {/* The same headings as the sidebar, in the same order. A phone screen is
+                  * smaller, not simpler: a person looking for «ناردن» should find it under
+                  * «فیش» here exactly as they would on a desk.
+                  */}
+                <div>
+                  {SHEET_GROUPS.map((group) => (
+                    <div key={group.label} className="mb-2">
+                      <div className="sidebar-section-title px-2 pt-2 pb-1">{group.label}</div>
+                      {group.items.map(([id, t, Ic]) => (
+                        <button key={id} onClick={() => openPage(id)}
+                          className={`w-full flex items-center gap-3 px-4 py-3 rounded-[var(--r-sm)] text-sm mb-1 ${isNavActive(id) ? "bg-[var(--ac)] text-[var(--ac-ink)] font-semibold" : "text-[var(--txt)] hover:bg-[var(--line)]"}`}>
+                          <Ic className="w-5 h-5" /> {t}
+                        </button>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+                {!portalUser && (
+                  <div className="mt-2 pt-3 border-t border-[var(--line)] flex items-center gap-2">
+                    {Object.entries(LANGS).map(([k, v]) => (
+                      <button key={k} onClick={() => changeLang(k)}
+                        className="flex-1 py-2.5 rounded-[var(--r-sm)] text-[12px] font-semibold tap"
+                        style={lang === k
+                          ? { background: "var(--ac)", color: "var(--ac-ink)" }
+                          : { background: "var(--glass)", border: "1px solid var(--line)", color: "var(--txt-2)" }}>
+                        {v.name}
+                      </button>
+                    ))}
+                    <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+                      aria-label={theme === "dark"
+                        ? navSectionLabel("ڕووناککردنی ڕووکار", "Use light theme", "استخدام المظهر الفاتح")
+                        : navSectionLabel("تاریککردنی ڕووکار", "Use dark theme", "استخدام المظهر الداكن")}
+                      className="w-11 h-11 rounded-[var(--r-sm)] tap flex items-center justify-center shrink-0"
+                      style={{ background: "var(--glass)", border: "1px solid var(--line)", color: "var(--txt-2)" }}>
+                      {theme === "dark" ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+                    </button>
+                  </div>
+                )}
+                {isAdmin && (
+                  <div className="mt-3 pt-3 border-t border-[var(--line)]">
+                    <div className="flex items-center gap-2 text-xs font-semibold text-[var(--txt-2)] mb-2 px-1">
+                      <Eye className="w-4 h-4" /> {tr("بینین وەک بەکارهێنەرێکی تر")}
+                    </div>
+                    <ViewAsPicker users={data.users} onPick={(id) => { setViewAs(id); setMore(false); }} />
+                  </div>
+                )}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* هەڵبژاردنی بەکارهێنەر بە گەڕان */
+function ViewAsPicker({ users, onPick, compact }) {
+  const [q, setQ] = useState("");
+  const list = users.filter((u) => u.role !== "admin" && !u.deleted)
+    .filter((u) => !q || (u.name || "").includes(q) || (u.phone || "").includes(q) || (ROLE_KU[u.role] || "").includes(q));
+  return (
+    <div>
+      <Inp value={q} onChange={(e) => setQ(e.target.value)} aria-label={tr("گەڕان بە ناو، ژمارە، یان ڕۆڵ")}
+        placeholder={tr("گەڕان بە ناو، ژمارە، یان ڕۆڵ…")}
+        className={compact ? "text-xs py-2" : ""} />
+      <div className={`mt-1.5 space-y-1 overflow-y-auto ${compact ? "max-h-44" : "max-h-64"}`}>
+        {list.length === 0 ? <div className="text-xs text-[var(--txt-3)] py-2 text-center">{tr("هیچ نەدۆزرایەوە")}</div> :
+          list.map((u) => (
+            <button key={u.id} onClick={() => onPick(u.id)}
+              className="w-full text-right px-3 py-2 rounded-lg hover:bg-[var(--pos)] hover:text-white transition group">
+              <div className={`font-semibold ${compact ? "text-xs" : "text-sm"} text-[var(--txt)] group-hover:text-white`}>{u.name}</div>
+              <div className="text-[10px] text-[var(--txt-3)] group-hover:text-emerald-100">
+                {ROLE_KU[u.role]}{u.phone && <span style={num}> · {u.phone}</span>}
+              </div>
+            </button>
+          ))}
+      </div>
+    </div>
+  );
+}
+
+/* ══════════════════ لۆگین ══════════════════ */
+function Splash({ t, signOut }) {
+  return (
+    <div dir={LANGS[_lang]?.dir || "rtl"} className="min-h-screen flex flex-col items-center justify-center gap-4 p-6 text-center" style={{ background: "var(--bg)", color: "var(--txt-2)" }}>
+      <Vault className="w-10 h-10 text-amber-500" />
+      <div>{t}</div>
+      {signOut && <Btn kind="ghost" onClick={signOut}>{tr("دەرچوون")}</Btn>}
+    </div>
+  );
+}
+
+/* ── بایۆمەتریک ──
+   Custom biometric login is disabled in production because the old prototype
+   stored the account password in browser localStorage. Re-enable only with a
+   real server-verified passkey/WebAuthn flow that never stores passwords. */
+const bioAvailable = async () => false;
+const bioSave = async () => {
+  try { localStorage.removeItem("bio"); } catch {}
+  return false;
+};
+const bioLogin = async () => {
+  try { localStorage.removeItem("bio"); } catch {}
+  return null;
+};
+
+
+function Login() {
+  const loginCopy = {
+    ku: { phone: "ژمارەی مۆبایل", required: "ژمارەی مۆبایل و وشەی نهێنی پێویستە" },
+    en: { phone: "Phone number", required: "Phone number and password are required" },
+    ar: { phone: "رقم الهاتف", required: "رقم الهاتف وكلمة المرور مطلوبان" },
+  }[_lang] || { phone: "ژمارەی مۆبایل", required: "ژمارەی مۆبایل و وشەی نهێنی پێویستە" };
+  const [id, setId] = useState("");
+  const [pw, setPw] = useState("");
+  const [show, setShow] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  // Login identity: keep legacy local-number accounts working while accepting
+  // equivalent Iraqi formats such as 0770..., +964770..., and 00964770....
+  const phoneIdentityCandidates = (v) => {
+    const t = String(v || "").trim();
+    if (t.includes("@")) return [t.toLowerCase()];
+
+    // Existing internal accounts may still use their old short alias while their phone number is
+    // being attached. New accounts and every person-facing label use phone-number login only.
+    if (/^[a-zA-Z][a-zA-Z0-9._-]{2,31}$/.test(t)) {
+      return [`${t.toLowerCase()}@sarraf.local`];
+    }
+
+    const digits = t.replace(/\D/g, "");
+    if (!digits) return [];
+
+    const canonical =
+      digits.startsWith("00964") ? digits.slice(2)
+      : digits.startsWith("964") ? digits
+      : digits.startsWith("0") ? `964${digits.slice(1)}`
+      : digits.startsWith("7") ? `964${digits}`
+      : digits;
+
+    const local = canonical.startsWith("964") ? `0${canonical.slice(3)}` : canonical;
+
+    return [...new Set([digits, canonical, local].filter(Boolean))]
+      .map((x) => `${x}@sarraf.local`);
+  };
+
+  const [bio, setBio] = useState(false);
+  useEffect(() => {
+    // Remove any credential left by older prototype builds.
+    try { localStorage.removeItem("bio"); } catch {}
+    setBio(false);
+  }, []);
+
+  const go = async (ov) => {
+    const uid2 = ov?.id ?? id, pw2 = ov?.pw ?? pw;
+    if (!uid2 || !pw2) return setErr(loginCopy.required);
+    setBusy(true); setErr("");
+    const candidates = phoneIdentityCandidates(uid2);
+    let lastError = null;
+    let signedIn = false;
+
+    for (const email of candidates) {
+      const { error } = await supabase.auth.signInWithPassword({ email, password: pw2 });
+      if (!error) { signedIn = true; break; }
+      lastError = error;
+    }
+
+    if (!signedIn) {
+      console.warn("Login failed for all normalized identity candidates", lastError?.message || "");
+      setErr(tr("زانیارییەکان هەڵەن — دووبارە هەوڵ بدە"));
+    }
+    setBusy(false);
+  };
+
+  const goBio = async () => {
+    setBusy(true); setErr("");
+    const saved = await bioLogin();
+    if (!saved) { setErr(tr("نەتوانرا پشتڕاست بکرێتەوە")); setBusy(false); return; }
+    await go(saved);
+  };
+
+  return (
+    <div dir={LANGS[_lang]?.dir || "rtl"} data-role="admin"
+      className="min-h-screen flex items-center justify-center p-6 relative overflow-hidden"
+      style={{ background: "var(--bg)" }}>
+
+      <div className="absolute inset-x-0 -top-24 h-[420px] pointer-events-none"
+        style={{ background: "radial-gradient(60% 100% at 50% 0%, rgba(224,169,74,.14), transparent 72%)" }} />
+      <div className="absolute -bottom-32 -start-24 w-[400px] h-[400px] rounded-full pointer-events-none"
+        style={{ background: "radial-gradient(circle, rgba(124,107,245,.09), transparent 70%)" }} />
+
+      <div className="w-full max-w-[380px] relative rise">
+        <div className="text-center mb-10">
+          <BrandLogo variant="horizontal" theme="light" className="w-[220px] h-auto mx-auto mb-5 dark-brand-logo" />
+          <h1 className="sr-only">{BRAND.logoLabel.ckb}</h1>
+          <p className="text-[13px] mt-1.5" lang="ckb" style={{ color: "var(--txt-3)" }}>
+            {BRAND.slogan.ckb}
+          </p>
+        </div>
+
+        <div className="space-y-3">
+          <div>
+            <Lbl>{loginCopy.phone}</Lbl>
+            <input dir="ltr" type="text" autoComplete="username" value={id} onChange={(e) => setId(e.target.value)}
+              inputMode="tel" placeholder="0770 123 4567" onKeyDown={(e) => e.key === "Enter" && go()}
+              className="w-full px-4 py-3.5 text-[15px] outline-none"
+              style={{ ...fieldSty, fontFamily: "'IBM Plex Mono', monospace" }}
+              onFocus={onFoc} onBlur={onBlr} />
+          </div>
+          <div>
+            <Lbl>{tr("وشەی نهێنی")}</Lbl>
+            <div className="relative">
+              <input type={show ? "text" : "password"} autoComplete="current-password" value={pw}
+                onChange={(e) => setPw(e.target.value)} onKeyDown={(e) => e.key === "Enter" && go()}
+                className="w-full ps-4 pe-12 py-3.5 text-[15px] outline-none"
+                style={fieldSty} onFocus={onFoc} onBlur={onBlr} />
+              <button type="button" onClick={() => setShow(!show)} tabIndex={-1}
+                className="absolute end-3 top-1/2 -translate-y-1/2 p-1.5 tap"
+                style={{ color: "var(--txt-3)" }}>
+                {show ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
+          </div>
+
+          {err && (
+            <div className="text-[13px] rounded-[var(--r-sm)] px-4 py-3 flex items-center gap-2.5 drop"
+              style={{ background: "var(--neg-bg)", color: "var(--neg)", border: "1px solid color-mix(in srgb, var(--neg) 26%, transparent)" }}>
+              <AlertTriangle className="w-4 h-4 shrink-0" /> {err}
+            </div>
+          )}
+
+          <Btn onClick={() => go()} disabled={busy} className="w-full !py-3.5 !text-[15px] mt-1">
+            {busy ? tr("جێبەجێکردن…") : tr("چوونە ژوورەوە")}
+          </Btn>
+
+          {bio && (
+            <button onClick={goBio} disabled={busy}
+              className="w-full flex items-center justify-center gap-2.5 py-3.5 rounded-[var(--r-sm)] tap text-[14px] font-semibold"
+              style={{ background: "var(--glass)", border: "1px solid var(--line)", color: "var(--txt-2)" }}>
+              <Fingerprint className="w-[18px] h-[18px]" /> {tr("پەنجەمۆر یان ڕوو")}
+            </button>
+          )}
+        </div>
+
+        <div className="flex justify-center gap-1.5 mt-8">
+          {Object.entries(LANGS).map(([k, v]) => (
+            <button key={k} onClick={() => { setLangGlobal(k); location.reload(); }}
+              className="px-3.5 py-1.5 rounded-full text-[11.5px] font-semibold tap"
+              style={_lang === k
+                ? { background: "rgba(224,169,74,.16)", color: "#E0A94A" }
+                : { color: "var(--txt-3)" }}>
+              {v.name}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ══════════════════ ئەپی سەرەکی ══════════════════ */
+
+/* هەڵبژاردنی بەکارهێنەر بە گەڕان */
+
+/* هەڵبژاردنی بەکارهێنەر بە گەڕان */
+
+/* ══════════════════ داشبۆرد ══════════════════ */
+function Dashboard({ data, calc, cur, mySafe, profitIn, ownProfitIn, investorsProfitIn, sumUsd, ratesReady, owners, batches, go, readModel }) {
+  const rm = readModel || data.readModel || null;
+  const today = dOnly(new Date().toISOString());
+  const todayTxs = data.txs.filter((t) => !t.deleted && dOnly(t.date) === today);
+  const pTod = profitIn(today, today);
+  const ownTod = ownProfitIn ? ownProfitIn(today, today) : {};
+  const fallbackTodayProfit = sumUsd(Object.keys(pTod).reduce((m,k)=>{ m[k]=(pTod[k]||0)+(ownTod[k]||0); return m; },{}));
+  const totalTodayProfit = ratesReady && Number.isFinite(Number(rm?.today_profit_usd))
+    ? Number(rm.today_profit_usd) : fallbackTodayProfit;
+  const pendingCount = Number(rm?.counts?.pending_txs ?? data.txs.filter((t) => !t.deleted && t.status === "pending").length);
+  const todayTxCount = Number(rm?.counts?.today_txs ?? todayTxs.length);
+  const noRates = unpricedCurrencies(data.currencies).length > 0;
+  const totalBalance = ratesReady && Number.isFinite(Number(rm?.total_balance_usd))
+    ? Number(rm.total_balance_usd) : (ratesReady ? sumUsd(calc.phys) : 0);
+
+  const rmDaily = Array.isArray(rm?.daily) ? rm.daily.slice(-7) : null;
+  const last7 = rmDaily?.length === 7
+    ? rmDaily.map((x) => ({ k: String(x.date), v: Number(x.profit_usd) || 0 }))
+    : [...Array(7)].map((_, i) => {
+        const d = new Date(); d.setDate(d.getDate() - (6 - i));
+        const k = d.toISOString().slice(0,10);
+        const p = profitIn(k,k), o = ownProfitIn ? ownProfitIn(k,k) : {};
+        const all = {};
+        [...Object.keys(p), ...Object.keys(o)].forEach((c) => all[c]=(p[c]||0)+(o[c]||0));
+        return { k, v: ratesReady ? sumUsd(all) : (Object.values(all)[0] || 0) };
+      });
+  const weekProfit = last7.reduce((s,x)=>s+x.v,0);
+  const chartMax = Math.max(...last7.map(x=>Math.abs(x.v)), 1);
+
+  const recent = Array.isArray(rm?.recent_txs)
+    ? rm.recent_txs.map(mapTxRecord).slice(0,6)
+    : [...data.txs].filter(t=>!t.deleted).sort((a,b)=>new Date(b.date)-new Date(a.date)).slice(0,6);
+  const expenses = rmDaily?.length === 7
+    ? rmDaily.map((x) => ({ k: String(x.date), v: Number(x.expense_usd) || 0 }))
+    : [...Array(7)].map((_, i) => {
+        const d = new Date(); d.setDate(d.getDate() - (6-i));
+        const k=d.toISOString().slice(0,10);
+        const v=data.ledger.filter(e=>e.type==="expense" && dOnly(e.date)===k).reduce((s,e)=>s+Math.abs(e.amount||0),0);
+        return {k,v};
+      });
+  const expMax=Math.max(...expenses.map(x=>x.v),1);
+
+  const Stat = ({label,value,sub,positive}) => (
+    <div className="fin-card metric-card p-4 md:p-5 min-w-0">
+      <div className="text-[11px] md:text-[12px] font-medium" style={{color:"var(--txt-3)"}}>{label}</div>
+      <div className="mt-2 text-[23px] md:text-[27px] font-bold tracking-tight" style={{...num,color:"var(--txt)"}}>{value}</div>
+      {sub && <div className="mt-1 text-[10px] md:text-[11px]" style={{color:positive?"var(--pos)":"var(--txt-3)"}}>{sub}</div>}
+    </div>
+  );
+
+  const Flag = ({c}) => <span className="text-[20px] leading-none shrink-0" aria-hidden>{curFlag(c)}</span>;
+
+  return (
+    <div className="space-y-5 md:space-y-6">
+      <div className="dashboard-page-head flex items-end justify-between gap-4">
+        <div>
+          <div className="dashboard-eyebrow">{BRAND.name} · {data.users.find(u=>u.role==="admin"&&!u.deleted)?.name || BRAND.name}</div>
+          <h1 className="dashboard-title">{tr("داشبۆرد")}</h1>
+          <div className="dashboard-subtitle">{tr("کڕین و فرۆشتن · قاسە · حیسابات")}</div>
+        </div>
+        <button onClick={()=>go("newtx")} className="hidden md:flex sarraf-primary-action items-center gap-2 px-4 py-2.5 rounded-xl font-semibold text-[13px] tap">
+          <Plus className="w-4 h-4" /> {tr("مامەڵەی نوێ")}
+        </button>
+      </div>
+
+      <div className="dashboard-quick-grid">
+        {[
+          [tr("مامەڵەی نوێ"), tr("کڕین و فرۆشتن"), ArrowLeftRight, "newtx"],
+          [tr("قاسەی گشتی"), tr("قاسە، پارە و خەرجی"), Wallet, "safes"],
+          [tr("پشکنینی فیش"), tr("فیشەکان"), ScanLine, "receipts"],
+          [tr("نرخی ئەمڕۆ"), tr("نرخی هەموو دراوەکان"), TrendingUp, "rates"],
+        ].map(([title, sub, Ic, target]) => (
+          <button key={target} onClick={()=>go(target)} className="quick-action-card tap">
+            <span className="quick-action-icon"><Ic className="w-4 h-4"/></span>
+            <span className="min-w-0 text-start">
+              <span className="block text-[12px] font-bold truncate">{title}</span>
+              <span className="block text-[9.5px] mt-0.5 truncate" style={{color:"var(--txt-3)"}}>{sub}</span>
+            </span>
+          </button>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
+        <div className="fin-green dashboard-hero rounded-[22px] p-5 md:p-6 col-span-2 min-h-[170px] relative overflow-hidden">
+          <div className="flex items-start justify-between relative z-10">
+            <div>
+              <div className="text-[12px] font-semibold opacity-75">{tr("قاسەی گشتی")}</div>
+              <div className="mt-2 text-[34px] md:text-[40px] font-semibold tracking-[-.04em]" style={num}>{ratesReady ? fmt(totalBalance,0) : "—"} <span className="text-[13px] font-medium">USD</span></div>
+              <div className="mt-1 text-[11px] muted">{ratesReady ? `${weekProfit >= 0 ? "+" : "−"}${fmt(Math.abs(weekProfit),0)} USD · ${tr("ئەم هەفتەیە")}` : tr("نرخەکان دابنێ")}</div>
+            </div>
+            <button onClick={()=>go("safes")} aria-label={tr("کردنەوەی قاسەی گشتی")}
+              className="w-10 h-10 rounded-full flex items-center justify-center bg-white/90 text-black tap shadow-sm"><Plus className="w-5 h-5"/></button>
+          </div>
+          <svg viewBox="0 0 420 100" preserveAspectRatio="none" className="absolute bottom-0 inset-x-0 w-full h-[82px] opacity-90">
+            <path d="M0 76 C45 70 60 55 100 62 S150 75 190 50 S240 26 285 42 S330 18 365 28 S400 18 420 12 L420 100 L0 100 Z" fill="rgba(255,255,255,.14)"/>
+            <path d="M0 76 C45 70 60 55 100 62 S150 75 190 50 S240 26 285 42 S330 18 365 28 S400 18 420 12" fill="none" stroke="rgba(255,255,255,.88)" strokeWidth="2.5" strokeLinecap="round"/>
+          </svg>
+          <div className="absolute bottom-4 start-5 text-[10px] white-muted">{tr("کۆی گشتی")}</div>
+        </div>
+        <Stat label={tr("خێری ئەمڕۆ")} value={ratesReady?`${fmt(totalTodayProfit,0)} USD`:`${fmt(Object.values(pTod).reduce((a,b)=>a+b,0),0)}`} sub={totalTodayProfit>=0?`↗ ${tr("خێر")}`:`↘ ${tr("خێر و زەرەر")}`} positive={totalTodayProfit>=0}/>
+        <Stat label={tr("مامەڵەی ئەمڕۆ")} value={todayTxCount} sub={`${todayTxCount} · ${tr("ئەمڕۆ")}`} />
+        <Stat label={tr("چاوەڕوان") } value={pendingCount} sub={pendingCount?tr("پێویستی بە پشکنینە"):`✓ ${tr("هیچ نییە")}`} />
+      </div>
+
+      <MarketWatch compact />
+
+      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.55fr)_minmax(320px,.9fr)] gap-4">
+        <section className="fin-card p-5 md:p-6">
+          <div className="flex items-start justify-between gap-3 mb-5">
+            <div><h2 className="text-[16px] font-bold">{tr("خێری ٧ ڕۆژی ڕابردوو")}</h2><div className="text-[11px] mt-1" style={{color:"var(--txt-3)"}}>{tr("٧ ڕۆژ")}</div></div>
+            <button onClick={()=>go("insights")} className="text-[11px] font-semibold" style={{color:"var(--ac)"}}>{tr("وردەکاری ←")}</button>
+          </div>
+          <div className="relative h-[210px]">
+            <svg viewBox="0 0 700 210" preserveAspectRatio="none" className="w-full h-full overflow-visible">
+              {[0,1,2,3].map(i=><line key={i} x1="0" x2="700" y1={28+i*48} y2={28+i*48} stroke="var(--line)" strokeWidth="1"/>) }
+              <defs><linearGradient id="profitFillSarraf" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="var(--ac)" stopOpacity=".22"/><stop offset="100%" stopColor="var(--ac)" stopOpacity="0"/></linearGradient></defs>
+              {(()=>{
+                const pts=last7.map((x,i)=>[20+i*(660/6),185-(Math.max(0,x.v)/chartMax)*145]);
+                const d=pts.map((p,i)=>`${i?"L":"M"}${p[0]},${p[1]}`).join(" ");
+                return <><path d={`${d} L680 185 L20 185 Z`} fill="url(#profitFillSarraf)"/><path d={d} fill="none" stroke="var(--ac)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/>{pts.map((p,i)=><circle key={i} cx={p[0]} cy={p[1]} r={i===pts.length-1?5:3.5} fill="var(--ac)" stroke="var(--surf)" strokeWidth="2"/>)}</>;
+              })()}
+            </svg>
+          </div>
+          <div className="flex justify-between text-[10px]" style={{color:"var(--txt-3)"}}>{last7.map(x=><span key={x.k}>{x.k.slice(5)}</span>)}</div>
+        </section>
+
+        <section className="fin-card p-5 md:p-6">
+          <div className="flex items-center justify-between mb-4"><div><h2 className="text-[16px] font-bold">{tr("نرخی ئەمڕۆ")}</h2><div className="text-[10px] mt-1" style={{color:"var(--txt-3)"}}>{tr("نرخەکان دابنێ")} · Internal</div></div><button onClick={()=>go("rates")} className="text-[11px] font-semibold" style={{color:"var(--ac)"}}>{tr("هەمووی")}</button></div>
+          <div className="space-y-1">
+            {data.currencies.filter(c=>c.id!=="usd").slice(0,5).map(c=>(
+              <div key={c.id} className="flex items-center gap-3 py-3 border-b last:border-0" style={{borderColor:"var(--line)"}}>
+                <Flag c={c}/><div className="min-w-0 flex-1"><div className="text-[13px] font-semibold">{c.code}</div><div className="text-[10px] truncate" style={{color:"var(--txt-3)"}}>{c.name}</div></div>
+                <div className="text-end" style={num}><div className="text-[12px] font-semibold">{rateOf(c)?fmt(rateOf(c),3):"—"}</div><div className="text-[10px]" style={{color:"var(--txt-3)"}}>1 USD</div></div>
+                <div className="text-[9.5px] font-semibold min-w-[42px] text-end" style={{color:rateOf(c)?"var(--pos)":"var(--txt-3)"}}>{rateOf(c)?tr("ڕەیتیۆی ئەمڕۆ"):"—"}</div>
+              </div>
+            ))}
+          </div>
+          {noRates && <button onClick={()=>go("rates")} className="mt-3 w-full rounded-xl px-3 py-2.5 text-[11px] font-semibold" style={{background:"var(--warn-bg)",color:"var(--warn)"}}><AlertTriangle className="w-3.5 h-3.5 inline me-1"/>{tr("نرخی هەموو دراوەکان دانەنراوە — نرخەکان دابنێ")}</button>}
+        </section>
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.55fr)_minmax(320px,.9fr)] gap-4">
+        <section className="fin-card p-5 md:p-6 overflow-hidden">
+          <div className="flex items-center justify-between mb-4"><h2 className="text-[16px] font-bold">{tr("دوا مامەڵەکان")}</h2><button onClick={()=>go("txs")} className="text-[11px] font-semibold" style={{color:"var(--ac)"}}>{tr("هەمووی")}</button></div>
+          <div className="hidden md:grid grid-cols-[.8fr_.65fr_1fr_.7fr_.8fr_.8fr] gap-3 px-2 pb-2 text-[10px] font-semibold" style={{color:"var(--txt-3)"}}><span>{tr("جۆر")}</span><span>{tr("دراو")}</span><span>{tr("بڕ")}</span><span>{tr("نرخ:")}</span><span>{tr("خێر")}</span><span>{tr("دۆخ")}</span></div>
+          <div className="space-y-1">
+            {recent.map(t=>{const c=cur(t.curId), positive=t.type==="buy"; return <button key={t.id} onClick={()=>go("txs")} className="w-full text-start grid grid-cols-[1fr_auto] md:grid-cols-[.8fr_.65fr_1fr_.7fr_.8fr_.8fr] gap-3 items-center px-2 py-3 rounded-xl tap hover:bg-[var(--surf-2)]"><div><div className="text-[12px] font-semibold">{t.type==="buy"?tr("کڕین"):tr("فرۆشتن")}</div><div className="text-[9px] md:hidden" style={{color:"var(--txt-3)"}}>{t.cpName||usrSafeName(data,t.cpId)||"—"}</div></div><div className="flex items-center gap-1.5 text-[11px] font-semibold"><span>{curFlag(c)}</span>{c.code}</div><div style={num} className="text-[12px] font-semibold">{fmt(t.amount, cur(t.curId).dec ?? 0)}</div><div style={num} className="hidden md:block text-[11px]">
+  {(() => {
+    const baseId = preferredRateBaseId(t.curId, t.againstId);
+    const shown = storedRateToDisplay(t.rate, t.curId, t.againstId, baseId);
+    return shown ? fmt(shown, rateDigits(shown)) : "—";
+  })()}
+</div><div style={{...num, color: t.profit == null ? "var(--txt-3)" : Number(t.profit) >= 0 ? "var(--pos)" : "var(--neg)"}} className="hidden md:block text-[11px]">
+  {t.profit == null ? "—" : `${t.profit >= 0 ? "+" : "−"}${fmt(Math.abs(t.profit), cur(t.profitCurId || t.againstId).dec ?? 0)} ${cur(t.profitCurId || t.againstId).code}`}
+</div><div className="text-end md:text-start"><Pill tone={t.status==="pending"?"amber":positive?"green":"slate"}>{t.status==="pending"?tr("چاوەڕوان"):tr("تەواوکراو")}</Pill></div></button>})}
+            {!recent.length && <Empty t={tr("هیچ مامەڵەیەک نەدۆزرایەوە")}/>} 
+          </div>
+        </section>
+
+        <section className="fin-card p-5 md:p-6">
+          <div className="flex items-center justify-between mb-4"><h2 className="text-[16px] font-bold">{tr("خەرجی")}</h2><span className="text-[10px]" style={{color:"var(--txt-3)"}}>{tr("ئەم هەفتەیە")}</span></div>
+          <div className="flex items-end gap-2 h-[185px]">
+            {expenses.map((x,i)=><div key={x.k} className="flex-1 h-full flex flex-col justify-end items-center gap-2"><div className="w-full max-w-[22px] rounded-t-full" style={{height:`${Math.max(8,(x.v/expMax)*145)}px`,background:i===expenses.length-1?"var(--ac)":"color-mix(in srgb,var(--ac) 26%,var(--surf))"}} title={fmt(x.v,0)}/><span className="text-[9px]" style={{color:"var(--txt-3)"}}>{x.k.slice(5)}</span></div>)}
+          </div>
+        </section>
+      </div>
+
+      <div className="md:hidden fixed bottom-[74px] end-4 z-30">
+        {/* The largest button in the phone application, and it had no name at all — a screen
+          * reader announced "button". The desktop role gate checks every visible control for
+          * an accessible name and never saw this one, because it is md:hidden.
+          */}
+        <button onClick={()=>go("newtx")} aria-label={tr("مامەڵەی نوێ")}
+          className="w-14 h-14 rounded-full flex items-center justify-center tap"
+          style={{background:"var(--ac)",color:"var(--ac-ink)",boxShadow:"0 12px 28px rgba(var(--ac-gl),.28)"}}>
+          <Plus className="w-6 h-6"/>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function usrSafeName(data,id){ return data.users.find(u=>u.id===id)?.name || ""; }
+
+function SafeCards({ data, calc, cur, mySafe, sumUsd, ratesReady, owners, go }) {
+  const [open, setOpen] = useState(null);
+  const [view, setView] = useState("where");
+  const partners = data.users.filter((u) => u.role === "partner" && !u.deleted);
+  const c = open ? cur(open) : null;
+  const bal = open ? (calc.phys[open] || 0) : 0;
+
+  return (
+    <Card className="p-5">
+      <div className="flex items-center justify-between mb-1">
+        <SecLbl>{tr("قاسەی گشتی")}</SecLbl>
+        <button onClick={() => go("safes")} className="text-[12px] font-semibold tap" style={{ color: "var(--ac)" }}>
+          {tr("وردەکاری ←")}
+        </button>
+      </div>
+
+      <div className="space-y-1">
+        {data.currencies.map((cc, i) => {
+          const isOpen = open === cc.id;
+          const v = calc.phys[cc.id] || 0;
+          const usd = ratesReady ? sumUsd({ [cc.id]: v }) : null;
+          return (
+            <div key={cc.id}>
+              <div onClick={() => { setOpen(isOpen ? null : cc.id); setView("where"); }}
+                className="tap cursor-pointer rounded-[var(--r-sm)] px-2 -mx-2"
+                style={isOpen ? { background: "var(--surf-2)" } : {}}>
+                <Row
+                  icon={<CurBadge c={cc} pulse={isOpen} />}
+                  title={cc.name}
+                  sub={cc.external ? tr("· دەرەوە") : null}
+                  right={fmt(v, 0)}
+                  rightSub={usd != null && cc.id !== "usd" ? `≈ ${fmt(usd, 0)} $` : null}
+                  tone={v < 0 ? "neg" : null} />
+              </div>
+              {isOpen && (
+                <div className="py-3 px-3 my-1 rounded-[var(--r-sm)] drop" style={{ background: "var(--surf-2)" }}>
+                  <Tabs items={[["where", tr("لای کێیە؟")], ["whose", tr("هی کێیە؟")]]} value={view} onChange={setView} className="mb-3" />
+                  {view === "where" ? (
+                    <>
+                      <Row title={tr("لای خۆم (قاسەی سەرەکی)")} right={fmt(calc.atMe[cc.id] || 0, 0)} />
+                      {partners.map((p) => {
+                        const pv = (calc.partner[p.id] || {})[cc.id];
+                        if (!pv) return null;
+                        return <Row key={p.id} title={p.name} sub={pv < 0 ? tr("· قەرز") : null}
+                          right={fmt(pv, 0)} tone={pv < 0 ? "neg" : null} />;
+                      })}
+                    </>
+                  ) : (
+                    !owners || owners.total <= 0 ? <Empty t={tr("هێشتا سەرمایە دانەنراوە")} /> :
+                      owners.list.map((o) => (
+                        <Row key={o.id} title={o.name} sub={`${(o.share * 100).toFixed(1)}٪`}
+                          right={fmt(bal * o.share, 0)} tone={o.isMe ? "pos" : null} />
+                      ))
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </Card>
+  );
+}
+
+/* وردەکاری دراوێک — لای کێیە و هی کێیە */
+function CurrencyBreakdown({ curId, data, calc, cur, owners, ratesReady }) {
+  const [view, setView] = useState("where");
+  const c = cur(curId);
+  const bal = calc.phys[curId] || 0;
+  const partners = data.users.filter((u) => u.role === "partner" && !u.deleted);
+  return (
+    <div>
+      <div className="flex gap-1 bg-[var(--line)] rounded-[var(--r-sm)] p-1 mb-3">
+        {[["where", tr("لای کێیە؟")], ["whose", tr("هی کێیە؟")]].map(([k, t]) => (
+          <button key={k} onClick={() => setView(k)}
+            className={`flex-1 py-2 rounded-lg text-sm transition ${view === k ? "bg-[var(--surf)] text-[var(--pos)] font-bold shadow-sm" : "text-[var(--txt-2)]"}`}>{t}</button>
+        ))}
+      </div>
+
+      {view === "where" ? (
+        <div>
+          <div className="flex justify-between items-center py-2.5 border-b border-[var(--line)]">
+            <span className="text-sm text-[var(--txt-2)]">{tr("لای خۆم (قاسەی سەرەکی)")}</span>
+            <Money v={calc.atMe[curId] || 0} dec={0} />
+          </div>
+          {partners.map((p) => {
+            const v = (calc.partner[p.id] || {})[curId];
+            if (!v) return null;
+            return (
+              <div key={p.id} className="flex justify-between items-center py-2.5 border-b border-[var(--line)]">
+                <span className="text-sm text-[var(--txt-2)]">{tr("لای")} {p.name}{v < 0 && <span className="text-[var(--neg)] text-xs mr-1">{tr("(قەرز)")}</span>}</span>
+                <Money v={v} dec={0} />
+              </div>
+            );
+          })}
+          {partners.every((p) => !((calc.partner[p.id] || {})[curId])) && (
+            <div className="text-xs text-[var(--txt-3)] py-2">{tr("هیچی لای هاوبەشەکان نییە")}</div>
+          )}
+          {/* «لە وردەکاری قاسەی گشتیدا ئاماژەی پێبدات کە لای ئەوە و پارەی ئەوە و من نەتوانم
+            * مامەڵەی پێوە بکەم.» It is in the drawer and it counts towards the total below —
+            * the day's count has to agree with it — and it is not the owner's to trade with.
+            * A rise in the safe with nothing naming it is worse than no rise at all, because
+            * it would be counted as his.
+            */}
+          {(calc.customerHeld?.[curId] || 0) !== 0 && (
+            <div className="flex justify-between items-center py-2.5 border-b border-[var(--line)]">
+              <span className="text-sm" style={{ color: "var(--warn)" }}>
+                {tr("پارەی کڕیاران — ناکرێت مامەڵەی پێ بکرێت")}
+              </span>
+              <Money v={calc.customerHeld[curId]} dec={0} />
+            </div>
+          )}
+          <div className="flex justify-between items-center pt-3 font-bold">
+            <span className="text-sm">{tr("کۆی گشتی")}</span><Money v={bal} dec={0} />
+          </div>
+        </div>
+      ) : (
+        <div>
+          {!ratesReady && (
+            <div className="text-xs text-[var(--warn)] bg-[color-mix(in_srgb,var(--warn)_11%,transparent)] border border-[color-mix(in_srgb,var(--warn)_26%,transparent)] rounded-lg p-2.5 mb-2">
+              {tr("بۆ وردی زیاتر، نرخی هەموو دراوەکان دابنێ")}
+            </div>
+          )}
+          {!owners || owners.total <= 0 ? <Empty t={tr("هێشتا سەرمایە دانەنراوە")} /> :
+            owners.list.map((o) => (
+              <div key={o.id} className="flex justify-between items-center py-2.5 border-b border-[var(--line)] last:border-0">
+                <div>
+                  <span className={`text-sm ${o.isMe ? "font-bold text-[var(--pos)]" : "text-[var(--txt-2)]"}`}>{o.name}</span>
+                  <span className="text-xs text-[var(--txt-3)] mr-2" style={num}>{(o.share * 100).toFixed(1)}٪</span>
+                </div>
+                <Money v={bal * o.share} dec={0} pos={o.isMe} />
+              </div>
+            ))}
+          <div className="text-[11px] text-[var(--txt-3)] mt-2.5">
+            {tr("بەشی هەرکەس بەپێی ڕێژەی سەرمایەکەیەتی — چوونکە هەموو دراوەکان بە پارەی هاوبەش کڕدراون")}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+/* ══════════════════ MARKET WATCH — reference only ══════════════════ */
+const MARKET_CACHE_KEY = "sarraf_market_rates_v2";
+const MARKET_CACHE_MS = 12 * 60 * 60 * 1000;
+const MARKET_MAJOR_CODES = ["IQD","EUR","GBP","CNY","JPY","TRY","AED","SAR","KWD","QAR","CAD","AUD","CHF","INR","KRW"];
+const MARKET_NAMES = {
+  IQD:"Iraqi Dinar", EUR:"Euro", GBP:"British Pound", CNY:"Chinese Yuan", JPY:"Japanese Yen",
+  TRY:"Turkish Lira", AED:"UAE Dirham", SAR:"Saudi Riyal", KWD:"Kuwaiti Dinar", QAR:"Qatari Riyal",
+  CAD:"Canadian Dollar", AUD:"Australian Dollar", CHF:"Swiss Franc", INR:"Indian Rupee", KRW:"South Korean Won",
+  USD:"US Dollar"
+};
+const MARKET_FLAGS = {
+  IQD:"🇮🇶", EUR:"🇪🇺", GBP:"🇬🇧", CNY:"🇨🇳", JPY:"🇯🇵", TRY:"🇹🇷", AED:"🇦🇪", SAR:"🇸🇦",
+  KWD:"🇰🇼", QAR:"🇶🇦", CAD:"🇨🇦", AUD:"🇦🇺", CHF:"🇨🇭", INR:"🇮🇳", KRW:"🇰🇷", USD:"🇺🇸"
+};
+const MARKET_METALS = [
+  ["gold","Gold","🥇"],
+  ["silver","Silver","🥈"],
+  ["platinum","Platinum","⬜"],
+  ["palladium","Palladium","◻️"],
+];
+
+function MarketWatch({ compact = false }) {
+  const [market, setMarket] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+
+  const load = async (force = false) => {
+    if (busy) return;
+    if (!force) {
+      try {
+        const cached = JSON.parse(localStorage.getItem(MARKET_CACHE_KEY) || "null");
+        if (cached?.at && cached?.data && Date.now() - cached.at < MARKET_CACHE_MS) {
+          setMarket(cached.data);
+          return;
+        }
+      } catch {}
+    }
+
+    setBusy(true);
+    setErr("");
+    try {
+      const res = await fetch("/api/market-rates", { headers: { Accept: "application/json" } });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || !body?.ok) throw new Error(body?.message || "نرخی بازاڕ بەردەست نییە");
+      setMarket(body);
+      try { localStorage.setItem(MARKET_CACHE_KEY, JSON.stringify({ at: Date.now(), data: body })); } catch {}
+    } catch (e) {
+      console.error("market-watch", e);
+      setErr(errorTextOr(e, "نەتوانرا نرخی بازاڕ بار بکرێت"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  useEffect(() => { load(false); }, []);
+
+  const rows = Object.entries(market?.rates || {})
+    .filter(([code, value]) => code !== "USD" && Number(value) > 0)
+    .sort(([a], [b]) => {
+      const ai = MARKET_MAJOR_CODES.indexOf(a), bi = MARKET_MAJOR_CODES.indexOf(b);
+      if (ai !== -1 || bi !== -1) return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
+      return a.localeCompare(b);
+    })
+    .filter(([code]) => !search || `${code} ${MARKET_NAMES[code] || ""}`.toLowerCase().includes(search.toLowerCase()));
+
+  const shown = search || open ? rows : rows.slice(0, compact ? 6 : 10);
+  const metals = MARKET_METALS.filter(([key]) => Number(market?.metals?.[key]) > 0);
+
+  return (
+    <Card className={`market-watch-card ${compact ? "p-4 md:p-5" : "p-5"}`}>
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0"
+              style={{ background:"var(--pos-bg)", color:"var(--pos)" }}>
+              <TrendingUp className="w-4 h-4" />
+            </span>
+            <div>
+              <div className="text-[14px] font-bold">{tr("نرخی جیهانی")}</div>
+              <div className="text-[10.5px] mt-0.5" style={{ color:"var(--txt-3)" }}>
+                نرخی جیهانی · سەرچاوەی زانیاری
+              </div>
+            </div>
+            <span className="px-2 py-1 rounded-full text-[9px] font-bold"
+              style={{ background:"var(--surf-2)", border:"1px solid var(--line)", color:"var(--txt-3)" }}>
+              بازاڕ
+            </span>
+          </div>
+          <div className="text-[10.5px] mt-2 leading-relaxed" style={{ color:"var(--txt-3)" }}>
+            ئەم نرخانە هیچ کاریگەرییەکیان لە نرخی ناوخۆ، مامەڵە، خێر، باڵانس یان حیسابات نییە.
+          </div>
+        </div>
+
+        <button onClick={() => load(true)} disabled={busy}
+          className="shrink-0 px-3 py-2 rounded-xl text-[10.5px] font-semibold tap flex items-center justify-center gap-1.5"
+          style={{ background:"var(--surf-2)", border:"1px solid var(--line)", color:"var(--txt-2)" }}>
+          <RotateCcw className={`w-3.5 h-3.5 ${busy ? "animate-spin" : ""}`} />
+          {busy ? tr("جێبەجێکردن…") : tr("نوێکردنەوە")}
+        </button>
+      </div>
+
+      {err && (
+        <div className="mt-3">
+          <StatePanel type="error" title="نرخی جیهانی کاتێک بەردەست نییە" detail={err} onRetry={() => load(true)} compact />
+        </div>
+      )}
+
+      {!market && !err && (
+        <div className="mt-3">
+          <StatePanel type="loading" title="نرخی جیهانی بار دەکرێت…" detail="سیستەمی مامەڵە و نرخی ناوخۆ بەردەوام کار دەکات." compact />
+        </div>
+      )}
+
+      {market && (
+        <>
+          {metals.length > 0 && (
+            <div className={`mt-4 grid ${compact ? "grid-cols-2 lg:grid-cols-4" : "grid-cols-2 md:grid-cols-4"} gap-2`}>
+              {metals.map(([key, name, icon]) => (
+                <div key={key} className="rounded-xl p-3" style={{ background:"var(--surf-2)", border:"1px solid var(--line)" }}>
+                  <div className="text-[9.5px] flex items-center gap-1" style={{ color:"var(--txt-3)" }}><span>{icon}</span>{name}</div>
+                  <div className="text-[14px] font-bold mt-1" style={num}>${fmt(market.metals[key], 2)}</div>
+                  <div className="text-[8.5px] mt-0.5" style={{ color:"var(--txt-3)" }}>USD / oz</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className={`mt-4 grid ${compact ? "grid-cols-2 md:grid-cols-3" : "grid-cols-1 sm:grid-cols-2"} gap-2`}>
+            {shown.map(([code, value]) => (
+              <div key={code} className="rounded-xl px-3 py-2.5 flex items-center gap-2.5"
+                style={{ background:"var(--surf-2)", border:"1px solid var(--line)" }}>
+                <span className="text-[18px] shrink-0">{MARKET_FLAGS[code] || "🌐"}</span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-bold">{code}</span>
+                    <span className="text-[10.5px] font-semibold" style={num}>{fmt(value, rateDigits(value))}</span>
+                  </div>
+                  <div className="text-[8.5px] truncate mt-0.5" style={{ color:"var(--txt-3)" }}>
+                    1 USD = {code} · {MARKET_NAMES[code] || "Global currency"}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {(open || !compact) && (
+            <div className="relative mt-3">
+              <Search className="absolute start-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5" style={{ color:"var(--txt-3)" }} />
+              <input value={search} onChange={(e) => setSearch(e.target.value)}
+                placeholder="گەڕان بە USD, EUR, CNY…"
+                className="w-full ps-9 pe-3 py-2.5 rounded-xl outline-none text-[11px]"
+                style={{ background:"var(--surf-2)", border:"1px solid var(--line)", color:"var(--txt)" }} />
+            </div>
+          )}
+
+          {rows.length > (compact ? 6 : 10) && !search && (
+            <button onClick={() => setOpen((v) => !v)}
+              className="mt-3 w-full py-2.5 rounded-xl text-[10.5px] font-semibold tap"
+              style={{ background:"var(--surf-2)", color:"var(--txt-2)", border:"1px solid var(--line)" }}>
+              {open ? "کەمتر پیشان بدە" : `هەموو ${rows.length} دراوەکە ببینە`}
+            </button>
+          )}
+
+          <div className="mt-3 pt-3 flex flex-wrap items-center justify-between gap-2 text-[9px]"
+            style={{ borderTop:"1px solid var(--line)", color:"var(--txt-3)" }}>
+            <span>{"نوێترین داتای بازاڕ"}</span>
+            <span style={num}>{market.timestamp ? new Date(market.timestamp).toLocaleString("en-GB") : "—"}</span>
+          </div>
+        </>
+      )}
+    </Card>
+  );
+}
+
+
+/* ══════════════════ نرخی ڕۆژانە ══════════════════ */
+function Rates({ data, saveRates }) {
+  const [rows, setRows] = useState(
+    data.currencies
+      .filter((c) => c.id !== "usd")
+      .map((c) => ({ id: c.id, code: c.code, name: c.name, c, rate: rateOf(c) ?? "" }))
+  );
+  const [market, setMarket] = useState(null);
+  const [marketBusy, setMarketBusy] = useState(false);
+  const [marketErr, setMarketErr] = useState("");
+  const [marketOpen, setMarketOpen] = useState(false);
+  const [marketSearch, setMarketSearch] = useState("");
+
+  const upd = (id, k, v) => setRows((xs) => xs.map((r) => (r.id === id ? { ...r, [k]: v } : r)));
+  const last = data.currencies.map((c) => c.rateUpdated).filter(Boolean).sort().at(-1) || null;
+
+  const loadMarket = async (force = false) => {
+    if (marketBusy) return;
+    const cacheKey = "sarraf_market_rates_v1";
+    const maxAge = 12 * 60 * 60 * 1000;
+    if (!force) {
+      try {
+        const cached = JSON.parse(localStorage.getItem(cacheKey) || "null");
+        if (cached?.at && cached?.data && Date.now() - cached.at < maxAge) {
+          setMarket(cached.data);
+          return;
+        }
+      } catch {}
+    }
+
+    setMarketBusy(true);
+    setMarketErr("");
+    try {
+      const res = await fetch("/api/market-rates", { headers: { Accept: "application/json" } });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || !body?.ok) throw new Error(body?.message || "نرخی بازاڕ بەردەست نییە");
+      setMarket(body);
+      try { localStorage.setItem(cacheKey, JSON.stringify({ at: Date.now(), data: body })); } catch {}
+    } catch (err) {
+      console.error("market-rates", err);
+      setMarketErr(err?.message || "نەتوانرا نرخی بازاڕ بار بکرێت");
+    } finally {
+      setMarketBusy(false);
+    }
+  };
+
+  useEffect(() => { loadMarket(false); }, []);
+
+  const marketNames = {
+    IQD: "Iraqi Dinar", EUR: "Euro", GBP: "British Pound", CNY: "Chinese Yuan", JPY: "Japanese Yen",
+    TRY: "Turkish Lira", AED: "UAE Dirham", SAR: "Saudi Riyal", KWD: "Kuwaiti Dinar", QAR: "Qatari Riyal",
+    CAD: "Canadian Dollar", AUD: "Australian Dollar", CHF: "Swiss Franc", INR: "Indian Rupee", KRW: "South Korean Won"
+  };
+  const marketFlags = {
+    IQD:"🇮🇶", EUR:"🇪🇺", GBP:"🇬🇧", CNY:"🇨🇳", JPY:"🇯🇵", TRY:"🇹🇷", AED:"🇦🇪", SAR:"🇸🇦",
+    KWD:"🇰🇼", QAR:"🇶🇦", CAD:"🇨🇦", AUD:"🇦🇺", CHF:"🇨🇭", INR:"🇮🇳", KRW:"🇰🇷", USD:"🇺🇸"
+  };
+  const majors = ["IQD","EUR","GBP","CNY","JPY","TRY","AED","SAR","KWD","QAR","CAD","AUD","CHF","INR","KRW"];
+  const allMarketRates = Object.entries(market?.rates || {})
+    .filter(([code, value]) => code !== "USD" && Number(value) > 0)
+    .sort(([a], [b]) => {
+      const ai = majors.indexOf(a), bi = majors.indexOf(b);
+      if (ai !== -1 || bi !== -1) return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
+      return a.localeCompare(b);
+    })
+    .filter(([code]) => !marketSearch || `${code} ${marketNames[code] || ""}`.toLowerCase().includes(marketSearch.toLowerCase()));
+
+  const visibleMarketRates = marketOpen || marketSearch ? allMarketRates : allMarketRates.slice(0, 10);
+  const metals = [
+    ["gold", "Gold", "🥇"],
+    ["silver", "Silver", "🥈"],
+    ["platinum", "Platinum", "⬜"],
+    ["palladium", "Palladium", "◻️"],
+  ].filter(([key]) => Number(market?.metals?.[key]) > 0);
+
+  return (
+    <div className="space-y-4">
+      <H sub="نرخی ناوخۆی تۆ — تەنها ئەم نرخانە لە مامەڵە و حیسابەکاندا بەکاردێن">
+        {tr("نرخی ئەمڕۆ")}
+      </H>
+
+      <Card className="p-5">
+        <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3 mb-4">
+          <div>
+            <div className="text-[14px] font-bold" style={{ color: "var(--txt)" }}>نرخی ناوخۆی سەراف</div>
+            <div className="text-[11.5px] mt-1 leading-relaxed" style={{ color: "var(--txt-3)" }}>
+              هەموو نرخەکان بە شێوەی <b style={{ color:"var(--txt)" }}>1 USD = X دراو</b> تۆمار دەکرێن.
+              بۆ نموونە: <b style={{ color:"var(--txt)" }}>1 USD = 1,410 IQD</b> یان <b style={{ color:"var(--txt)" }}>1 USD = 7.20 CNY</b>.
+            </div>
+          </div>
+          <div className="px-3 py-2 rounded-xl text-[10.5px] font-semibold shrink-0"
+            style={{ background:"var(--pos-bg)", color:"var(--pos)" }}>
+            INTERNAL · کاریگەر لە مامەڵەکان
+          </div>
+        </div>
+
+        <div className="space-y-4">
+          {rows.map((r) => (
+            <div key={r.id} className="pb-4 border-b border-[var(--line)] last:border-0 last:pb-0">
+              <div className="flex items-center gap-2.5 mb-2.5">
+                <span className="text-xl" aria-hidden>{curFlag({ id: "usd" })}</span>
+                <span className="text-sm font-bold text-[var(--txt)]">USD</span>
+                <ArrowLeftRight className="w-3.5 h-3.5 text-[var(--txt-3)]" />
+                <CurBadge c={r.c} size="sm" />
+                <span className="text-sm font-semibold text-[var(--txt)]">{r.code}</span>
+                <span className="text-xs text-[var(--txt-3)] hidden sm:inline">{r.name}</span>
+              </div>
+
+              {/* One number. Everything in the system divides by it, so it is asked for once,
+                  in the one shape it is always read: 1 USD = X. */}
+              <div>
+                <div className="text-[11px] font-semibold text-[var(--txt-2)] mb-1">
+                  ١ USD چەند {r.code} دەکات؟
+                </div>
+                <Inp type="number" step="any" dir="ltr" value={r.rate}
+                  onChange={(e) => upd(r.id, "rate", e.target.value)}
+                  className="text-center font-bold text-lg" placeholder={r.code === "IQD" ? "1410" : "7.20"} />
+              </div>
+
+              {Number(r.rate) > 0 && (
+                <div className="text-[11px] text-[var(--txt-3)] mt-1.5" style={num}>
+                  1 {r.code} = {fmt(1 / Number(r.rate), 6)} USD
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-4 flex flex-wrap items-center gap-3">
+          <Btn onClick={() => saveRates(rows)}>پاشەکەوتکردنی نرخەکان</Btn>
+          {last && <span className="text-xs text-[var(--txt-3)]">دوا نوێکردنەوە: {new Date(last).toLocaleString("en-GB")}</span>}
+        </div>
+      </Card>
+
+      <Card className="p-5">
+        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 mb-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <TrendingUp className="w-4 h-4" style={{ color:"var(--ac)" }} />
+              <div className="text-[14px] font-bold" style={{ color:"var(--txt)" }}>نرخی بازاڕی جیهانی</div>
+              <span className="px-2 py-1 rounded-full text-[9.5px] font-semibold" style={{ background:"var(--surf-3)", color:"var(--txt-3)" }}>
+                نرخی جیهانی
+              </span>
+            </div>
+            <div className="text-[11.5px] mt-1" style={{ color:"var(--txt-3)" }}>
+              نرخە جیهانییەکان سەرچاوەی زانیارین؛ نرخی مامەڵە لە نرخی ناوخۆی سیستەمەوە وەردەگیرێت.
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={() => loadMarket(true)} disabled={marketBusy}
+              className="px-3 py-2 rounded-xl text-[11px] font-semibold tap flex items-center gap-1.5"
+              style={{ background:"var(--surf-2)", border:"1px solid var(--line)", color:"var(--txt-2)" }}>
+              <RotateCcw className={`w-3.5 h-3.5 ${marketBusy ? "animate-spin" : ""}`} />
+              {marketBusy ? tr("جێبەجێکردن…") : tr("نوێکردنەوە")}
+            </button>
+          </div>
+        </div>
+
+        {marketErr && (
+          <div className="mb-4 p-3 rounded-xl text-[11.5px] flex items-start gap-2"
+            style={{ background:"var(--warn-bg)", color:"var(--warn)" }}>
+            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+            <span>{marketErr}</span>
+          </div>
+        )}
+
+        {market && (
+          <>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5 mb-5">
+              {metals.map(([key, name, icon]) => (
+                <div key={key} className="rounded-[var(--r-sm)] p-3.5" style={{ background:"var(--surf-2)", border:"1px solid var(--line)" }}>
+                  <div className="text-[11px] flex items-center gap-1.5" style={{ color:"var(--txt-3)" }}><span>{icon}</span>{name}</div>
+                  <div className="text-[16px] font-bold mt-1" style={{ ...num, color:"var(--txt)" }}>
+                    ${fmt(market.metals[key], 2)}
+                  </div>
+                  <div className="text-[9.5px] mt-0.5" style={{ color:"var(--txt-3)" }}>USD / troy oz</div>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex flex-col sm:flex-row gap-2 mb-3">
+              <div className="relative flex-1">
+                <Search className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4" style={{ color:"var(--txt-3)" }} />
+                <input value={marketSearch} onChange={(e) => setMarketSearch(e.target.value)}
+                  placeholder="گەڕان بە USD, EUR, CNY…"
+                  className="w-full ps-9 pe-3 py-2.5 rounded-xl outline-none text-[12px]"
+                  style={{ background:"var(--surf-2)", border:"1px solid var(--line)", color:"var(--txt)" }} />
+              </div>
+              <div className="text-[10.5px] flex items-center" style={{ color:"var(--txt-3)" }}>
+                {market.timestamp ? `نوێکراوەتەوە ${new Date(market.timestamp).toLocaleString("en-GB")}` : "—"}
+              </div>
+            </div>
+
+            <div className="max-h-[420px] overflow-y-auto rounded-[var(--r-sm)]" style={{ border:"1px solid var(--line)" }}>
+              {visibleMarketRates.map(([code, value]) => (
+                <div key={code} className="grid grid-cols-[auto_1fr_auto] items-center gap-3 px-3.5 py-3 border-b last:border-0"
+                  style={{ borderColor:"var(--line)" }}>
+                  <span className="text-[19px]">{marketFlags[code] || "🌐"}</span>
+                  <div className="min-w-0">
+                    <div className="text-[12.5px] font-semibold">{code}</div>
+                    <div className="text-[9.5px] truncate" style={{ color:"var(--txt-3)" }}>{marketNames[code] || "Global currency"}</div>
+                  </div>
+                  <div className="text-end">
+                    <div className="text-[12px] font-semibold" style={num}>1 USD = {fmt(value, rateDigits(value))}</div>
+                    <div className="text-[9.5px]" style={{ color:"var(--txt-3)" }}>{code}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {!marketSearch && allMarketRates.length > 10 && (
+              <button onClick={() => setMarketOpen((v) => !v)}
+                className="mt-3 w-full py-2.5 rounded-xl text-[11.5px] font-semibold tap"
+                style={{ background:"var(--surf-2)", color:"var(--txt-2)", border:"1px solid var(--line)" }}>
+                {marketOpen ? "کەمتر پیشان بدە" : `هەموو ${allMarketRates.length} دراوەکە پیشان بدە`}
+              </button>
+            )}
+          </>
+        )}
+
+        {!market && !marketErr && (
+          <div className="py-8 text-center text-[12px]" style={{ color:"var(--txt-3)" }}>
+            {marketBusy ? "نرخی بازاڕ بار دەکرێت…" : "نرخی بازاڕ هێشتا بار نەکراوە"}
+          </div>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+/* ══════════════════ پەڕەی خێر ══════════════════ */
+function ProfitPage({ data, cur, profitIn, investorsProfitIn, invShare }) {
+  const [mode, setMode] = useState("day");
+  const t = new Date();
+  const iso = (d) => d.toISOString().slice(0, 10);
+  const day = iso(t);
+  const w = new Date(t); w.setDate(w.getDate() - w.getDay());
+  const m = new Date(t.getFullYear(), t.getMonth(), 1);
+  const from = mode === "day" ? day : mode === "week" ? iso(w) : iso(m);
+  const pm = profitIn(from, day);
+  const inv = investorsProfitIn(from, day);
+  const investors = data.users.filter((u) => u.role === "investor" && !u.deleted);
+
+  return (
+    <div className="space-y-4">
+      <H>{tr("خێر بە وردی")}</H>
+      <div className="flex gap-1 bg-[var(--surf)] border border-[var(--line)] rounded-[var(--r-sm)] p-1 w-fit">
+        {[["day", tr("ئەمڕۆ")], ["week", tr("ئەم هەفتەیە")], ["month", tr("ئەم مانگە")]].map(([k, t2]) => (
+          <button key={k} onClick={() => setMode(k)}
+            className={`px-4 py-2 rounded-lg text-sm ${mode === k ? "bg-[var(--pos)] text-white font-semibold" : "text-[var(--txt-2)] hover:bg-[var(--line)]"}`}>{t2}</button>
+        ))}
+      </div>
+
+      {Object.keys(pm).length === 0 ? <Card><Empty t={tr("هیچ خێرێک نییە لەم ماوەیەدا")} /></Card> :
+        Object.entries(pm).map(([cid, tot]) => {
+          const c = cur(cid);
+          const invTot = inv[cid] || 0;
+          return (
+            <Card key={cid} className="p-5">
+              <div className="flex justify-between items-baseline mb-4">
+                <div className="font-bold text-[var(--txt)]">{c.name}</div>
+                <div className="text-2xl"><Money v={tot} dec={c.dec} pos /></div>
+              </div>
+              <div className="grid grid-cols-2 gap-3 mb-4">
+                <div className="bg-[color-mix(in_srgb,var(--pos)_10%,transparent)]/70 rounded-[var(--r-sm)] p-3">
+                  <div className="text-xs text-[var(--pos)]/70">{tr("خێری خۆم")}</div>
+                  <div className="text-lg"><Money v={tot - invTot} dec={c.dec} pos /></div>
+                </div>
+                <div className="bg-[var(--line)]/70 rounded-[var(--r-sm)] p-3">
+                  <div className="text-xs text-[var(--txt-2)]">{tr("خێری وەبەرهێنەران")}</div>
+                  <div className="text-lg"><Money v={invTot} dec={c.dec} /></div>
+                </div>
+              </div>
+              {invTot > 0 && (
+                <div className="border-t border-[var(--line)] pt-3">
+                  <div className="text-xs font-semibold text-[var(--txt-2)] mb-2">{tr("دابەشبوون بەسەر وەبەرهێنەران")}</div>
+                  {investors.map((u) => {
+                    const s = invShare(u.id, cid, from, day);
+                    if (!s) return null;
+                    return (
+                      <div key={u.id} className="flex justify-between py-1.5 text-sm border-b border-[var(--line)] last:border-0">
+                        <span className="text-[var(--txt-2)]">{u.name} <span className="text-xs text-[var(--txt-3)]">({u.rate}٪)</span></span>
+                        <Money v={s} dec={c.dec} />
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </Card>
+          );
+        })}
+    </div>
+  );
+}
+
+/* ══════════════════ قاسە و خەرجی ══════════════════ */
+function Safes({ data, calc, cur, usr, mySafe, invUnpaid, owners, ratesReady, addDeposit, addExpense, addCurrency, isOwner, lang }) {
+  const [openCur, setOpenCur] = useState(null);
+  // «هەمیشە هەڵبژێرە: کاش یان حسابێک» — an empty place means the cash, which is what every
+  // movement recorded before today meant, so nothing that already exists changes meaning.
+  const [f, setF] = useState({ dir: "in", owner: "self", curId: data.currencies[0]?.id, amount: "", note: "", place: "" });
+  // Handed up by the accounts panel below, so the entry form can offer the same places the
+  // panel lists without a second request. useCallback keeps the panel's effect from looping.
+  const [accounts, setAccounts] = useState([]);
+  const takeAccounts = useCallback((rows) => setAccounts(rows), []);
+  const placesFor = (curId) => accounts.filter((a) => a.active && a.currencyId === curId);
+  // Choosing dinars after picking a dollar account would send money to a place that cannot
+  // hold it; the server refuses that, and the form should never ask for it in the first place.
+  const placeStillValid = placesFor(f.curId).some((a) => a.id === f.place);
+  const place = placeStillValid ? f.place : "";
+  const [xf, setXf] = useState({ category: "کرێی شوێن", investorId: "", curId: data.currencies[0]?.id, amount: "", note: "", place: "", paidFrom: "general" });
+  const xPlace = placesFor(xf.curId).some((a) => a.id === xf.place) ? xf.place : "";
+  const [nc, setNc] = useState({ code: "", name: "", symbol: "", dec: 2 });
+  const investors = data.users.filter((u) => u.role === "investor" && !u.deleted);
+  // The value stored against an expense is the Kurdish word, in every language: it is written
+  // to the ledger and compared against below, so one category must not become three because
+  // three people had three languages open. Only the label is translated.
+  const XCATS = ["کرێی شوێن", "مووچە", "گواستنەوە و حەواڵە", "کارەبا و ئینتەرنێت", "خەرجی تر", "خێری وەبەرهێنەر"].map((category) => [category, tr(category)]);
+  const isPayout = xf.category === "خێری وەبەرهێنەر";
+  const unpaid = isPayout && xf.investorId ? invUnpaid(xf.investorId, xf.curId) : null;
+
+  return (
+    <div className="space-y-4">
+      <H>{tr("قاسە، پارە و خەرجی")}</H>
+
+      {/* «قاسەی گشتی وەک ئێستا بێت هەر بەس بەشێکی تری بۆ زیادببێت (پارەی کاش)(پارەی ناو حسابەکانت)»
+        * — the total is unchanged; underneath it now says where the money is. */}
+      <Card className="p-5">
+        <SecLbl>{tr("پارەکەت لە کوێیە")}</SecLbl>
+        <div className="grid sm:grid-cols-2 gap-3 mt-3">
+          {data.currencies.map((c) => {
+            const inAccounts = accounts
+              .filter((a) => a.currencyId === c.id)
+              .reduce((sum, a) => sum + (Number(a.balance) || 0), 0);
+            const inCash = (calc.phys[c.id] || 0) - inAccounts;
+            if (!inCash && !inAccounts) return null;
+            return (
+              <div key={c.id} className="rounded-[var(--r-sm)] border border-[var(--line)] p-3">
+                <div className="flex items-center gap-2 mb-2">
+                  <CurBadge c={c} size="sm" /><span className="text-sm font-semibold">{c.name}</span>
+                </div>
+                <div className="flex justify-between py-1.5 text-sm">
+                  <span className="text-[var(--txt-2)]">{tr("پارەی کاش")}</span>
+                  <Money v={inCash} dec={c.dec ?? 0} />
+                </div>
+                <div className="flex justify-between py-1.5 text-sm border-t border-[var(--line)]">
+                  <span className="text-[var(--txt-2)]">{tr("پارەی ناو حسابەکان")}</span>
+                  <Money v={inAccounts} dec={c.dec ?? 0} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        {accounts.length === 0 && (
+          <div className="text-[11px] text-[var(--txt-3)] mt-3">
+            {tr("هێشتا هیچ حسابێک نەکراوەتەوە، بۆیە هەموو پارەکە کاشە")}
+          </div>
+        )}
+      </Card>
+
+      <div className="grid md:grid-cols-2 gap-4">
+        <Card className="p-5">
+          <div className="flex items-center justify-between mb-1">
+            <SecLbl>{tr("قاسەی گشتی (هەمووی)")}</SecLbl>
+            <span className="text-[11px] text-[var(--txt-3)]">{tr("کلیک بۆ وردەکاری")}</span>
+          </div>
+          {data.currencies.map((c) => (
+            <div key={c.id}>
+              <button onClick={() => setOpenCur(openCur === c.id ? null : c.id)}
+                className={`w-full flex justify-between items-center py-2.5 border-b border-[var(--line)] transition ${openCur === c.id ? "text-[var(--pos)]" : "hover:text-[var(--pos)]"}`}>
+                <span className="text-sm flex items-center gap-2">
+                  <ChevronLeft className={`w-3.5 h-3.5 transition-transform ${openCur === c.id ? "-rotate-90" : "rotate-180"}`} />
+                  <CurBadge c={c} size="sm" />
+                  {c.name}
+                </span>
+                <Money v={calc.phys[c.id] || 0} dec={0} />
+              </button>
+              {openCur === c.id && (
+                <div className="py-3 px-1 bg-[var(--line)] rounded-[var(--r-sm)] my-2">
+                  <CurrencyBreakdown curId={c.id} data={data} calc={calc} cur={cur} owners={owners} ratesReady={ratesReady} />
+                </div>
+              )}
+            </div>
+          ))}
+        </Card>
+        <Card className="p-5">
+          <div className="flex items-center gap-1.5 mb-3">
+            <Wallet className="w-4 h-4 text-[var(--pos)]" />
+            <SecLbl>{tr("قاسەی تایبەتی خۆم")}</SecLbl>
+          </div>
+          {data.currencies.map((c) => (
+            <div key={c.id} className="flex justify-between py-2 border-b border-[var(--line)] last:border-0">
+              <span className="text-sm text-[var(--txt-2)]">{c.name}</span>
+              <Money v={mySafe[c.id] || 0} dec={c.dec} />
+            </div>
+          ))}
+          <div className="text-[11px] text-[var(--txt-3)] mt-2">{tr("سەرمایەی خۆت + خێری خۆت − خەرجی و عمولەکان")}</div>
+          {/* A currency the owner never put capital into, but pays commissions in, reads as a
+              negative here — and it is correct: it is what those commissions cost, waiting to be
+              earned back when the currency is sold. Proved rather than assumed, in
+              verify:accounting: leave that cost out and the books credit the owner with money
+              the business does not hold. Said plainly, because a minus sign with no sentence
+              beside it is how a right number gets reported as a bug. */}
+          {data.currencies.some((c) => (mySafe[c.id] || 0) < 0) && (
+            <div className="text-[11px] leading-5 mt-2 rounded-[var(--r-sm)] p-2.5"
+                 style={{ background: "var(--surf-2)", color: "var(--txt-2)" }}>
+              {tr("دراوێک بە سالبی دەردەکەوێت کاتێک عمولەی پێ دراوە بەڵام سەرمایەی خۆت بەو دراوە نییە — ئەوە تێچووی ئەو عمولانەیە، و کاتێک ئەو دراوە دەفرۆشیت دەگەڕێتەوە. هەڵە نییە.")}
+            </div>
+          )}
+        </Card>
+      </div>
+
+      <Card className="p-5">
+        <SecLbl>{tr("پارە داخڵکردن / دەرهێنان")}</SecLbl>
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+          <div><Lbl>{tr("جۆر")}</Lbl><Sel value={f.dir} onChange={(e) => setF({ ...f, dir: e.target.value })}><option value="in">{tr("داخڵکردن")}</option><option value="out">{tr("دەرهێنان")}</option></Sel></div>
+          <div><Lbl>{tr("خاوەنی پارە")}</Lbl><Sel value={f.owner} onChange={(e) => setF({ ...f, owner: e.target.value })}><option value="self">{tr("هی خۆم")}</option>{investors.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</Sel></div>
+          <div><Lbl>{tr("دراو")}</Lbl><Sel value={f.curId} onChange={(e) => setF({ ...f, curId: e.target.value })}>{data.currencies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</Sel></div>
+          <div><Lbl>{tr("شوێن")}</Lbl><Sel value={place} onChange={(e) => setF({ ...f, place: e.target.value })}>
+            <option value="">{tr("کاش")}</option>
+            {placesFor(f.curId).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+          </Sel></div>
+          <div><Lbl>{tr("بڕ")}</Lbl><Inp type="number" value={f.amount} onChange={(e) => setF({ ...f, amount: e.target.value })} placeholder="0" /></div>
+          <div className="flex items-end"><Btn className="w-full" onClick={() => { if (+f.amount > 0) { addDeposit({ ...f, place, placeName: placesFor(f.curId).find((a) => a.id === place)?.name || "" }); setF({ ...f, amount: "" }); } }}>{tr("تۆمارکردن")}</Btn></div>
+        </div>
+      </Card>
+
+      <Card className="p-5">
+        <div className="flex items-center gap-1.5 mb-3"><Receipt className="w-4 h-4 text-[var(--neg)]" /><SecLbl>{tr("تۆمارکردنی خەرجی")}</SecLbl></div>
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+          <div><Lbl>{tr("جۆری خەرجی")}</Lbl><Sel value={xf.category} onChange={(e) => setXf({ ...xf, category: e.target.value, investorId: "" })}>{XCATS.map(([category, label]) => <option key={category} value={category}>{label}</option>)}</Sel></div>
+          {isPayout && (
+            <div><Lbl>{tr("وەبەرهێنەر")}</Lbl><Sel value={xf.investorId} onChange={(e) => setXf({ ...xf, investorId: e.target.value })}><option value="">—</option>{investors.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</Sel></div>
+          )}
+          <div><Lbl>{tr("دراو")}</Lbl><Sel value={xf.curId} onChange={(e) => setXf({ ...xf, curId: e.target.value })}>{data.currencies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</Sel></div>
+          <div><Lbl>{tr("لە کوێوە")}</Lbl><Sel value={xPlace} onChange={(e) => setXf({ ...xf, place: e.target.value })}>
+            <option value="">{tr("کاش")}</option>
+            {placesFor(xf.curId).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+          </Sel></div>
+          {/* «لە کوێوە» says cash or which account. This says whose money it was — two different
+              questions, and only one of them had ever been asked. */}
+          {!isPayout && (
+            <div><Lbl>{tr("لە کام قاسەوە")}</Lbl><Sel value={xf.paidFrom} onChange={(e) => setXf({ ...xf, paidFrom: e.target.value })}>
+              <option value="general">{tr("قاسەی گشتی")}</option>
+              <option value="own">{tr("قاسەی تایبەتی خۆم")}</option>
+            </Sel></div>
+          )}
+          <div><Lbl>{tr("بڕ")}</Lbl><Inp type="number" value={xf.amount} onChange={(e) => setXf({ ...xf, amount: e.target.value })} placeholder="0" /></div>
+          {!isPayout && <div><Lbl>{tr("تێبینی")}</Lbl><Inp value={xf.note} onChange={(e) => setXf({ ...xf, note: e.target.value })} /></div>}
+          <div className="flex items-end"><Btn kind="danger" className="w-full" onClick={() => { if (+xf.amount > 0) { addExpense({ ...xf, place: xPlace }); setXf({ ...xf, amount: "", note: "" }); } }}>{tr("تۆمارکردن")}</Btn></div>
+        </div>
+        {isPayout && xf.investorId && (
+          <div className="mt-3 bg-[color-mix(in_srgb,var(--warn)_11%,transparent)] border border-[color-mix(in_srgb,var(--warn)_26%,transparent)] rounded-[var(--r-sm)] p-3 text-sm flex items-center justify-between flex-wrap gap-2">
+            <span className="text-[var(--warn)]">خێری نەدراوی {usr(xf.investorId).name}: <b style={num}>{fmt(unpaid, cur(xf.curId).dec)}</b> {cur(xf.curId).code}</span>
+            <button onClick={() => setXf({ ...xf, amount: String(Math.max(0, Math.round(unpaid * 100) / 100)) })} className="text-xs font-semibold text-[var(--pos)]">دانانی ئەم بڕە ←</button>
+          </div>
+        )}
+      </Card>
+
+      {/* «حسابەکان لەناو قاسەدا» — the owner's own answer to where these belong. */}
+      <Card className="p-5">
+        <DeferredPanel>
+          <CashAccounts client={supabase} lang={lang} currencies={data.currencies}
+            onAccounts={takeAccounts} />
+        </DeferredPanel>
+      </Card>
+
+{isOwner && (
+      <Card className="p-5">
+        <SecLbl>{tr("زیادکردنی دراوی نوێ")}</SecLbl>
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+          <div><Lbl>{tr("کۆد")}</Lbl><Inp dir="ltr" value={nc.code} onChange={(e) => setNc({ ...nc, code: e.target.value.toUpperCase() })} placeholder="EUR" /></div>
+          <div><Lbl>{tr("ناو")}</Lbl><Inp value={nc.name} onChange={(e) => setNc({ ...nc, name: e.target.value })} /></div>
+          <div><Lbl>{tr("هێما")}</Lbl><Inp value={nc.symbol} onChange={(e) => setNc({ ...nc, symbol: e.target.value })} /></div>
+          <div><Lbl>{tr("خانەی دەیمی")}</Lbl><Inp type="number" value={nc.dec} onChange={(e) => setNc({ ...nc, dec: +e.target.value })} /></div>
+          <div className="col-span-2 md:col-span-5">
+            <label className="flex items-start gap-2.5 cursor-pointer bg-[var(--line)] border border-[var(--line)] rounded-[var(--r-sm)] p-3">
+              <input type="checkbox" checked={!!nc.external} onChange={(e) => setNc({ ...nc, external: e.target.checked })}
+                className="mt-0.5 w-4 h-4 accent-[var(--pos)]" />
+              <span className="text-sm text-[var(--txt)]">
+                <b>{tr("دراوی دەرەوە")}</b>
+                <div className="text-xs text-[var(--txt-2)] mt-0.5">{tr("لای تەرەفەکان هەڵدەگیرێت، لە قاسەی گشتیدا نامێنێتەوە (وەک یەن)")}</div>
+              </span>
+            </label>
+          </div>
+          <div className="flex items-end"><Btn kind="gold" className="w-full" onClick={() => { if (nc.code && nc.name) { addCurrency(nc); setNc({ code: "", name: "", symbol: "", dec: 2 }); } }}>{tr("زیادکردن")}</Btn></div>
+        </div>
+      </Card>
+      )}
+    </div>
+  );
+}
+
+/* ══════════════════ فۆرمی مامەڵە ══════════════════ */
+function TxForm({ data, cur, calc, usr, mySafe, avgRate, inventoryPosition, usdValueAt, usdToCurrencyAt, autoRate, onSave, editing, onCancel, lockCp, batch, onClearBatch, busy, flash }) {
+  const e = editing;
+  const [sending, setSending] = useState(false);
+  const bCur = batch ? data.currencies.find((c) => c.code === batch.currency)?.id : null;
+
+  const pickAgainst = (curId) => {
+    if (curId !== "usd" && data.currencies.some((c) => c.id === "usd")) return "usd";
+    return data.currencies.find((c) => c.id === "iqd" && c.id !== curId)?.id
+      || data.currencies.find((c) => c.id !== curId)?.id
+      || "";
+  };
+
+  const initialCurId = e ? e.curId : (bCur || data.currencies.find((c) => c.id !== "usd")?.id || data.currencies[0]?.id || "");
+  const initialAgainstId = e ? e.againstId : pickAgainst(initialCurId);
+  const initialRateBaseId = preferredRateBaseId(initialCurId, initialAgainstId);
+
+  const [f, setF] = useState({
+    type: e ? e.type : (batch?.direction === "out" ? "sell" : "buy"),
+    curId: initialCurId,
+    amount: e ? e.amount : (batch ? batch.total_net : ""),
+    againstId: initialAgainstId,
+    rateBaseId: initialRateBaseId,
+    quote: e && e.rate ? storedRateToDisplay(e.rate, initialCurId, initialAgainstId, initialRateBaseId) : "",
+    manualRate: !!e,
+    cpMode: e ? (e.cpId ? "acc" : "free") : "acc",
+    cpId: e ? e.cpId || "" : (lockCp || batch?.customer_id || ""),
+    cpName: e ? e.cpName || "" : "",
+    partnerId: e ? e.partnerId || "" : (batch?.partner_id || ""),
+    // «بڕەکە خۆم دایدەنێم، ئیتر جاری وایە دەیگۆڕم، واتا ڕێکەوتن نییە.» Empty means the partner's
+    // stored rate decides; anything typed here is the commission for this one purchase.
+    partnerFee: "",
+    direct: e ? !!e.direct : false,
+    buyQuote: e && e.direct && e.buyRate ? storedRateToDisplay(e.buyRate, initialCurId, initialAgainstId, initialRateBaseId) : "",
+    sellQuote: e && e.direct && e.rate ? storedRateToDisplay(e.rate, initialCurId, initialAgainstId, initialRateBaseId) : "",
+    fromId: "", fromName: "", toId: "", toName: "",
+    // «لە جیاتی ئەوەی لە یەک کەسی بکڕم، لە چەند کەسێکی دەکڕم و بەڵام بە یەک کەسی دەفرۆشم.»
+    // Empty is the ordinary two-row direct trade, and that path is left exactly as it was.
+    // Each extra seller carries their own person, their own amount and their own price,
+    // because buying from four people at four prices is the whole reason for this.
+    extraSellers: [],
+    buyStatus: "completed", sellStatus: "completed",
+    status: e ? e.status : "completed",
+    officeId: "",
+    note: e ? e.note : "",
+  });
+
+  const customers = data.users.filter((u) => u.role === "customer" && !u.deleted);
+
+  // What the screen says the trade adds up to. The server computes its own and refuses anything
+  // that disagrees; this exists so the owner sees the sum while they are typing it rather than
+  // being told afterwards. A row still being filled in contributes nothing.
+  // The same function that builds what is sent, so the figure the owner reads while typing and
+  // the figure the command carries cannot drift apart.
+  const directPreview = directTradeLegs({
+    amount: f.amount, buyRate: f.buyQuote, sellRate: f.sellQuote,
+    extras: filledSellers(f.extraSellers),
+    curId: f.curId, againstId: f.againstId,
+  });
+  const directSoldAmount = directPreview.soldAmount;
+  const directBoughtTotal = directPreview.boughtTotal;
+  const partners = data.users.filter((u) => u.role === "partner" && !u.deleted);
+  const offices = data.users.filter((u) => u.role === "office" && !u.deleted);
+
+  const roundByCurrency = (value, curId) => roundToCurrency(data, value, curId);
+
+  const autoStored = autoRate(f.type, f.curId, f.againstId);
+  const autoQuote = autoStored
+    ? storedRateToDisplay(autoStored, f.curId, f.againstId, f.rateBaseId)
+    : null;
+
+  const directBuyAutoStored = autoRate("buy", f.curId, f.againstId);
+  const directSellAutoStored = autoRate("sell", f.curId, f.againstId);
+  const directBuyAuto = directBuyAutoStored
+    ? storedRateToDisplay(directBuyAutoStored, f.curId, f.againstId, f.rateBaseId)
+    : null;
+  const directSellAuto = directSellAutoStored
+    ? storedRateToDisplay(directSellAutoStored, f.curId, f.againstId, f.rateBaseId)
+    : null;
+
+  useEffect(() => {
+    if (!f.manualRate && autoQuote) {
+      setF((x) => {
+        const next = Number(autoQuote.toPrecision(10));
+        return Number(x.quote) === next ? x : { ...x, quote: next };
+      });
+    }
+  }, [autoQuote, f.manualRate, f.curId, f.againstId, f.type, f.rateBaseId]);
+
+  const quote = Number(f.quote) || 0;
+  const rate = displayRateToStored(quote, f.curId, f.againstId, f.rateBaseId);
+  const offDay = !!(autoQuote && quote && Math.abs(quote - autoQuote) > Math.abs(autoQuote) * 0.0001);
+
+  const amtR = roundByCurrency(f.amount, f.curId);
+  const total = rate > 0 ? roundByCurrency(amtR * rate, f.againstId) : 0;
+
+  // ── مامەڵەی ڕاستەوخۆ ──
+  const bq = Number(f.buyQuote) || 0;
+  const sq = Number(f.sellQuote) || 0;
+  const dBuyRate = displayRateToStored(bq, f.curId, f.againstId, f.rateBaseId);
+  const dSellRate = displayRateToStored(sq, f.curId, f.againstId, f.rateBaseId);
+  const dBuyTotal = dBuyRate > 0 ? roundByCurrency(amtR * dBuyRate, f.againstId) : 0;
+  const dSellTotal = dSellRate > 0 ? roundByCurrency(amtR * dSellRate, f.againstId) : 0;
+  const dProfit = bq > 0 && sq > 0 ? roundByCurrency(dSellTotal - dBuyTotal, f.againstId) : null;
+
+  // «تەنها مامەڵەی ئاسایی پارەکەی لە قاسەی گشتییەوەیە، ئەوانی دیکە هی خۆمە تەنها.»
+  //
+  // The safe always has enough for a direct pair — it buys and sells in one press, so its net
+  // effect on the safe is the profit, never a withdrawal — which is exactly why the sufficiency
+  // check can never catch this and why it has to be said here. An owner with 200 of their own
+  // dollars can put 10,000 of their investors' through a trade whose whole earning they keep.
+  //
+  // It is said, not refused. The figure it is said from was wrong on every screen until this
+  // same change fixed it, so nobody has yet seen a true one to plan against; refusing a trade
+  // on a number the owner has never been shown would be the worse mistake. Whether it should
+  // become a refusal is theirs to decide once they have watched it on real data.
+  const ownMoneyHere = mySafe ? (mySafe[f.againstId] || 0) : null;
+  const directOverOwn = f.direct && ownMoneyHere !== null && dBuyTotal > ownMoneyHere + 1e-9;
+
+  const pos = f.type === "sell" && inventoryPosition
+    ? inventoryPosition(f.curId, f.againstId, e?.id || null, e?.date || null)
+    : null;
+  const av = f.type === "sell"
+    ? (pos?.avgRate ?? avgRate(f.curId, f.againstId, e?.id || null, e?.date || null))
+    : null;
+  const enoughCostBasis = f.type !== "sell" || !pos || (pos.costComplete !== false && amtR <= pos.qty + 1e-9);
+  const estCostAgainst = f.type === "sell" && av !== null && usdToCurrencyAt
+    ? usdToCurrencyAt(av * amtR, f.againstId, "sell", new Date().toISOString())
+    : null;
+  const estProfit = f.type === "sell" && av !== null && enoughCostBasis && Number.isFinite(estCostAgainst)
+    ? roundByCurrency(total - estCostAgainst, f.againstId)
+    : null;
+
+  const srcBal = f.partnerId ? ((calc.partner[f.partnerId] || {})[f.curId] || 0) : (calc.atMe[f.curId] || 0);
+  const willBeNeg = f.type === "sell" && srcBal - amtR < -1e-9;
+
+  // The server refuses this, and it is right to: money in a currency the office does not hold in
+  // its own safe has to be somewhere, and that somewhere is a person. But the refusal arrived
+  // only AFTER the owner had filled the whole form and pressed the button, as a banner over a
+  // screen that had already cleared.
+  //
+  //   raise exception using errcode='23514',
+  //     message='external currency requires an explicit custody partner'
+  //
+  // Mirrored here exactly — not loosened, not re-decided. The rule is still the database's; this
+  // only asks the question before the answer can be wrong.
+  const needsCustodian = !f.direct && !f.partnerId && !!cur(f.curId).external;
+
+  // Converting a batch of receipts is not the same as recording a trade by hand.
+  //
+  // Custody is a property of the RECEIPTS — it is set on the batch screen, under «دابەشکردن
+  // بەسەر هاوبەشەکان», by its own command with its own reason and audit trail. The conversion
+  // then reads it back:
+  //
+  //   v_tx := p_tx || jsonb_build_object(…, 'partner_id', v_partner, …)
+  //
+  // where `v_partner` comes from the receipts, not from here. So whatever this form sent was
+  // overwritten before the rules ever saw it. For a customer-seller's receipts, which carry no
+  // partner at all, that meant NULL — and the very next check refused the trade for naming
+  // nobody, in front of an owner who had just named somebody.
+  //
+  // The box is therefore not a choice here. It shows what the receipts say, and when they say
+  // nothing it sends the owner to the one screen where it can be said.
+  //
+  // ── and then the owner said no, and they were right ────────────────────────
+  //
+  // The first version of this locked the box and sent them to «دابەشکردن بەسەر هاوبەشەکان» to
+  // set custody before coming back. Two screens and three commands to do one thing. What they
+  // asked for instead:
+  //
+  //   «هەر لەوێوە هاوبەش هەڵبژێرم و کە کردم، هەم پارەکە بچێتە لای ئەو، هەمیش پەسەند بکرێت،
+  //    و فیشەکانیشی بۆ بڕوات — بەڵام با هێندە شپرز نەبێت»
+  //
+  // 202608280024 makes the conversion honour a partner named here, by calling the custody
+  // command itself so the evidence is written exactly as that screen writes it. So the box is
+  // a real choice again — but only where there is a choice to make. Receipts already placed
+  // with a partner still show that partner and cannot be moved from here: reassigning custody
+  // is its own decision and keeps its own screen.
+  const custodyLockedByReceipts = !!batch?.partner_id;
+  const custodyChosenHere = !!batch && !batch?.partner_id;
+
+  // Two more the database refuses, for the same reason and at the same late moment:
+  //
+  //   raise 23514 'sale would create negative inventory'   -- v_amount > v_qty
+  //   raise 23514 'inventory cost basis is incomplete'     -- v_avg is null
+  //
+  // `enoughCostBasis` above has computed exactly this all along, and used it only to decide
+  // whether to show an estimated profit. Selling more than the office holds went all the way to
+  // the server and came back refused.
+  //
+  // It stops the sale ONLY when the position came from the server's own snapshot — the same
+  // number the command will check against. When this browser worked the figure out for itself it
+  // says so and lets the sale go, because a client-side disagreement that blocks a legitimate
+  // sale is a worse failure than a late refusal.
+  const shortOfStock = f.type === "sell" && pos && amtR > 0 && amtR > pos.qty + 1e-9;
+  const costBasisMissing = f.type === "sell" && pos && pos.costComplete === false;
+  const inventoryRefuses = (shortOfStock || costBasisMissing) && pos?.fromServer === true;
+  const inventoryDoubts = (shortOfStock || costBasisMissing) && pos?.fromServer !== true;
+  const feeRate = f.partnerId ? (usr(f.partnerId).rate || 0) : 0;
+  // The commission for this one purchase. «بڕەکە خۆم دایدەنێم» — the stored rate fills the box
+  // in, and whatever is left in it is what the partner is paid. The number that reaches the
+  // server is the string as typed: the arithmetic that decides money is the server's, and this
+  // side only has to show the owner what they are about to agree to.
+  const commissionOffered = f.partnerId && f.type === "buy" && amtR > 0
+    ? roundMoney(data, amtR * feeRate / 100, f.curId) : 0;
+  const commissionTyped = String(f.partnerFee ?? "").trim();
+  const commissionAsked = commissionTyped === "" ? commissionOffered : Number(commissionTyped);
+  const commissionObjection = commissionTyped === "" ? null
+    : !Number.isFinite(commissionAsked) ? tr("عمولەکە ژمارەیەکی دروست نییە")
+    : commissionAsked < 0 ? tr("عمولە ناتوانێت کەمتر لە سفر بێت")
+    : amtR > 0 && commissionAsked > amtR ? tr("عمولە ناتوانێت لە بڕی مامەڵەکە زیاتر بێت")
+    : null;
+  const rateQuoteId = oppositePairId(f.curId, f.againstId, f.rateBaseId);
+
+  const setPair = (nextCurId, nextAgainstId) => {
+    let c = nextCurId, a = nextAgainstId;
+    if (!c || !a) return;
+    if (c === a) a = pickAgainst(c);
+    if (!a || c === a) return;
+
+    const nextBase = preferredRateBaseId(c, a);
+    setF((x) => ({
+      ...x,
+      curId: c,
+      againstId: a,
+      rateBaseId: nextBase,
+      quote: "",
+      manualRate: false,
+      buyQuote: "",
+      sellQuote: "",
+      partnerId: cur(c).external ? x.partnerId : x.partnerId,
+    }));
+  };
+
+  const swapPair = () => {
+    if (!f.curId || !f.againstId) return;
+    const oldStored = displayRateToStored(f.quote, f.curId, f.againstId, f.rateBaseId);
+    const nextCur = f.againstId, nextAgainst = f.curId;
+    const nextBase = preferredRateBaseId(nextCur, nextAgainst);
+    const nextStored = oldStored > 0 ? 1 / oldStored : 0;
+    const nextQuote = nextStored > 0 ? storedRateToDisplay(nextStored, nextCur, nextAgainst, nextBase) : "";
+    setF((x) => ({
+      ...x,
+      curId: nextCur,
+      againstId: nextAgainst,
+      rateBaseId: nextBase,
+      quote: nextQuote || "",
+      manualRate: !!nextQuote,
+      buyQuote: "",
+      sellQuote: "",
+      partnerId: "",
+      partnerFee: "",
+    }));
+  };
+
+  const flipRateView = () => {
+    const nextBase = f.rateBaseId === f.curId ? f.againstId : f.curId;
+    const invert = (value) => Number(value) > 0 ? 1 / Number(value) : "";
+    setF((x) => ({
+      ...x,
+      rateBaseId: nextBase,
+      quote: invert(x.quote),
+      buyQuote: invert(x.buyQuote),
+      sellQuote: invert(x.sellQuote),
+    }));
+  };
+
+  const blank = {
+    type: f.type, curId: f.curId, amount: "", againstId: f.againstId, rateBaseId: f.rateBaseId, quote: f.quote,
+    manualRate: f.manualRate, cpMode: "acc", cpId: lockCp || "", cpName: "",
+    partnerId: "", partnerFee: "", status: "completed", officeId: "", note: "",
+    direct: f.direct, buyQuote: f.buyQuote, sellQuote: f.sellQuote,
+  };
+
+  const submit = async () => {
+    if (sending || busy) return;
+    // This used to `return` here and say nothing at all. The owner pressed «تۆمارکردنی کڕین»,
+    // the screen did not move, no message appeared, and there was nothing on it to tell them
+    // which of the two currency boxes was the problem. A refusal nobody can see is worse than
+    // one they can argue with.
+    if (!f.curId || !f.againstId) {
+      flash?.(tr("هەردوو دراوەکە هەڵبژێرە"), "error");
+      return;
+    }
+    if (f.curId === f.againstId) {
+      flash?.(tr("دراوی مامەڵە و دراوی بەرامبەر ناکرێت هەمان بن"), "error");
+      return;
+    }
+    // The commission box is already showing why it is wrong; saying it again as a flash is what
+    // turns a note into a refusal the owner can act on.
+    if (commissionObjection) { flash?.(commissionObjection, "error"); return; }
+    setSending(true);
+    try {
+      const ok = await onSave({ ...f, rate, batchId: batch?.id, receiptIds: batch?.receipt_ids || [] }, e);
+      if (ok !== false && !e) setF(blank);
+    } finally {
+      setTimeout(() => setSending(false), 400);
+    }
+  };
+
+  if (e) {
+    const counterparty = e.cpId ? (usr(e.cpId).name || e.cpName) : e.cpName;
+    const flowLabel = e.businessFlow === "partner_custody"
+      ? "A · پارە لای هاوبەش"
+      : e.businessFlow === "owner_cashbox"
+        ? "B · قاسەی خۆم / ڕاستەوخۆ"
+        : "C · مامەڵەی ئاسایی";
+    return (
+      <div className="space-y-4 pb-4">
+        <H sub="بڕ، نرخ، دراو، لایەن و custody دوای journal ناگۆڕدرێن">
+          {tr("ئیدیت")} #{e.code}
+        </H>
+        <Card className="p-4" style={{ background: "var(--warn-bg)", borderColor: "color-mix(in srgb,var(--warn) 32%,var(--line))" }}>
+          <div className="flex items-start gap-2.5">
+            <ShieldAlert className="w-5 h-5 shrink-0 mt-0.5" style={{ color: "var(--warn)" }} />
+            <div>
+              <div className="text-[13px] font-semibold" style={{ color: "var(--txt)" }}>دەستکاریی پارێزراوی مامەڵە</div>
+              <p className="text-[11.5px] leading-6 mt-1" style={{ color: "var(--txt-2)" }}>
+                تەنها تێبینی دەگۆڕدرێت. بۆ ڕاستکردنەوەی بڕ، نرخ، دراو یان لایەن، مامەڵەکە بە
+                تۆماری پێچەوانە هەڵبوەشێنەرەوە و مامەڵەی دروست تۆمار بکە؛ مێژووی دارایی دەمێنێتەوە.
+              </p>
+            </div>
+          </div>
+        </Card>
+        <Card className="p-5 space-y-3">
+          <div className="flex items-center justify-between gap-3"><span className="text-[11px] text-[var(--txt-3)]">جۆری لۆجیک</span><Pill>{flowLabel}</Pill></div>
+          <div className="grid grid-cols-2 gap-3">
+            <div><div className="text-[10.5px] text-[var(--txt-3)]">مامەڵە</div><div className="text-[14px] font-semibold mt-1">{e.type === "buy" ? "کڕین" : "فرۆشتن"} · {counterparty || "—"}</div></div>
+            <div><div className="text-[10.5px] text-[var(--txt-3)]">بڕ</div><div className="text-[14px] font-semibold mt-1" style={num}>{fmtMoney(data, e.amount, e.curId)} {cur(e.curId).code}</div></div>
+            <div><div className="text-[10.5px] text-[var(--txt-3)]">نرخ</div><div className="text-[14px] font-semibold mt-1" style={num}>{fmt(e.rate, rateDigits(e.rate))}</div></div>
+            <div><div className="text-[10.5px] text-[var(--txt-3)]">کۆ</div><div className="text-[14px] font-semibold mt-1" style={num}>{fmtMoney(data, e.total, e.againstId)} {cur(e.againstId).code}</div></div>
+          </div>
+          {e.partnerId && <div className="pt-3 border-t border-[var(--line)] text-[11.5px] text-[var(--txt-2)]">هاوبەشی custody: <b>{usr(e.partnerId).name}</b></div>}
+        </Card>
+        <Card className="p-5">
+          <Lbl>{tr("تێبینی")}</Lbl>
+          <Inp value={f.note} onChange={(ev) => setF({ ...f, note: ev.target.value })} placeholder="تێبینییەکی ڕوون و audit-friendly…" />
+        </Card>
+        <div className="flex gap-2 sticky bottom-24 md:bottom-4">
+          <Btn kind="primary" onClick={submit} disabled={sending || busy} className="flex-1 !py-4 !text-[15px]">
+            {sending || busy ? tr("جێبەجێکردن…") : tr("پاشەکەوتکردنی تێبینی")}
+          </Btn>
+          <Btn kind="ghost" onClick={onCancel} className="!py-4">{tr("پاشگەزبوونەوە")}</Btn>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4 pb-4">
+      <H sub={f.direct ? tr("کڕین و فرۆشتن لە یەک کاتدا") : null}>
+        {e ? `${tr("ئیدیت")} #${e.code}` : tr("مامەڵەی نوێ")}
+      </H>
+
+      {batch && (
+        <Card className="p-4" style={{ borderColor: "rgba(var(--ac-gl),.3)", background: "rgba(var(--ac-gl),.06)" }}>
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-[13px] font-semibold" style={{ color: "var(--ac)" }}>
+                {tr("لە فیشە پەسەندکراوەکانی")} {batch.customer_name || (batch.partner_id ? usr(batch.partner_id).name : tr("نەزانراو"))}
+              </div>
+              <div className="text-[11.5px] mt-1" style={{ ...num, color: "var(--txt-2)" }}>
+                {batch.n} {tr("فیش")} · {fmtMoney(data, batch.total_net, batch.currency)} {batch.currency}
+              </div>
+            </div>
+            <button onClick={onClearBatch} className="p-1.5 tap shrink-0" style={{ color: "var(--txt-3)" }}>
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </Card>
+      )}
+
+      {/* جۆری مامەڵە */}
+      <div className="flex gap-2">
+        {["buy", "sell"].map((k) => {
+          const locked = !!batch, on = f.type === k;
+          if (locked && !on) return null;
+          return (
+            <button key={k} disabled={locked}
+              onClick={() => !locked && setF({ ...f, type: k, manualRate: false, quote: "", status: "completed" })}
+              className="flex-1 py-3.5 rounded-[var(--r-sm)] text-[14px] font-semibold tap flex items-center justify-center gap-2"
+              style={on
+                ? { background: k === "buy" ? "var(--pos-bg)" : "var(--neg-bg)",
+                    color: k === "buy" ? "var(--pos)" : "var(--neg)",
+                    border: `1px solid ${k === "buy" ? "color-mix(in srgb, var(--pos) 34%, transparent)" : "color-mix(in srgb, var(--neg) 34%, transparent)"}` }
+                : { background: "var(--surf-2)", color: "var(--txt-3)", border: "1px solid var(--line)" }}>
+              {k === "buy" ? <ArrowDownLeft className="w-4 h-4" /> : <ArrowUpRight className="w-4 h-4" />}
+              {k === "buy" ? tr("کڕین") : tr("فرۆشتن")}
+            </button>
+          );
+        })}
+      </div>
+
+      {!batch && !e && (
+        <button onClick={() => {
+          const next = !f.direct;
+          setF({
+            ...f,
+            direct: next,
+            partnerId: "",
+            partnerFee: "",
+            buyQuote: next && directBuyAuto ? Number(directBuyAuto.toPrecision(10)) : f.buyQuote,
+            sellQuote: next && directSellAuto ? Number(directSellAuto.toPrecision(10)) : f.sellQuote,
+          });
+        }}
+          className="w-full flex items-center gap-3 p-3.5 rounded-[var(--r-sm)] tap text-start"
+          style={f.direct
+            ? { background: "var(--warn-bg)", border: "1px solid color-mix(in srgb, var(--warn) 34%, transparent)" }
+            : { background: "var(--surf-2)", border: "1px solid var(--line)" }}>
+          <span className="w-9 h-9 rounded-full flex items-center justify-center shrink-0"
+            style={{ background: f.direct ? "var(--warn-bg)" : "var(--surf-3)" }}>
+            <Zap className="w-4 h-4" style={{ color: f.direct ? "var(--warn)" : "var(--txt-3)" }} />
+          </span>
+          <span className="flex-1">
+            <span className="text-[13.5px] font-semibold block" style={{ color: f.direct ? "var(--warn)" : "var(--txt)" }}>
+              {tr("مامەڵەی ڕاستەوخۆ")}
+            </span>
+            <span className="text-[11px]" style={{ color: "var(--txt-3)" }}>
+              {tr("بێ هەڵگرتن · بێ عمولە · خێر ١٠٠٪ هی خۆم")}
+            </span>
+          </span>
+          <span className="w-5 h-5 rounded-full shrink-0 flex items-center justify-center"
+            style={{ border: `2px solid ${f.direct ? "var(--warn)" : "var(--line-2)"}`,
+                     background: f.direct ? "var(--warn)" : "transparent" }}>
+            {f.direct && <CheckCircle2 className="w-3 h-3 text-white" />}
+          </span>
+        </button>
+      )}
+
+      {/* دراوەکان + بڕ */}
+      <Card className="p-5 space-y-5">
+        <div className="grid grid-cols-[1fr_auto_1fr] items-end gap-2.5">
+          <div>
+            <Lbl>دراوی مامەڵە</Lbl>
+            <Sel value={f.curId} disabled={!!batch} onChange={(ev) => setPair(ev.target.value, f.againstId)}>
+              {data.currencies.map((c) => <option key={c.id} value={c.id}>{c.code} — {c.name}</option>)}
+            </Sel>
+          </div>
+          <button type="button" onClick={swapPair}
+            className="w-10 h-10 mb-[1px] rounded-xl tap flex items-center justify-center"
+            style={{ background:"var(--surf-3)", border:"1px solid var(--line)", color:"var(--txt-2)" }}
+            title="گۆڕینی ئاراستەی pair">
+            <ArrowLeftRight className="w-4 h-4" />
+          </button>
+          <div>
+            <Lbl>دراوی بەرامبەر</Lbl>
+            <Sel value={f.againstId} onChange={(ev) => setPair(f.curId, ev.target.value)}>
+              {data.currencies.filter((c) => c.id !== f.curId).map((c) => <option key={c.id} value={c.id}>{c.code} — {c.name}</option>)}
+            </Sel>
+          </div>
+        </div>
+
+        <div className="rounded-[var(--r-sm)] px-3 py-2.5 flex items-center justify-center gap-2 text-[11.5px]"
+          style={{ background:"var(--surf-2)", border:"1px solid var(--line)", color:"var(--txt-2)" }}>
+          <CurBadge c={cur(f.curId)} size="sm" />
+          <span className="font-semibold">{cur(f.curId).code}</span>
+          <ArrowLeftRight className="w-3.5 h-3.5" />
+          <CurBadge c={cur(f.againstId)} size="sm" />
+          <span className="font-semibold">{cur(f.againstId).code}</span>
+        </div>
+
+        <div className="text-center">
+          <div className="text-[12px] mb-2" style={{ color: "var(--txt-3)" }}>
+            {tr("بڕ")} · {cur(f.curId).code}
+          </div>
+          <input type="number" inputMode="decimal" min="0" step="any" value={f.amount} readOnly={!!batch}
+            onChange={(ev) => setF({ ...f, amount: ev.target.value })} placeholder="0"
+            className="w-full text-center bg-transparent outline-none"
+            aria-label={batch ? tr("کۆی پەسەندکراوی فیشەکان؛ گۆڕانکاری ناکرێت") : tr("بڕی مامەڵە")}
+            style={{ ...num, fontSize: 40, fontWeight: 600, letterSpacing: "-.03em", color: "var(--txt)", border: 0, opacity: batch ? .88 : 1 }} />
+        </div>
+      </Card>
+
+      {/* ڕەیت + ئەنجام */}
+      {f.direct ? (
+        <Card className="p-5 space-y-4" style={{ borderColor: "color-mix(in srgb, var(--warn) 24%, transparent)" }}>
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-[11.5px]" style={{ color:"var(--txt-3)" }}>
+              1 {cur(f.rateBaseId).code} = X {cur(rateQuoteId).code}
+            </div>
+            <button type="button" onClick={flipRateView}
+              className="px-2.5 py-1.5 rounded-lg text-[10.5px] font-semibold tap"
+              style={{ background:"var(--surf-3)", border:"1px solid var(--line)", color:"var(--txt-2)" }}>
+              ⇄ گۆڕینی شێوازی نرخ
+            </button>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Lbl>{tr("بە چەند دەیکڕم")} · 1 {cur(f.rateBaseId).code}</Lbl>
+              <Inp type="number" step="any" dir="ltr" value={f.buyQuote}
+                onChange={(ev) => setF({ ...f, buyQuote: ev.target.value })}
+                className="!text-center !text-[17px] !font-semibold"
+                placeholder={directBuyAuto ? String(Number(directBuyAuto.toPrecision(8))) : "0"} />
+              {directBuyAuto && (
+                <button type="button" onClick={() => setF((x) => ({ ...x, buyQuote: Number(directBuyAuto.toPrecision(10)) }))}
+                  className="mt-1 text-[10.5px] font-semibold tap" style={{ color:"var(--ac)" }}>
+                  نرخی ڕۆژ: {fmt(directBuyAuto, rateDigits(directBuyAuto))}
+                </button>
+              )}
+            </div>
+            <div>
+              <Lbl>{tr("بە چەند دەیفرۆشم")} · 1 {cur(f.rateBaseId).code}</Lbl>
+              <Inp type="number" step="any" dir="ltr" value={f.sellQuote}
+                onChange={(ev) => setF({ ...f, sellQuote: ev.target.value })}
+                className="!text-center !text-[17px] !font-semibold"
+                placeholder={directSellAuto ? String(Number(directSellAuto.toPrecision(8))) : "0"} />
+              {directSellAuto && (
+                <button type="button" onClick={() => setF((x) => ({ ...x, sellQuote: Number(directSellAuto.toPrecision(10)) }))}
+                  className="mt-1 text-[10.5px] font-semibold tap" style={{ color:"var(--ac)" }}>
+                  نرخی ڕۆژ: {fmt(directSellAuto, rateDigits(directSellAuto))}
+                </button>
+              )}
+            </div>
+          </div>
+
+          {bq > 0 && sq > 0 && amtR > 0 && (
+            <div className="rounded-[var(--r-sm)] p-4 space-y-2" style={{ background: "var(--surf-3)" }}>
+              <div className="flex justify-between text-[13px]">
+                <span style={{ color: "var(--txt-2)" }}>{tr("دەدەم (کڕین)")}</span>
+                <span className="font-semibold" style={{ ...num, color: "var(--neg)" }}>
+                  {fmt(dBuyTotal, cur(f.againstId).dec || 0)} {cur(f.againstId).code}
+                </span>
+              </div>
+              <div className="flex justify-between text-[13px]">
+                <span style={{ color: "var(--txt-2)" }}>{tr("وەردەگرم (فرۆشتن)")}</span>
+                <span className="font-semibold" style={{ ...num, color: "var(--pos)" }}>
+                  {fmt(dSellTotal, cur(f.againstId).dec || 0)} {cur(f.againstId).code}
+                </span>
+              </div>
+              <div className="flex justify-between text-[12px]">
+                <span style={{ color: "var(--txt-3)" }}>{tr("قاسەی تایبەتی خۆم")}</span>
+                <span style={{ ...num, color: directOverOwn ? "var(--warn)" : "var(--txt-3)" }}>
+                  {ownMoneyHere === null ? "—" : `${fmt(ownMoneyHere, cur(f.againstId).dec || 0)} ${cur(f.againstId).code}`}
+                </span>
+              </div>
+              {directOverOwn && (
+                <div className="text-[11.5px] flex items-start gap-1.5" style={{ color: "var(--warn)" }}>
+                  <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                  {tr("ئەم مامەڵەیە لە پارەی خۆت زیاترە — خێرەکەی هەمووی هی تۆیە بەڵام پارەکەی هی هەمووانە")}
+                </div>
+              )}
+              <div className="flex justify-between items-baseline pt-2.5" style={{ borderTop: "1px solid var(--line)" }}>
+                <span className="text-[13px] font-semibold" style={{ color: "var(--txt)" }}>
+                  {dProfit >= 0 ? tr("خێر") : tr("زەرەر")}
+                </span>
+                <span className="text-[24px] font-semibold"
+                  style={{ ...num, color: dProfit >= 0 ? "var(--pos)" : "var(--neg)" }}>
+                  {dProfit >= 0 ? "+" : "−"}{fmt(Math.abs(dProfit), cur(f.againstId).dec || 0)}
+                  <span className="text-[12px] font-normal"> {cur(f.againstId).code}</span>
+                </span>
+              </div>
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 gap-3 pt-1">
+            <div>
+              <Lbl>{tr("لە کێ دەیکڕم؟")}</Lbl>
+              <Sel value={f.fromId} onChange={(ev) => setF({ ...f, fromId: ev.target.value, fromName: "" })}>
+                <option value="">{tr("— ناوێکی ئازاد —")}</option>
+                {customers.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+              </Sel>
+              {!f.fromId && <Inp className="mt-2" value={f.fromName} onChange={(ev) => setF({ ...f, fromName: ev.target.value })} placeholder={tr("ناوی فرۆشیار…")} />}
+              {/* «لە چەند کەسێکی دەکڕم و بەڵام بە یەک کەسی دەفرۆشم.» One press adds a seller.
+                  With none added this is the two-row trade it has always been. */}
+              <button type="button" className="mt-2 px-2.5 py-1.5 rounded-lg text-[10.5px] font-semibold tap"
+                style={{ background:"var(--surf-3)", border:"1px solid var(--line)", color:"var(--txt-2)" }}
+                onClick={() => setF((x) => ({ ...x, extraSellers: [
+                  ...(x.extraSellers || []), { key: uid(), cpId: "", cpName: "", amount: "", quote: x.buyQuote },
+                ] }))}
+                disabled={(f.extraSellers || []).length >= 19}>
+                + {tr("فرۆشیارێکی تر")}
+              </button>
+            </div>
+            <div>
+              <Lbl>{tr("بە کێ دەیفرۆشم؟")}</Lbl>
+              <Sel value={f.toId} onChange={(ev) => setF({ ...f, toId: ev.target.value, toName: "" })}>
+                <option value="">{tr("— ناوێکی ئازاد —")}</option>
+                {customers.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+              </Sel>
+              {!f.toId && <Inp className="mt-2" value={f.toName} onChange={(ev) => setF({ ...f, toName: ev.target.value })} placeholder={tr("ناوی کڕیار…")} />}
+            </div>
+          </div>
+
+          {(f.extraSellers || []).length > 0 && (
+            <div className="space-y-3 pt-1">
+              {(f.extraSellers || []).map((x, i) => (
+                <div key={x.key} className="grid grid-cols-1 md:grid-cols-[1fr_auto_auto_auto] gap-3 items-end">
+                  <div>
+                    <Lbl>{tr("فرۆشیاری")} {i + 2}</Lbl>
+                    <Sel value={x.cpId} onChange={(ev) => setF((y) => ({ ...y, extraSellers:
+                      y.extraSellers.map((z) => z.key === x.key ? { ...z, cpId: ev.target.value, cpName: "" } : z) }))}>
+                      <option value="">{tr("— ناوێکی ئازاد —")}</option>
+                      {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    </Sel>
+                    {!x.cpId && <Inp className="mt-2" value={x.cpName} placeholder={tr("ناوی فرۆشیار…")}
+                      onChange={(ev) => setF((y) => ({ ...y, extraSellers:
+                        y.extraSellers.map((z) => z.key === x.key ? { ...z, cpName: ev.target.value } : z) }))} />}
+                  </div>
+                  <div>
+                    <Lbl>{tr("بڕ")}</Lbl>
+                    <Inp type="number" step="any" dir="ltr" value={x.amount}
+                      aria-label={`${tr("فرۆشیاری")} ${i + 2} — ${tr("بڕ")}`}
+                      onChange={(ev) => setF((y) => ({ ...y, extraSellers:
+                        y.extraSellers.map((z) => z.key === x.key ? { ...z, amount: ev.target.value } : z) }))} />
+                  </div>
+                  <div>
+                    <Lbl>{tr("ڕەیتی کڕین")}</Lbl>
+                    <Inp type="number" step="any" dir="ltr" value={x.quote}
+                      aria-label={`${tr("فرۆشیاری")} ${i + 2} — ${tr("ڕەیتی کڕین")}`}
+                      onChange={(ev) => setF((y) => ({ ...y, extraSellers:
+                        y.extraSellers.map((z) => z.key === x.key ? { ...z, quote: ev.target.value } : z) }))} />
+                  </div>
+                  <button type="button" className="px-2.5 py-2 rounded-lg text-[10.5px] font-semibold tap"
+                    aria-label={`${tr("سڕینەوەی")} ${tr("فرۆشیاری")} ${i + 2}`}
+                    style={{ background:"var(--surf-3)", border:"1px solid var(--line)", color:"var(--txt-2)" }}
+                    onClick={() => setF((y) => ({ ...y, extraSellers: y.extraSellers.filter((z) => z.key !== x.key) }))}>
+                    ✕
+                  </button>
+                </div>
+              ))}
+              {/* Computed, not typed: the sale is exactly what was bought, and the server
+                  refuses anything else. Showing it means the owner is never refused for
+                  arithmetic this screen could have done. */}
+              <div className="text-[11px]" style={{ color:"var(--txt-3)" }}>
+                {tr("بە یەک کەس دەفرۆشرێت")}: {fmt(directSoldAmount)} {cur(f.curId).code}
+                {" — "}{tr("کۆی کڕدراو")}: {fmt(directBoughtTotal)} {cur(f.againstId).code}
+              </div>
+            </div>
+          )}
+        </Card>
+      ) : (
+        <Card className="p-5 space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-[11px]" style={{ color:"var(--txt-3)" }}>نرخی مامەڵە</div>
+              <div className="text-[13px] font-semibold mt-0.5" style={{ color:"var(--txt)" }}>
+                1 {cur(f.rateBaseId).code} = X {cur(rateQuoteId).code}
+              </div>
+            </div>
+            <button type="button" onClick={flipRateView}
+              className="px-2.5 py-1.5 rounded-lg text-[10.5px] font-semibold tap"
+              style={{ background:"var(--surf-3)", border:"1px solid var(--line)", color:"var(--txt-2)" }}>
+              ⇄ گۆڕینی شێوازی نرخ
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-[1fr_auto] items-end gap-4">
+            <div>
+              <Lbl>1 {cur(f.rateBaseId).code} = ؟ {cur(rateQuoteId).code}</Lbl>
+              <Inp type="number" step="any" dir="ltr" value={f.quote}
+                onChange={(ev) => setF({ ...f, quote: ev.target.value, manualRate: true })}
+                className="!text-center !text-[19px] !font-semibold"
+                style={offDay ? { borderColor: "var(--warn)", background: "var(--warn-bg)" } : {}} />
+            </div>
+            <div className="text-end md:min-w-[190px]">
+              <div className="text-[11px]" style={{ color: "var(--txt-3)" }}>{tr("کۆی گشتی")}</div>
+              <div className="text-[26px] font-semibold" style={{ ...num, color: "var(--txt)", letterSpacing: "-.02em" }}>
+                {fmt(total, cur(f.againstId).dec || 0)}
+              </div>
+              <div className="text-[11px]" style={{ color: "var(--txt-3)" }}>{cur(f.againstId).code}</div>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 text-[11.5px]" style={{ color: "var(--txt-3)" }}>
+            <span style={num}>
+              {tr("نرخی ڕۆژ:")} {autoQuote ? `1 ${cur(f.rateBaseId).code} = ${fmt(autoQuote, rateDigits(autoQuote))} ${cur(rateQuoteId).code}` : "—"}
+            </span>
+            {offDay && (
+              <button onClick={() => setF({ ...f, manualRate: false, quote: autoQuote })}
+                className="font-semibold tap" style={{ color: "var(--ac)" }}>{tr("گەڕانەوە")}</button>
+            )}
+            {f.type === "sell" && av !== null && (
+              <span style={num}>
+                · مامناوەندی تێچووی USD: 1 {cur(f.curId).code} = {fmt(av, rateDigits(av))} USD
+              </span>
+            )}
+            {estProfit !== null && (
+              <span className="ms-auto font-bold" style={{ color: estProfit >= 0 ? "var(--pos)" : "var(--neg)" }}>
+                {estProfit >= 0 ? tr("خێر") : tr("زەرەر")} {estProfit >= 0 ? "+" : "−"}{fmtMoney(data, Math.abs(estProfit), f.againstId)} {cur(f.againstId).code}
+              </span>
+            )}
+          </div>
+
+          {/* Enough stock, but at least one buy is missing its cost snapshot. Profit is
+              deliberately not invented — say so instead of showing a silent blank. */}
+          {f.type === "sell" && pos && amtR <= pos.qty + 1e-9 && pos.costComplete === false && (
+            <div className="p-3 rounded-xl text-[11.5px] flex items-start gap-2"
+              style={{ background:"var(--warn-bg)", color:"var(--warn)" }}>
+              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>
+                تێچووی هەندێک لە کڕینەکانی ئەم دراوە تۆمار نەکراوە، بۆیە خێر/زەرەر ناژمێردرێت و
+                بە بەتاڵی تۆمار دەکرێت. سەرەتا نرخی کڕینی ئەو مامەڵانە ڕاست بکەرەوە.
+              </span>
+            </div>
+          )}
+
+          {f.type === "sell" && pos && amtR > pos.qty + 1e-9 && (
+            <div className="p-3 rounded-xl text-[11.5px] flex items-start gap-2"
+              style={{ background:"var(--warn-bg)", color:"var(--warn)" }}>
+              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>
+                بڕی فرۆشتن لە stock ـی گشتی ئەم دراوە زیاترە ({fmtMoney(data, pos.qty, f.curId)} {cur(f.curId).code}).
+                خێر/زەرەر بە دڵنیایی پیشان نادرێت تا تێچووی stock ڕوون بێت.
+              </span>
+            </div>
+          )}
+        </Card>
+      )}
+
+      {/* وردەکاری */}
+      <Card className="p-5 space-y-4">
+        {!f.direct && (
+          <>
+            <div>
+              <Lbl>{f.type === "buy" ? tr("لە کوێ دای دەنێیت؟") : tr("لە کوێوە دەفرۆشیت؟")}</Lbl>
+              <Sel value={f.partnerId} disabled={custodyLockedByReceipts}
+                   onChange={(ev) => setF({ ...f, partnerId: ev.target.value })}>
+                {!custodyLockedByReceipts && !cur(f.curId).external && <option value="">{tr("قاسەی گشتی")} — {fmt(calc.atMe[f.curId] || 0, cur(f.curId).dec ?? 0)}</option>}
+                {!custodyLockedByReceipts && cur(f.curId).external && <option value="">{tr("— تەرەفێک هەڵبژێرە —")}</option>}
+                {partners.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name} — {fmt((calc.partner[p.id] || {})[f.curId] || 0, cur(f.curId).dec ?? 0)}</option>
+                ))}
+              </Sel>
+              {custodyLockedByReceipts && (
+                <div className="text-[11.5px] mt-2" style={{ color: "var(--txt-2)" }}>
+                  {tr("ئەم فیشانە پێشتر لای ئەم هاوبەشە دانراون — لە شاشەی کۆمەڵەکەدا دەگۆڕدرێت")}
+                </div>
+              )}
+              {custodyChosenHere && f.partnerId && (
+                <div className="text-[11.5px] mt-2" style={{ color: "var(--pos)" }}>
+                  {tr("فیشەکانیش هەر بەم لێدانە دەچنە لای ئەم هاوبەشە")}
+                </div>
+              )}
+              {f.partnerId && f.type === "buy" && amtR > 0 && (
+                <div className="mt-2.5 rounded-[var(--r-sm)] p-2.5 space-y-2"
+                     style={{ background: "var(--surf-2)", border: "1px solid var(--line)" }}>
+                  <Lbl>{tr("عمولەی هاوبەش")}</Lbl>
+                  <Inp value={f.partnerFee} inputMode="decimal"
+                       placeholder={String(commissionOffered)}
+                       onChange={(ev) => setF({ ...f, partnerFee: ev.target.value })} />
+                  <div className="text-[11.5px]" style={{ color: "var(--txt-2)" }}>
+                    {feeRate > 0
+                      ? `${tr("ڕێژەی تۆمارکراوی ئەم هاوبەشە")} ${feeRate}${tr("٪")} = ${fmtMoney(data, commissionOffered, f.curId)}`
+                      : tr("ڕێژەیەکی تۆمارکراو نییە بۆ ئەم هاوبەشە")}
+                  </div>
+                  {commissionObjection
+                    ? <div className="text-[11.5px]" style={{ color: "var(--neg)" }}>{commissionObjection}</div>
+                    : (
+                      <div className="text-[11.5px]" style={{ color: "var(--warn)" }}>
+                        {tr("وەردەگرێت")} <b style={num}>{fmtMoney(data, commissionAsked, f.curId)}</b>
+                        {" · "}{tr("باڵانسی دوایی")} <b style={num}>{fmtMoney(data, amtR - commissionAsked, f.curId)}</b>
+                      </div>
+                    )}
+                </div>
+              )}
+              {cur(f.curId).external && !f.partnerId && (
+                <div className="text-[11.5px] mt-2 flex items-center gap-1.5" style={{ color: "var(--warn)" }}>
+                  <AlertTriangle className="w-3.5 h-3.5" /> {cur(f.curId).name} {tr("لە قاسەی گشتیدا هەڵناگیرێت")}
+                </div>
+              )}
+              {willBeNeg && (
+                <div className="text-[11.5px] mt-2 flex items-center gap-1.5" style={{ color: "var(--neg)" }}>
+                  <AlertTriangle className="w-3.5 h-3.5" /> {tr("باڵانسەکە دەبێتە سالب")}
+                </div>
+              )}
+            </div>
+
+            <div>
+              <Lbl>{tr("دۆخی پارە")}</Lbl>
+              <div className="flex gap-2">
+                {settlementChoices(f.type, activeLanguage()).map(([k, l]) => (
+                  <button key={k} onClick={() => setF({ ...f, status: k, officeId: k === "pending" ? f.officeId : "" })}
+                    className="flex-1 py-2.5 rounded-[var(--r-sm)] text-[12.5px] font-medium tap"
+                    style={f.status === k
+                      ? { background: "var(--surf-3)", color: "var(--txt)", border: "1px solid var(--line-2)" }
+                      : { color: "var(--txt-3)", border: "1px solid var(--line)" }}>{l}</button>
+                ))}
+              </div>
+            </div>
+
+            {f.type === "buy" && f.status === "pending" && (
+              <div>
+                <Lbl>{tr("نووسینگەی بەرپرسی پارەدان")}</Lbl>
+                <Sel value={f.officeId} onChange={(ev) => setF({ ...f, officeId: ev.target.value })}>
+                  <option value="">{tr("هەڵبژێرە…")}</option>
+                  {offices.map((office) => <option key={office.id} value={office.id}>{office.name}</option>)}
+                </Sel>
+                {!offices.length && (
+                  <div className="text-[11.5px] mt-2 flex items-center gap-1.5" style={{ color: "var(--neg)" }}>
+                    <AlertTriangle className="w-3.5 h-3.5" />
+                    {tr("هیچ نووسینگەیەکی چالاک نییە؛ کڕینی پارەنەدراو ناتوانرێت تۆمار بکرێت")}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {batch ? (
+              <div>
+                <Lbl>{tr("لایەنی بەرامبەر")}</Lbl>
+                <div className="flex items-center gap-2.5 px-4 py-3 rounded-[var(--r-sm)]"
+                  style={{ background: "var(--surf-3)", border: "1px solid var(--line)" }}>
+                  <Users className="w-4 h-4 shrink-0" style={{ color: "var(--txt-3)" }} />
+                  <span className="text-[14px] font-medium" style={{ color: "var(--txt)" }}>
+                    {batch.customer_name || usr(batch.customer_id).name}
+                  </span>
+                  <span className="text-[10.5px] ms-auto" style={{ color: "var(--txt-3)" }}>{tr("ناگۆڕدرێت")}</span>
+                </div>
+              </div>
+            ) : !lockCp && (
+              <div>
+                <Lbl>{tr("لایەنی بەرامبەر")}</Lbl>
+                <Sel value={f.cpMode} onChange={(ev) => setF({ ...f, cpMode: ev.target.value, cpId: "", cpName: "" })} className="mb-2">
+                  <option value="acc">{tr("کڕیارێکی تۆمارکراو")}</option>
+                  <option value="free">{tr("ئۆزەر (بێ ئەکاونت)")}</option>
+                </Sel>
+                {f.cpMode === "acc"
+                  ? <Sel value={f.cpId} onChange={(ev) => setF({ ...f, cpId: ev.target.value })}>
+                      <option value="">{tr("هەڵبژێرە…")}</option>
+                      {customers.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+                    </Sel>
+                  : <Inp value={f.cpName} onChange={(ev) => setF({ ...f, cpName: ev.target.value })} placeholder={tr("ناو…")} />}
+              </div>
+            )}
+          </>
+        )}
+
+        <div>
+          <Lbl>{tr("تێبینی")}</Lbl>
+          <Inp value={f.note} onChange={(ev) => setF({ ...f, note: ev.target.value })} />
+        </div>
+      </Card>
+
+      {needsCustodian && (
+        <div className="flex items-start gap-2 px-1 text-[12px] font-semibold" style={{ color: "var(--warn)" }}>
+          <AlertTriangle className="w-4 h-4 shrink-0 mt-px" />
+          <span>{cur(f.curId).name} {tr("لە قاسەی گشتیدا هەڵناگیرێت — دیاری بکە پارەکە لای کێ دەمێنێتەوە")}</span>
+        </div>
+      )}
+
+      {(inventoryRefuses || inventoryDoubts) && (
+        <div className="flex items-start gap-2 px-1 text-[12px] font-semibold"
+             style={{ color: inventoryRefuses ? "var(--neg)" : "var(--warn)" }}>
+          <AlertTriangle className="w-4 h-4 shrink-0 mt-px" />
+          <span>
+            {costBasisMissing
+              ? tr("تێچووی ئەم دراوە تەواو نییە — نرخی ڕۆژی ئەو ڕۆژانە دابنێ کە کڕدراون")
+              : <>{tr("زیاتر لەوەی هەتە دەفرۆشیت")} — {fmtMoney(data, pos?.qty || 0, f.curId)} {cur(f.curId).code} {tr("هەیە")}</>}
+            {inventoryDoubts && ` · ${tr("ئەم ژمارەیە لێرە دەرهێنراوە؛ سێرڤەر بڕیاری کۆتایی دەدات")}`}
+          </span>
+        </div>
+      )}
+
+      <div className="flex gap-2 sticky bottom-24 md:bottom-4">
+        <Btn kind={f.direct ? "gold" : f.type === "buy" ? "primary" : "danger"}
+          onClick={submit} disabled={sending || busy || needsCustodian || inventoryRefuses} className="flex-1 !py-4 !text-[15px]">
+          {sending || busy ? tr("جێبەجێکردن…") : e ? tr("پاشەکەوتی ئیدیت")
+            : f.direct ? tr("تۆمارکردنی مامەڵەی ڕاستەوخۆ")
+            : f.type === "buy" ? tr("تۆمارکردنی کڕین") : tr("تۆمارکردنی فرۆشتن")}
+        </Btn>
+        {e && <Btn kind="ghost" onClick={onCancel} className="!py-4">{tr("پاشگەزبوونەوە")}</Btn>}
+      </div>
+    </div>
+  );
+}
+
+/* ══════════════════ فلتەری مامەڵەکان ══════════════════ */
+const emptyFilter = { q: "", type: "all", status: "all", cur: "all", from: "", to: "" };
+
+function useTxFilter(list, cur, usr) {
+  const [f, setF] = useState(emptyFilter);
+  const out = list.filter((t) => {
+    if (f.type !== "all" && t.type !== f.type) return false;
+    if (f.status === "pending" && t.status !== "pending") return false;
+    if (f.status === "completed" && t.status !== "completed") return false;
+    if (f.cur !== "all" && t.curId !== f.cur && t.againstId !== f.cur) return false;
+    const d = dOnly(t.date);
+    if (f.from && d < f.from) return false;
+    if (f.to && d > f.to) return false;
+    if (f.q) {
+      const name = t.cpId ? (usr(t.cpId).name || "") : (t.cpName || "");
+      const hay = `${t.code || ""} ${name} ${cur(t.curId).code || ""} ${cur(t.againstId).code || ""} ${t.note || ""}`.toLowerCase();
+      if (!hay.includes(f.q.toLowerCase().replace("#", ""))) return false;
+    }
+    return true;
+  });
+  return [out, f, setF];
+}
+
+function TxFilterBar({ data, f, setF, count, total }) {
+  const [open, setOpen] = useState(false);
+  const [scan, setScan] = useState(false);
+  const active = JSON.stringify(f) !== JSON.stringify(emptyFilter);
+  const quick = (days) => {
+    const t = new Date(); const to = t.toISOString().slice(0, 10);
+    const x = new Date(t); x.setDate(x.getDate() - days);
+    setF({ ...f, from: x.toISOString().slice(0, 10), to });
+  };
+  return (
+    <div className="space-y-2">
+      <div className="flex gap-2 items-center">
+        <div className="flex-1 relative">
+          <Search className="w-4 h-4 absolute start-4 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: "var(--txt-3)" }} />
+          <input value={f.q} onChange={(e) => setF({ ...f, q: e.target.value })} placeholder={tr("گەڕان…")}
+            className="w-full ps-11 pe-4 py-3 text-[14px] outline-none" style={fieldSty}
+            onFocus={onFoc} onBlur={onBlr} />
+        </div>
+        <button onClick={() => setScan(true)}
+          className="w-[46px] h-[46px] rounded-[var(--r-sm)] shrink-0 flex items-center justify-center tap"
+          style={{ background: "var(--surf-2)", border: "1px solid var(--line)", color: "var(--txt-2)" }}>
+          <Camera className="w-[18px] h-[18px]" />
+        </button>
+        <button onClick={() => setOpen(!open)}
+          className="w-[46px] h-[46px] rounded-[var(--r-sm)] shrink-0 flex items-center justify-center tap"
+          style={active
+            ? { background: "linear-gradient(170deg, var(--ac), var(--ac-2))", color: "#fff", boxShadow: "0 4px 14px -4px rgba(var(--ac-gl),.5)" }
+            : { background: "var(--surf-2)", border: "1px solid var(--line)", color: "var(--txt-2)" }}>
+          <SlidersHorizontal className="w-[18px] h-[18px]" />
+        </button>
+      </div>
+
+      {scan && <Scanner onFound={(v) => {
+        try { const j = JSON.parse(v); setF({ ...f, q: String(j.c || v) }); } catch { setF({ ...f, q: v }); }
+        setScan(false);
+      }} onClose={() => setScan(false)} />}
+
+      {open && (
+        <Card className="p-4 space-y-3 drop">
+          <div className="grid grid-cols-2 gap-2.5">
+            <div><Lbl>{tr("جۆر")}</Lbl><Sel value={f.type} onChange={(e) => setF({ ...f, type: e.target.value })}>
+              <option value="all">{tr("هەمووی")}</option><option value="buy">{tr("کڕین")}</option><option value="sell">{tr("فرۆشتن")}</option></Sel></div>
+            <div><Lbl>{tr("دۆخ")}</Lbl><Sel value={f.status} onChange={(e) => setF({ ...f, status: e.target.value })}>
+              <option value="all">{tr("هەمووی")}</option><option value="pending">{tr("چاوەڕوان")}</option><option value="completed">{tr("تەواوکراو")}</option></Sel></div>
+            <div><Lbl>{tr("دراو")}</Lbl><Sel value={f.cur} onChange={(e) => setF({ ...f, cur: e.target.value })}>
+              <option value="all">{tr("هەمووی")}</option>{data.currencies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</Sel></div>
+            <div className="flex items-end"><Btn kind="ghost" className="w-full !py-3" onClick={() => setF(emptyFilter)}>{tr("سڕینەوە")}</Btn></div>
+          </div>
+          <div className="grid grid-cols-2 gap-2.5">
+            <div><Lbl>{tr("لە بەرواری")}</Lbl><Inp type="date" value={f.from} onChange={(e) => setF({ ...f, from: e.target.value })} /></div>
+            <div><Lbl>{tr("بۆ بەرواری")}</Lbl><Inp type="date" value={f.to} onChange={(e) => setF({ ...f, to: e.target.value })} /></div>
+          </div>
+          <div className="flex gap-1.5 flex-wrap">
+            {[[tr("ئەمڕۆ"), 0], [tr("٧ ڕۆژ"), 7], [tr("٣٠ ڕۆژ"), 30], [tr("٩٠ ڕۆژ"), 90]].map(([t, d]) => (
+              <button key={t} onClick={() => quick(d)} className="px-3.5 py-1.5 rounded-full text-[12px] font-medium tap"
+                style={{ background: "var(--glass-2)", color: "var(--txt-2)" }}>{t}</button>
+            ))}
+          </div>
+          {count != null && total && (
+            <div className="flex gap-4 flex-wrap pt-2.5 text-[11.5px]" style={{ borderTop: "1px solid var(--line)", color: "var(--txt-3)" }}>
+              {Object.entries(total).map(([c, v]) => <span key={c}>{c}: <b style={{ ...num, color: "var(--txt-2)" }}>{fmt(v, 0)}</b></span>)}
+            </div>
+          )}
+        </Card>
+      )}
+    </div>
+  );
+}
+
+/* ══════════════════ لیستی مامەڵەکان ══════════════════ */
+function TxList({ data, cur, usr, onEdit, onDel, settle, unsettle, loadTxHistoryPage }) {
+  const base = [...data.txs].filter((t) => !t.deleted).reverse();
+  const [localList, f, setF] = useTxFilter(base, cur, usr);
+  const [rows, setRows] = useState([]);
+  const [serverMeta, setServerMeta] = useState({ hasMore: false, nextCursor: null, matchedCount: 0, totalsByAgainst: [] });
+  const [loading, setLoading] = useState(false);
+  const [serverFailed, setServerFailed] = useState(false);
+  const [serverErr, setServerErr] = useState("");
+  const requestSeq = useRef(0);
+  const filterKey = JSON.stringify(f);
+  const refreshKey = data?.readModel?.generated_at || data?.txs?.length || 0;
+  const serverMode = !!loadTxHistoryPage && !serverFailed;
+
+  const fetchPage = async (reset = false) => {
+    if (!loadTxHistoryPage || (!reset && loading)) return;
+    const seq = ++requestSeq.current;
+    setLoading(true);
+    if (reset) setServerErr("");
+    try {
+      const result = await loadTxHistoryPage({
+        limit: 80,
+        cursor: reset ? null : serverMeta.nextCursor,
+        filters: f,
+      });
+      if (seq !== requestSeq.current) return;
+      setRows((prev) => reset ? result.items : [...prev, ...result.items]);
+      setServerMeta({
+        hasMore: !!result.hasMore,
+        nextCursor: result.nextCursor || null,
+        matchedCount: Number(result.matchedCount || 0),
+        totalsByAgainst: result.totalsByAgainst || [],
+      });
+      setServerFailed(false);
+    } catch (e) {
+      console.error("tx-history-page", e);
+      if (seq !== requestSeq.current) return;
+      setServerErr(e?.message || "نەتوانرا مێژووی مامەڵەکان لە سێرڤەر بار بکرێت");
+      setServerFailed(true); // safe fallback: Phase 13D full history is still in memory.
+    } finally {
+      if (seq === requestSeq.current) setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!loadTxHistoryPage) return;
+    setServerFailed(false);
+    const id = setTimeout(() => fetchPage(true), 220);
+    return () => clearTimeout(id);
+    // loadTxHistoryPage is intentionally omitted: App recreates the wrapper on render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterKey, refreshKey]);
+
+  const list = serverMode ? rows : localList;
+
+  const groups = {};
+  list.forEach((t) => { const k = dOnly(t.date); (groups[k] = groups[k] || []).push(t); });
+  const today = data.control?.business_date || new Date().toISOString().slice(0, 10);
+  const yest = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  const dayLabel = (k) => k === today ? tr("ئەمڕۆ") : k === yest ? tr("دوێنێ")
+    : new Date(k).toLocaleDateString("en-GB", { weekday: "short", day: "2-digit", month: "short" });
+
+  const total = {};
+  if (serverMode && Array.isArray(serverMeta.totalsByAgainst)) {
+    serverMeta.totalsByAgainst.forEach((x) => {
+      const code = cur(x.against_id).code || x.against_id || "?";
+      total[code] = Number(x.amount) || 0;
+    });
+  } else {
+    localList.forEach((t) => { total[cur(t.againstId).code || "?"] = (total[cur(t.againstId).code || "?"] || 0) + t.total; });
+  }
+
+  const matchedCount = serverMode ? serverMeta.matchedCount : localList.length;
+
+  return (
+    <div className="space-y-4">
+      <H sub={`${matchedCount} ${tr("مامەڵە")}`}>{tr("مامەڵەکان")}</H>
+      <TxFilterBar data={data} f={f} setF={setF} count={matchedCount} total={total} />
+      {serverErr && !serverMode && (
+        <Card className="p-3 text-[11px]" style={{ color: "var(--warn)" }}>
+          مێژووی server-side بەردەست نەبوو؛ fallback ـی تەواوی Phase 13D بەکار هات.
+        </Card>
+      )}
+      {list.length === 0 && !loading ? <Card className="p-2"><Empty t={tr("هیچ مامەڵەیەک نەدۆزرایەوە")} /></Card> :
+        Object.entries(groups).map(([day, items], gi) => (
+          <div key={day} className="rise" style={{ animationDelay: `${Math.min(gi, 6) * 45}ms` }}>
+            <div className="flex items-center gap-3 mb-1.5 px-1">
+              <span className="text-[11.5px] font-semibold" style={{ color: "var(--txt-3)" }}>{dayLabel(day)}</span>
+              <span className="flex-1 h-px" style={{ background: "var(--line)" }} />
+              <span className="text-[11px]" style={{ color: "var(--txt-3)" }}>{items.length}</span>
+            </div>
+            <Card className="px-1 py-1">
+              {items.map((t, i) => (
+                <div key={t.id} style={i ? { borderTop: "1px solid var(--line)" } : {}}>
+                  <TxRow t={t} cur={cur} usr={usr} ledger={data.ledger} onEdit={onEdit} onDel={onDel} settle={settle} unsettle={unsettle} />
+                </div>
+              ))}
+            </Card>
+          </div>
+        ))}
+      {serverMode && (
+        <div className="flex justify-center">
+          {serverMeta.hasMore ? (
+            <Btn kind="ghost" onClick={() => fetchPage(false)} disabled={loading}>
+              {loading ? tr("بارکردن…") : tr("زیاتر باربکە")}
+            </Btn>
+          ) : rows.length > 0 ? (
+            <span className="text-[10.5px]" style={{ color: "var(--txt-3)" }}>کۆتایی مێژوو</span>
+          ) : null}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* flip = بینینی مامەڵەکە لە ڕوانگەی لایەنی بەرامبەرەوە / lite = بێ وردەکاری ناوخۆیی */
+function TxRow({ t, cur, usr, ledger = [], onEdit, onDel, flip, lite, settle, unsettle }) {
+  // The state, the button and the flash are three views of one question, so they are asked once.
+  const said = settlementWords({ type: t.type, flip, lang: activeLanguage() });
+  const [open, setOpen] = useState(false);
+  const [qr, setQr] = useState(false);
+  const name = t.cpId ? (usr(t.cpId).name || t.cpName) : t.cpName;
+  const shown = flip ? (t.type === "buy" ? "sell" : "buy") : t.type;
+  const pend = t.status === "pending";
+  const isBuy = shown === "buy";
+  const timeline = transactionTimeline(t, { ledger, scope: lite ? "portal" : "owner" });
+
+  return (
+    <div className="rounded-[var(--r-sm)]" style={{ background: open ? "var(--surf-2)" : "transparent" }}>
+      <div onClick={() => setOpen(!open)} className="flex items-center gap-3 py-3 px-2 cursor-pointer tap">
+        <span className="w-10 h-10 rounded-full flex items-center justify-center shrink-0"
+          style={{ background: t.direct ? "var(--warn-bg)" : isBuy ? "var(--pos-bg)" : "var(--neg-bg)" }}>
+          {t.direct
+            ? <Zap className="w-[17px] h-[17px]" style={{ color: "var(--warn)" }} />
+            : isBuy
+              ? <ArrowDownLeft className="w-[18px] h-[18px]" style={{ color: "var(--pos)" }} />
+              : <ArrowUpRight className="w-[18px] h-[18px]" style={{ color: "var(--neg)" }} />}
+        </span>
+
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="text-[14px] font-medium truncate" style={{ color: "var(--txt)" }}>
+              {lite ? (isBuy ? tr("کڕین") : tr("فرۆشتن")) : (name || (isBuy ? tr("کڕین") : tr("فرۆشتن")))}
+            </span>
+            {pend && <span className="w-1.5 h-1.5 rounded-full shrink-0 breathe" style={{ background: "var(--warn)" }} />}
+          </div>
+          <div className="text-[11.5px] mt-0.5 truncate" style={{ color: "var(--txt-3)" }}>
+            <span style={num}>{fmt(t.amount, cur(t.curId).dec ?? 0)}</span> {cur(t.curId).code}
+            {t.partnerId && !lite ? " · " + usr(t.partnerId).name : ""}
+          </div>
+        </div>
+
+        <div className="text-end shrink-0">
+          <div className="text-[15px] font-semibold" style={{ ...num, color: isBuy ? "var(--pos)" : "var(--neg)" }}>
+            {isBuy ? "−" : "+"}{fmt(t.total, cur(t.againstId).dec ?? 0)}
+          </div>
+          <div className="text-[10.5px] mt-0.5" style={{ color: "var(--txt-3)" }}>{cur(t.againstId).code}</div>
+          {Number.isFinite(Number(t.profit)) && !lite && (
+            <div className="text-[10.5px] mt-1 font-semibold" style={{ ...num, color: t.profit >= 0 ? "var(--pos)" : "var(--neg)" }}>
+              {Number(t.profit) >= 0 ? "+" : "−"}{fmt(Math.abs(Number(t.profit)), cur(t.profitCurId || t.againstId).dec ?? 0)} {cur(t.profitCurId || t.againstId).code} {t.profit >= 0 ? tr("خێر") : tr("زەرەر")}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {qr && <TxReceipt t={t} cur={cur} usr={usr} onClose={() => setQr(false)} />}
+      {open && (
+        <div className="px-3 pb-3 drop">
+          <div className="rounded-[var(--r-sm)] p-3.5 space-y-2.5" style={{ background: "var(--surf-3)" }}>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-2.5">
+              {t.code ? <D k={tr("کۆد")} v={"#" + t.code} /> : null}
+              {(() => {
+                const baseId = preferredRateBaseId(t.curId, t.againstId);
+                const quoteId = oppositePairId(t.curId, t.againstId, baseId);
+                const shown = storedRateToDisplay(t.rate, t.curId, t.againstId, baseId);
+                const buyShown = t.buyRate ? storedRateToDisplay(t.buyRate, t.curId, t.againstId, baseId) : null;
+                return (
+                  <>
+                    <D k={tr("ڕەیت")} v={shown ? `1 ${cur(baseId).code} = ${fmt(shown, rateDigits(shown))} ${cur(quoteId).code}` : "—"} />
+                    {t.direct && buyShown ? <D k={tr("بە چەند دەیکڕم")} v={`1 ${cur(baseId).code} = ${fmt(buyShown, rateDigits(buyShown))} ${cur(quoteId).code}`} /> : null}
+                  </>
+                );
+              })()}
+              {!lite && t.profit != null ? (
+                <D
+                  k={t.profit >= 0 ? tr("خێر") : tr("زەرەر")}
+                  v={`${t.profit >= 0 ? "+" : "−"}${fmt(Math.abs(t.profit), cur(t.profitCurId || t.againstId).dec ?? 0)} ${cur(t.profitCurId || t.againstId).code}`}
+                  tone={t.profit >= 0 ? "pos" : "neg"}
+                />
+              ) : null}
+              {!lite && t.partnerId ? <D k={tr("لای")} v={usr(t.partnerId).name} /> : null}
+              {/* The owner can now name a commission per purchase, so the transaction has to say
+                  what was actually paid. A figure you can set and then never see again is a
+                  figure nobody can check. The percentage beside it is the one that was charged,
+                  not the one on the partner's record. */}
+              {!lite && t.partnerId && t.partnerFeeSnapshot != null ? (
+                <D k={tr("عمولەی هاوبەش")}
+                   v={`${fmt(t.partnerFeeSnapshot, cur(t.curId).dec ?? 0)} ${cur(t.curId).code}`
+                      + (t.partnerRateSnapshot != null
+                          ? ` · ${fmt(t.partnerRateSnapshot, rateDigits(t.partnerRateSnapshot))}${tr("٪")}`
+                          : "")}
+                   tone="neg" />
+              ) : null}
+              <D k={tr("بەروار")} v={new Date(t.date).toLocaleDateString("en-GB")} />
+              <D k={tr("کات")} v={new Date(t.date).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })} />
+            </div>
+
+            {pend ? (
+              <div className="pt-2.5" style={{ borderTop: "1px solid var(--line)" }}>
+                <Pill tone="amber">{said.unsettled}</Pill>
+              </div>
+            ) : null}
+
+            <div className="pt-2.5" style={{ borderTop: "1px solid var(--line)" }}>
+              <div className="text-[11px] font-semibold mb-2" style={{ color: "var(--txt-2)" }}>
+                {tr("ڕەوتی کات")}
+              </div>
+              <div className="space-y-2">
+                {timeline.map((event) => (
+                  <div key={event.id} className="flex items-start gap-2.5 text-[11px]">
+                    <span className="w-2 h-2 rounded-full mt-1.5 shrink-0"
+                      style={{ background: event.kind === "pending" ? "var(--warn)" : event.kind === "settled" ? "var(--pos)" : "var(--ac)" }} />
+                    <div className="min-w-0 flex-1">
+                      <div style={{ color: "var(--txt-2)" }}>
+                        {event.kind === "created" ? tr("مامەڵە تۆمار کرا") :
+                          event.kind === "pending" ? tr("پارەدان چاوەڕوانە") :
+                            event.kind === "settled" ? tr("پارەدان تۆمار کرا") : tr("جوڵەی پارە تۆمار کرا")}
+                      </div>
+                      <div className="text-[10px]" style={{ ...num, color: "var(--txt-3)" }}>
+                        {event.at ? new Date(event.at).toLocaleString("en-GB") : "—"}
+                        {event.amount != null && event.currency ? ` · ${fmt(Math.abs(event.amount), cur(event.currency).dec ?? 0)} ${cur(event.currency).code}` : ""}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex gap-2 pt-2.5 flex-wrap" style={{ borderTop: "1px solid var(--line)" }}>
+              <button onClick={(e) => { e.stopPropagation(); setQr(true); }}
+                className="flex items-center gap-1.5 text-[12px] px-3 py-2 rounded-full tap"
+                style={{ background: "var(--glass-2)", color: "var(--txt-2)" }}>
+                <QrCode className="w-3.5 h-3.5" /> {tr("وەسڵ")}
+              </button>
+              {pend && settle ? (
+                <button onClick={(e) => { e.stopPropagation(); settle(t); }}
+                  className="flex items-center gap-1.5 text-[12.5px] font-semibold px-3.5 py-2 rounded-full tap"
+                  style={{ background: "var(--pos-bg)", color: "var(--pos)" }}>
+                  <CheckCircle2 className="w-3.5 h-3.5" /> {said.action}
+                </button>
+              ) : null}
+              {!pend && t.paidAt && unsettle ? (
+                <button onClick={(e) => { e.stopPropagation(); unsettle(t); }}
+                  className="flex items-center gap-1.5 text-[12px] px-3 py-2 rounded-full tap"
+                  style={{ color: "var(--txt-3)" }}>
+                  <RotateCcw className="w-3.5 h-3.5" /> {tr("هەڵوەشاندنەوەی پارەدان")}
+                </button>
+              ) : null}
+              {onEdit ? (
+                <button onClick={(e) => { e.stopPropagation(); onEdit(t); }}
+                  className="flex items-center gap-1.5 text-[12px] px-3 py-2 rounded-full tap"
+                  style={{ background: "var(--glass-2)", color: "var(--txt-2)" }}>
+                  <Pencil className="w-3.5 h-3.5" /> {tr("ئیدیت")}
+                </button>
+              ) : null}
+              {onDel ? (
+                <button onClick={(e) => { e.stopPropagation(); onDel(t); }}
+                  className="flex items-center gap-1.5 text-[12px] px-3 py-2 rounded-full tap"
+                  style={{ color: "var(--neg)" }}>
+                  <RotateCcw className="w-3.5 h-3.5" /> {tr("هەڵوەشاندنەوە")}
+                </button>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* وەسڵی مامەڵە — بۆ پیشاندان بە کڕیار */
+function TxReceipt({ t, cur, usr, onClose }) {
+  const name = t.cpId ? (usr(t.cpId).name || t.cpName) : t.cpName;
+  const payload = JSON.stringify({
+    c: t.code, t: t.type, a: t.amount, cu: cur(t.curId).code,
+    v: t.total, ag: cur(t.againstId).code, d: dOnly(t.date),
+  });
+  return (
+    <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center sm:p-6"
+      style={{ background: "rgba(0,0,0,.6)", backdropFilter: "blur(6px)" }} onClick={onClose}>
+      <div className="w-full sm:max-w-[340px] rounded-t-[28px] sm:rounded-[26px] overflow-hidden sheet"
+        style={{ background: "var(--surf)", boxShadow: "var(--sh-3)" }} onClick={(e) => e.stopPropagation()}>
+
+        <div className="px-6 pt-6 pb-5 text-center relative aura">
+          <button onClick={onClose} className="absolute top-4 end-4 p-1.5 tap" style={{ color: "var(--txt-3)" }}>
+            <X className="w-4 h-4" />
+          </button>
+          <div className="text-[11px] mb-1" style={{ color: "var(--txt-3)" }}>
+            {t.type === "buy" ? tr("کڕین") : tr("فرۆشتن")}{t.code ? ` · #${t.code}` : ""}
+          </div>
+          <div className="text-[32px] font-semibold" style={{ ...num, color: "var(--txt)", letterSpacing: "-.03em" }}>
+            {fmt(t.amount, 0)}
+          </div>
+          <div className="text-[13px]" style={{ color: "var(--txt-2)" }}>{cur(t.curId).name}</div>
+        </div>
+
+        <div className="px-6 pb-5 space-y-2.5">
+          {(() => {
+            const baseId = preferredRateBaseId(t.curId, t.againstId);
+            const quoteId = oppositePairId(t.curId, t.againstId, baseId);
+            const shown = storedRateToDisplay(t.rate, t.curId, t.againstId, baseId);
+            return [[tr("لایەن"), name],
+              [tr("ڕەیت"), shown ? `1 ${cur(baseId).code} = ${fmt(shown, rateDigits(shown))} ${cur(quoteId).code}` : "—"],
+              [tr("کۆی گشتی"), `${fmt(t.total, cur(t.againstId).dec || 0)} ${cur(t.againstId).code}`],
+              [tr("بەروار"), new Date(t.date).toLocaleString("en-GB")]];
+          })().map(([k, v], i) => (
+            <div key={i} className="flex justify-between text-[13px]">
+              <span style={{ color: "var(--txt-3)" }}>{k}</span>
+              <span className="font-semibold" style={{ ...num, color: "var(--txt)" }}>{v || "—"}</span>
+            </div>
+          ))}
+        </div>
+
+        <div className="flex flex-col items-center gap-3 px-6 pb-6 pt-5"
+          style={{ borderTop: "1px dashed var(--line-2)" }}>
+          <QR text={payload} size={168} />
+          <div className="text-[10.5px] text-center" style={{ color: "var(--txt-3)" }}>
+            {tr("ئەم کۆدە وەسڵی ئەم مامەڵەیەیە")}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const D = ({ k, v, tone }) => (
+  <div>
+    <div className="text-[10.5px]" style={{ color: "var(--txt-3)" }}>{k}</div>
+    <div className="text-[13px] font-semibold mt-0.5"
+      style={{ ...num, color: tone === "pos" ? "var(--pos)" : tone === "neg" ? "var(--neg)" : "var(--txt)" }}>{v}</div>
+  </div>
+);
+
+const waitMs = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const durationTextToMs = (value) => {
+  const s = String(value || "").trim();
+  if (!s) return 0;
+  let total = 0;
+  const re = /([0-9]+(?:\.[0-9]+)?)(ms|s|m|h)/gi;
+  let m;
+  while ((m = re.exec(s))) {
+    const n = Number(m[1]);
+    const unit = m[2].toLowerCase();
+    if (unit === "ms") total += n;
+    else if (unit === "s") total += n * 1000;
+    else if (unit === "m") total += n * 60000;
+    else if (unit === "h") total += n * 3600000;
+  }
+  return Math.ceil(total);
+};
+
+const ocrPaceAfterResult = (d) => {
+  const meta = d?._meta || {};
+  const provider = String(meta.provider || "").toLowerCase();
+
+  // Groq exposes the token-bucket reset window in response headers.
+  // Waiting through that window is deliberately conservative for free-tier OCR batches.
+  if (provider === "groq") {
+    const resetMs = durationTextToMs(meta.resetTokens);
+    return Math.max(5000, Math.min(15000, resetMs ? resetMs + 500 : 7000));
+  }
+
+  // Fallback providers still get a small gap so a retry batch cannot burst.
+  if (provider === "gemini" || provider === "claude") return 1800;
+  return 2500;
+};
+
+const clamp01 = (v, fallback = 0) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : fallback;
+};
+const bytesToBase64 = (bytes) => {
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 8192) {
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+  }
+  return btoa(bin);
+};
+
+const OCR_MAX_BINARY_BYTES = 2_500_000;
+const OCR_MAX_BASE64_CHARS = 3_500_000;
+
+const canvasToJpeg = (canvas, quality) =>
+  new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
+
+async function prepImage(file) {
+  let bmp;
+  try { bmp = await createImageBitmap(file, { imageOrientation: "from-image" }); }
+  catch { bmp = await createImageBitmap(file); }
+
+  // Keep enough detail for tiny receipt text while staying below Vercel's function payload ceiling.
+  const MAX_SIDE = 2200;
+  const scale = Math.min(1, MAX_SIDE / Math.max(bmp.width, bmp.height));
+  let cv = document.createElement("canvas");
+  cv.width = Math.max(1, Math.round(bmp.width * scale));
+  cv.height = Math.max(1, Math.round(bmp.height * scale));
+
+  const draw = (canvas, source) => {
+    const ctx = canvas.getContext("2d", { alpha: false });
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
+  };
+
+  draw(cv, bmp);
+  bmp.close?.();
+
+  let quality = 0.92;
+  let blob = await canvasToJpeg(cv, quality);
+  if (!blob) throw new Error("نەتوانرا وێنەکە ئامادە بکرێت");
+
+  // First preserve resolution and gently reduce JPEG quality.
+  while (blob.size > OCR_MAX_BINARY_BYTES && quality > 0.72) {
+    quality = Math.max(0.72, quality - 0.06);
+    blob = await canvasToJpeg(cv, quality);
+    if (!blob) throw new Error("نەتوانرا وێنەکە ئامادە بکرێت");
+  }
+
+  // If the image is still too large, reduce dimensions in controlled steps.
+  let resizePass = 0;
+  while (blob.size > OCR_MAX_BINARY_BYTES && Math.max(cv.width, cv.height) > 1350 && resizePass < 3) {
+    const ratio = Math.max(0.72, Math.min(0.9, Math.sqrt(OCR_MAX_BINARY_BYTES / blob.size) * 0.95));
+    const smaller = document.createElement("canvas");
+    smaller.width = Math.max(1, Math.round(cv.width * ratio));
+    smaller.height = Math.max(1, Math.round(cv.height * ratio));
+    draw(smaller, cv);
+    cv = smaller;
+    quality = 0.82;
+    blob = await canvasToJpeg(cv, quality);
+    if (!blob) throw new Error("نەتوانرا وێنەکە ئامادە بکرێت");
+    resizePass += 1;
+  }
+
+  // Final guarded encoding leaves headroom for JSON/base64 overhead.
+  if (blob.size > OCR_MAX_BINARY_BYTES) {
+    blob = await canvasToJpeg(cv, 0.68);
+    if (!blob) throw new Error("نەتوانرا وێنەکە ئامادە بکرێت");
+  }
+
+  const buf = await blob.arrayBuffer();
+  // Fingerprint the exact normalized bytes that are read by OCR and persisted.
+  // This lets the server bind its signed OCR evidence to the stored object.
+  const hb = await crypto.subtle.digest("SHA-256", buf.slice(0));
+  const hash = [...new Uint8Array(hb)].map((x) => x.toString(16).padStart(2, "0")).join("");
+  const b64 = bytesToBase64(new Uint8Array(buf));
+  if (b64.length > OCR_MAX_BASE64_CHARS) {
+    throw new Error("قەبارەی وێنەکە زۆر گەورەیە — تکایە وێنەکە crop بکە یان دووبارە وێنەی بگرە");
+  }
+
+  return {
+    b64,
+    hash,
+    blob,
+    mediaType: "image/jpeg",
+    width: cv.width,
+    height: cv.height,
+    url: URL.createObjectURL(blob),
+  };
+}
+
+const isTemporaryOcrError = (e) => {
+  const s = Number(e?.status);
+  return [429, 502, 503, 504].includes(s) ||
+    /quota|rate limit|سنووری API|timed out|درێژەی کێشا|temporar|gateway|service unavailable/i.test(String(e?.message || ""));
+};
+
+const ocrRetryNote = (e, prefix = "خزمەتگوزاری خوێندنەوە کاتێک بەردەست نییە") => {
+  const sec = Number(e?.retryAfterSeconds);
+  return `${prefix} — فیشەکە ڕەت نەکراوەتەوە${sec > 0 ? `؛ نزیکەی ${Math.ceil(sec)} چرکەی تر دووبارە هەوڵ بدە` : "؛ کەمێک دواتر دووبارە هەوڵ بدە"}`;
+};
+
+const normRef = (r) => String(r || "").replace(/[\s\-_.]/g, "").toUpperCase();
+const DIR_KU = { in: "پارە هاتووە", out: "پارە نێردراوە" };
+const PLATFORMS = {
+  Alipay:   { ku: "ئەلی پەی", cls: "bg-blue-50 text-blue-800 border-blue-200" },
+  WeChat:   { ku: "وی چات",  cls: "bg-[color-mix(in_srgb,var(--pos)_10%,transparent)] text-[var(--pos)] border-[color-mix(in_srgb,var(--pos)_26%,transparent)]" },
+  Bank:     { ku: "بانک",     cls: "bg-slate-50 text-[var(--txt)] border-slate-200" },
+  FIB:      { ku: "FIB",      cls: "bg-violet-50 text-violet-800 border-violet-200" },
+  FastPay:  { ku: "FastPay",  cls: "bg-[color-mix(in_srgb,var(--warn)_11%,transparent)] text-[var(--warn)] border-[color-mix(in_srgb,var(--warn)_26%,transparent)]" },
+  ZainCash: { ku: "Zain Cash", cls: "bg-[color-mix(in_srgb,var(--neg)_10%,transparent)] text-[var(--neg)] border-[color-mix(in_srgb,var(--neg)_26%,transparent)]" },
+  NassWallet:{ ku: "NassWallet", cls: "bg-sky-50 text-sky-800 border-sky-200" },
+  QiCard:    { ku: "Qi Card", cls: "bg-emerald-50 text-emerald-800 border-emerald-200" },
+};
+const platMeta = (p) => PLATFORMS[p] || { ku: p || "نەزانراو", cls: "bg-[var(--line)] text-[var(--txt-2)] border-[var(--line)]" };
+const detectPlatform = (bank) => {
+  const b = String(bank || "").toLowerCase();
+  if (/alipay|支付宝/.test(b)) return "Alipay";
+  if (/wechat|weixin|微信/.test(b)) return "WeChat";
+  if (/\bfib\b/.test(b)) return "FIB";
+  if (/fastpay/.test(b)) return "FastPay";
+  if (/zain/.test(b)) return "ZainCash";
+  if (/nass|ناس/.test(b)) return "NassWallet";
+  if (/qi\s*card|qicard|کی\s*کارد|قي\s*كارد/.test(b)) return "QiCard";
+  if (/bank|بانک|مصرف/.test(b)) return "Bank";
+  return null;
+};
+const REJECT_KU = {
+  no_ref: "ژمارەی مامەڵەی نییە",
+  same_image: "هەمان وێنە پێشتر ناردراوە",
+  same_ref: "هەمان ژمارەی مامەڵە پێشتر تۆمار کراوە",
+  same_batch: "لەم کۆمەڵەیەدا دووبارە بووەتەوە",
+  same_amount_time: "هەمان بڕ لە هەمان کاتدا",
+  old_date: "ڕێکەوتی کۆن",
+  unreadable: "نەخوێندرایەوە",
+  not_receipt: "فیشی پارەدان نییە",
+  tampered: "نیشانەی دەستکاری تێدایە",
+  low_confidence: "خوێندنەوەکە دڵنیا نییە",
+  possible_duplicate: "گومانی دووبارەبوونەوە",
+  manual_reject: "بە دەست ڕەتکرایەوە",
+  missing_required: "زانیاری گرنگ کەمە",
+  api_retry: "چاوەڕوانی دووبارە خوێندنەوە",
+};
+
+function ReceiptImg({ path, className }) {
+  const [url, setUrl] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    if (!path) return;
+    supabase.storage.from("receipts").createSignedUrl(path, 3600)
+      .then(({ data }) => { if (alive && data) setUrl(data.signedUrl); }).catch(() => {});
+    return () => { alive = false; };
+  }, [path]);
+  if (!url) return <div className={`bg-[var(--line)] animate-pulse ${className}`} />;
+  return <a href={url} target="_blank" rel="noreferrer"><img src={url} alt={tr("فیش")} className={className} /></a>;
+}
+
+/* ─────────── کۆکردنەوەی فیشەکان — بە فی و بێ فی ─────────── */
+function ReceiptTotals({ rows, data, title, compact, showValuation = true }) {
+  // The uploader is shown what their receipts say and nothing else. A valuation in another
+  // currency is a bookkeeping decision that has not been made yet; it arrives with the
+  // transaction, once the operator has made one.
+  const u = showValuation ? usdConv(data) : () => null;
+  const counted = (rows || []).filter((r) => r.counted !== false && r.status !== "dup" && r.status !== "error");
+  const rejected = (rows || []).filter((r) => r.counted === false || r.status === "dup" || r.status === "error");
+  const gross = {}, fees = {}, net = {}, byPlat = {};
+  counted.forEach((r) => {
+    const c = r.currency || "?";
+    const g = +(r.amount) || 0, f = +(r.fee) || 0;
+    const n = r.net != null ? +r.net : (r.net_amount != null ? +r.net_amount : g - f);
+    gross[c] = (gross[c] || 0) + g; fees[c] = (fees[c] || 0) + f; net[c] = (net[c] || 0) + n;
+    const pl = r.platform || detectPlatform(r.bank) || tr("نەزانراو");
+    byPlat[pl] = byPlat[pl] || { n: 0, cur: {} };
+    byPlat[pl].n++; byPlat[pl].cur[c] = (byPlat[pl].cur[c] || 0) + n;
+  });
+  const curs = Object.keys(gross);
+  // Who was paid, how many times, and how much — from the tested grouping rather than a second
+  // copy of it here, so the figure on the screen and the figure under test are the same figure.
+  const { recipients } = recipientSummary(counted);
+  const platList = Object.entries(byPlat).sort((a, b) => b[1].n - a[1].n);
+  // A headline states one number in one currency, so it may only appear when there *is* one
+  // currency. A batch holding yuan and dollars used to headline whichever came first, which
+  // read as a conversion nobody made — "I sent yuan, why does it show dollars?". Mixed sets
+  // get a plain strip instead: every currency, side by side, none of them presented as the total.
+  const soleCur = curs.length === 1 ? curs[0] : null;
+
+  return (
+    <>
+      {soleCur && (
+        <div className="relative pt-3 pb-1 aura">
+          <Hero label={title || tr("گەیشتوو (بێ فی)")}
+            value={fmtMoney(data, net[soleCur], soleCur)} unit={soleCur}
+            sub={`${counted.length} ${tr("فیش")}${fees[soleCur] > 0 ? ` · ${tr("فی")} ${fmtMoney(data, fees[soleCur], soleCur)}` : ""}${u(net[soleCur], soleCur) != null ? ` · ≈ ${fmt(u(net[soleCur], soleCur), 2)} $` : ""}`} />
+        </div>
+      )}
+
+      {curs.length > 1 && (
+        <div className="pt-3 pb-1">
+          <div className="text-[11px] mb-2 px-1" style={{ color: "var(--txt-3)" }}>
+            {title || tr("گەیشتوو (بێ فی)")} · {counted.length} {tr("فیش")} · {curs.length} {tr("دراو")}
+          </div>
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {curs.map((c) => (
+              <Card key={c} className="px-3 py-2.5 shrink-0 min-w-[132px]">
+                <div className="flex items-center gap-1.5 mb-1">
+                  <CurBadge c={(data?.currencies || []).find((x) => x.code === c)} size="sm" />
+                  <span className="text-[11px] font-semibold" style={{ color: "var(--txt-3)" }}>{c}</span>
+                </div>
+                <div className="text-[18px] font-semibold" style={{ ...num, color: "var(--pos)" }}>
+                  {fmtMoney(data, net[c], c)}
+                </div>
+              </Card>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {curs.length > 0 && (
+        <Card className="px-4 py-2">
+          {curs.map((c, i) => (
+            <div key={c} className="py-3" style={i ? { borderTop: "1px solid var(--line)" } : {}}>
+              <div className="flex items-center gap-2 mb-2.5">
+                <CurBadge c={(data?.currencies || []).find((x) => x.code === c)} size="sm" />
+                <span className="text-[12px] font-semibold" style={{ color: "var(--txt-2)" }}>{c}</span>
+              </div>
+              <div className="flex justify-between text-[13px] py-1">
+                <span style={{ color: "var(--txt-3)" }}>{tr("کۆی گشتی (بە فییەوە)")}</span>
+                <span style={{ ...num, color: "var(--txt-2)" }}>{fmtMoney(data, gross[c], c)}</span>
+              </div>
+              <div className="flex justify-between text-[13px] py-1">
+                <span style={{ color: "var(--txt-3)" }}>{tr("فی")}</span>
+                <span style={{ ...num, color: fees[c] ? "var(--neg)" : "var(--txt-3)" }}>
+                  {fees[c] ? "−" + fmtMoney(data, fees[c], c) : fmtMoney(data, 0, c)}
+                </span>
+              </div>
+              <div className="flex justify-between items-baseline pt-2.5 mt-1" style={{ borderTop: "1px solid var(--line)" }}>
+                <span className="text-[13px] font-semibold" style={{ color: "var(--txt)" }}>{tr("گەیشتوو (بەبێ فی)")}</span>
+                <span className="text-[20px] font-semibold" style={{ ...num, color: "var(--pos)" }}>{fmtMoney(data, net[c], c)}</span>
+              </div>
+            </div>
+          ))}
+        </Card>
+      )}
+
+      {!compact && platList.length > 1 && (
+        <Card className="px-4 py-2">
+          <div className="pt-2"><SecLbl>{tr("بەپێی پلاتفۆرم")}</SecLbl></div>
+          {platList.map(([pl, v]) => (
+            <Row key={pl} title={platMeta(pl).ku} sub={`${v.n} ${tr("فیش")}`}
+              right={Object.entries(v.cur).map(([c, a]) => `${fmtMoney(data, a, c)} ${c}`).join(" / ")} />
+          ))}
+        </Card>
+      )}
+
+      {!compact && recipients.length > 0 && (
+        <Card className="px-4 py-2">
+          <div className="pt-2"><SecLbl>{tr("بەپێی وەرگر")}</SecLbl></div>
+          {recipients.map((w) => (
+            <Row key={w.name} title={w.name} sub={`${w.count} ${tr("فیش")}`}
+              right={Object.entries(w.byCurrency).map(([c, a]) => `${fmtMoney(data, a.withoutFee, c)} ${c}`).join(" / ")}
+              rightSub={Object.entries(w.byCurrency).map(([c, a]) => u(a.withoutFee, c) != null ? `≈ ${fmt(u(a.withoutFee, c), 0)} $` : null).filter(Boolean)[0]} />
+          ))}
+        </Card>
+      )}
+
+      {rejected.length > 0 && (
+        <div className="text-[12px] px-1" style={{ color: "var(--neg)" }}>
+          {rejected.length} {tr("فیش ڕەت کراوەتەوە — هەژمار نەکراون")}
+        </div>
+      )}
+    </>
+  );
+}
+
+/* ─────────── فیشە ڕەتکراوەکان — بە هۆکارەوە ─────────── */
+function RejectedReceipts({ rows, data, title = "فیشە ڕەتکراوەکان" }) {
+  const bad = (rows || []).filter((r) => r.counted === false || r.status === "dup" || r.status === "error");
+  const [open, setOpen] = useState(false);
+  if (!bad.length) return null;
+
+  // کۆکردنەوە بەپێی هۆکار
+  const byCode = {};
+  bad.forEach((r) => { const k = r.reject_code || r.rejectCode || "other"; byCode[k] = (byCode[k] || 0) + 1; });
+
+  return (
+    <Card className="p-5 border-[color-mix(in_srgb,var(--neg)_34%,transparent)] bg-[color-mix(in_srgb,var(--neg)_8%,transparent)]">
+      <button onClick={() => setOpen(!open)} className="w-full text-right">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2 font-bold text-[var(--neg)]">
+              <AlertTriangle className="w-4 h-4" /> {title}
+            </div>
+            <div className="text-xs text-[var(--neg)]/80 mt-1.5" style={num}>
+              {bad.length} فیش هەژمار نەکراون
+            </div>
+            <div className="flex gap-1.5 mt-2 flex-wrap">
+              {Object.entries(byCode).map(([k, n]) => (
+                <Pill key={k} tone="red">{REJECT_KU[k] || "هۆکاری تر"} ({n})</Pill>
+              ))}
+            </div>
+          </div>
+          <ChevronLeft className={`w-5 h-5 text-rose-400 transition-transform shrink-0 ${open ? "-rotate-90" : "rotate-180"}`} />
+        </div>
+      </button>
+
+      {open && (
+        <div className="mt-4 pt-4 border-t border-[color-mix(in_srgb,var(--neg)_26%,transparent)] space-y-2.5">
+          {bad.map((r) => (
+            <div key={r.id} className="bg-[var(--surf)] rounded-[var(--r-sm)] border border-[color-mix(in_srgb,var(--neg)_26%,transparent)] p-3">
+              <div className="flex gap-3">
+                {r.image_path
+                  ? <ReceiptImg path={r.image_path} className="w-16 h-16 object-cover rounded-lg border border-[var(--line)] shrink-0 opacity-70" />
+                  : r.url
+                    ? <img src={r.url} alt="" className="w-16 h-16 object-cover rounded-lg border border-[var(--line)] shrink-0 opacity-70" />
+                    : <div className="w-16 h-16 bg-[var(--line)] rounded-lg shrink-0" />}
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-baseline gap-2 flex-wrap">
+                    <span className="text-base font-bold text-[var(--txt-3)] line-through" style={num}>
+                      {r.amount ? fmtMoney(data, r.net_amount ?? r.net ?? r.amount, r.currency) : "—"}
+                    </span>
+                    <span className="text-xs text-[var(--txt-3)]">{r.currency || ""}</span>
+                    <Pill tone="red">{tr("هەژمار نەکراوە")}</Pill>
+                  </div>
+                  <div className="mt-1.5 text-xs text-[var(--neg)] bg-[color-mix(in_srgb,var(--neg)_10%,transparent)] rounded-lg px-2.5 py-1.5 leading-relaxed">
+                    <b>{tr("هۆکار:")}</b> {r.reject_reason || r.rejectReason || r.note || tr("نەزانراو")}
+                  </div>
+                  <div className="mt-1.5 grid grid-cols-2 gap-x-3 gap-y-0.5 text-[11px] text-[var(--txt-2)]">
+                    {(r.ref_no || r.refNo) && <div style={num}>{tr("ژمارەی مامەڵە:")} <b>{r.ref_no || r.refNo}</b></div>}
+                    {(r.tx_time || r.txTime) && <div>{tr("کاتی مامەڵە:")} <b>{r.tx_time || r.txTime}</b></div>}
+                    {(r.receiver) && <div>{tr("وەرگر:")} <b>{r.receiver}</b></div>}
+                    {(r.sender) && <div>{tr("ناردەر:")} <b>{r.sender}</b></div>}
+                    {(r.bank) && <div>{tr("ئەپ/بانک:")} <b>{r.bank}</b></div>}
+                    {r.created_at && <div style={num}>{tr("کاتی ناردن:")} <b>{new Date(r.created_at).toLocaleString("en-GB")}</b></div>}
+                  </div>
+                  {(r.dup_of_date || r.dupOfDate) && (
+                    <div className="mt-1.5 text-[11px] text-[var(--txt-2)] bg-[var(--line)] rounded-lg px-2.5 py-1.5">
+                      {tr("فیشە ڕەسەنەکە:")} <b style={num}>{new Date(r.dup_of_date || r.dupOfDate).toLocaleString("en-GB")}</b>
+                      {(r.dup_of_who || r.dupOfWho) && <> · لەلایەن <b>{r.dup_of_who || r.dupOfWho}</b></>}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+/* ─────────── لیستی فیشەکان + گەلەری ─────────── */
+function ReceiptList({ rows, showFrom }) {
+  const [view, setView] = useState("list");
+  const all = rows || [];
+  rows = all.filter((r) => r.counted !== false && r.status !== "dup" && r.status !== "error");
+  if (!all.length) return <Card className="p-2"><Empty t={tr("هیچ فیشێک نییە")} /></Card>;
+  if (!rows.length) return <Card className="p-2"><Empty t={tr("هەموو فیشەکان ڕەت کراونەتەوە")} /></Card>;
+  return (
+    <div className="space-y-3">
+      <Tabs items={[["list", tr("وردەکاری")], ["gallery", tr("وێنەکان")]]} value={view} onChange={setView} />
+      {view === "gallery" ? (
+        <div className="grid grid-cols-3 gap-2">
+          {rows.filter((r) => r.image_path).map((r) => (
+            <div key={r.id} className="relative rise rounded-[var(--r-sm)] overflow-hidden">
+              <ReceiptImg path={r.image_path} className="w-full aspect-square object-cover" />
+              <div className="absolute inset-x-0 bottom-0 px-2 py-1.5 text-[10.5px] font-semibold text-white text-center"
+                style={{ background: "linear-gradient(0deg, rgba(0,0,0,.85), transparent)", ...num }}>
+                {fmt(r.net_amount ?? r.amount, currencyDecimals(null, r.currency))}
+              </div>
+            </div>
+          ))}
+          {rows.filter((r) => r.image_path).length === 0 && <div className="col-span-full"><Empty t={tr("هیچ وێنەیەک نییە")} /></div>}
+        </div>
+      ) : (
+        <Card className="px-3 py-1">
+          {rows.map((r, i) => (
+            <div key={r.id} className="flex items-center gap-3 py-3"
+              style={i ? { borderTop: "1px solid var(--line)" } : {}}>
+              {r.image_path
+                ? <ReceiptImg path={r.image_path} className="w-11 h-11 object-cover rounded-[10px] shrink-0" />
+                : <div className="w-11 h-11 rounded-[10px] shrink-0" style={{ background: "var(--surf-3)" }} />}
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-[14px] font-semibold" style={{ ...num, color: "var(--txt)" }}>
+                    {fmt(r.net_amount ?? r.amount, currencyDecimals(null, r.currency))}
+                  </span>
+                  <span className="text-[11px]" style={{ color: "var(--txt-3)" }}>{r.currency}</span>
+                  {r.fee > 0 && <span className="text-[10px]" style={{ ...num, color: "var(--txt-3)" }}>+{fmt(r.fee, currencyDecimals(null, r.currency))}</span>}
+                  {(r.platform || detectPlatform(r.bank)) && (() => {
+                    const m = platMeta(r.platform || detectPlatform(r.bank));
+                    return <span className="px-2 py-0.5 rounded-full text-[9.5px] font-bold"
+                      style={{ background: "var(--glass-2)", color: "var(--txt-2)" }}>{m.ku}</span>;
+                  })()}
+                </div>
+                <div className="text-[11px] mt-0.5 truncate" style={{ color: "var(--txt-3)" }}>
+                  {showFrom && r.customer_name ? r.customer_name + " → " : ""}{r.receiver || "—"}
+                </div>
+                <div className="text-[10px] mt-0.5 truncate" style={{ ...num, color: "var(--txt-3)" }}>
+                  {r.ref_no || "—"} · {r.tx_time || new Date(r.created_at).toLocaleDateString("en-GB")}
+                </div>
+                {/* The name the person who sent it can quote down a phone. Both sides read the
+                    same one — it is the intake document's, not a second one minted here. */}
+                {r.tracking_code && (
+                  <div className="text-[10px] mt-0.5 truncate font-mono" style={{ color: "var(--txt-3)" }}>
+                    {r.tracking_code}
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+        </Card>
+      )}
+    </div>
+  );
+}
+
+/* ─────────── ئەپلۆدکەری فیش ─────────── */
+function ReceiptUploader({ customerId, customerName, partnerId, uploaderId, direction = "in", onDone, flash, data, allowDirection, simple = false, staffReview = false, role, adminOverrideReason = null }) {
+  const [rows, setRows] = useState([]);
+  const rowsRef = useRef([]);
+  // A customer-seller sells to the house: their evidence is always money that arrived for them.
+  // Offering them the other direction invites a receipt the house is not buying, booked the
+  // wrong way round. Staff still choose, because staff record both sides of the counter.
+  const allowedDirections = uploadDirectionsFor(role);
+  const mayChooseDirection = !!allowDirection && allowedDirections.length > 1;
+  const [dir, setDir] = useState(allowedDirections.includes(direction) ? direction : allowedDirections[0]);
+  const [working, setWorking] = useState(false);
+  const [prog, setProg] = useState(null);
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState(null);
+  const [share, setShare] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [reviewTab, setReviewTab] = useState("all");
+  const [reviewSearch, setReviewSearch] = useState("");
+  const [reviewPlatform, setReviewPlatform] = useState("all");
+  const [selectedRows, setSelectedRows] = useState([]);
+  const [inspectorId, setInspectorId] = useState(null);
+  const [dragActive, setDragActive] = useState(false);
+  const [intakeSource, setIntakeSource] = useState("app");
+  const cameraInputRef = useRef(null);
+  const galleryInputRef = useRef(null);
+  const shareInputRef = useRef(null);
+  const receiptCommandRef = useRef(null);
+  const maxAge = 7;
+  const shareImportStarted = useRef(false);
+
+  // A send whose answer was lost leaves a note behind. On the next load the note is redeemed:
+  // the uploader is told their receipts arrived, instead of being left to send them again and
+  // be refused as duplicates.
+  const [resumedSend, setResumedSend] = useState(null);
+  useEffect(() => {
+    const pending = pendingSend();
+    if (!pending) return;
+    let alive = true;
+    (async () => {
+      const r = await resolveSendOutcome(supabase, pending.batchId);
+      if (!alive) return;
+      // Unknown stays remembered; there is nothing honest to say yet.
+      if (r.outcome === "unknown") return;
+      forgetSend();
+      if (r.outcome === "landed") setResumedSend({ ...r, text: outcomeText(r.outcome) });
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  const commitRows = (updater) => {
+    setRows((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      rowsRef.current = next;
+      return next;
+    });
+    // A refusal describes the rows as they were. Deleting or correcting one of them makes it a
+    // statement about receipts that no longer exist — the owner deleted three receipts and the
+    // red banner naming them stayed on the screen, so the remaining eight looked unsendable too.
+    setSendError(null);
+  };
+  useEffect(() => { rowsRef.current = rows; }, [rows]);
+
+  // An object URL pins its whole image blob until it is revoked, so a removed or replaced
+  // receipt must release its picture rather than leaving every full-size image the session
+  // ever decoded resident. Done here, after the render commits, rather than inside the state
+  // updater — an updater may be invoked more than once, and revoking is not a pure operation.
+  const seenRowsRef = useRef([]);
+  useEffect(() => {
+    revokeDroppedUrls(seenRowsRef.current, rows, (url) => URL.revokeObjectURL(url));
+    seenRowsRef.current = rows;
+  }, [rows]);
+  // Nothing survives unmount, so nothing should still be held.
+  useEffect(() => () => revokeAllUrls(seenRowsRef.current, (url) => URL.revokeObjectURL(url)), []);
+
+  const patchRow = (id, patch) => {
+    commitRows((xs) => xs.map((r) => r.id === id ? { ...r, ...(typeof patch === "function" ? patch(r) : patch) } : r));
+  };
+
+  const criticalLowFields = (fc = {}, row = {}) => {
+    const out = [];
+    const checks = [
+      ["amount", 0.72, "بڕ"],
+      ["currency", 0.68, "دراو"],
+      ["refNo", 0.55, "ژمارەی مامەڵە"],
+      ["platform", 0.65, "پلاتفۆرم"],
+      ["receiver", 0.50, "وەرگر"],
+    ];
+    checks.forEach(([k, min, label]) => {
+      // Some WeChat QR-payment receipts legitimately show only Recipient Note,
+      // not a recipient person/name. Do not force a false receiver in that case.
+      if (k === "receiver" && row.platform === "WeChat" && row.recipientNote) return;
+      if (fc[k] != null && clamp01(fc[k]) < min) out.push(label);
+    });
+    return out;
+  };
+
+  const classifyParsed = async (id, img, d) => {
+    if (d?.ok === false) {
+      const reason = d.note || "ئەم وێنەیە فیشی پارەدان نییە";
+      return {
+        id, url: img.url, blob: img.blob, hash: img.hash, ocrImage: img.b64 || img.ocrImage, mediaType: img.mediaType,
+        status: "error", counted: false, reviewRequired: false,
+        rejectCode: "not_receipt", rejectReason: reason, note: reason, raw: d,
+      };
+    }
+
+    // API v5 normalizes receipt money to positive accounting magnitudes.
+    // Keep this defensive Math.abs for older/cached responses too.
+    const feeV = Math.abs(Number(d?.fee) || 0);
+    const amountV = Math.abs(Number(d?.amount) || 0);
+    const feeOrig = d?.feeOriginal != null ? Math.abs(Number(d.feeOriginal) || 0) : feeV;
+    const feeDisc = Math.abs(Number(d?.feeDiscount) || 0);
+    // Zero means the receipt states no separate order amount, not an order of nothing. Carried
+    // through as a real figure it makes the expected net zero and every reconciled receipt looks
+    // wrong; it also drove `netV` to 0 whenever the reader gave no net of its own.
+    const orderAmountRead = d?.orderAmount != null && Number.isFinite(Number(d.orderAmount))
+      ? Math.abs(Number(d.orderAmount))
+      : null;
+    const orderAmountV = orderAmountRead ? orderAmountRead : null;
+    const netV = d?.netAmount != null && Number.isFinite(Number(d.netAmount))
+      ? Math.abs(Number(d.netAmount))
+      : (orderAmountV != null ? orderAmountV : Math.max(0, amountV - feeV));
+    const plat = detectPlatform(`${d?.platform || ""} ${d?.bank || ""} ${d?.platformEvidence || ""}`) || d?.platform || null;
+    const rn = normRef(d?.refNo);
+    const merchantRn = normRef(d?.merchantOrderNo);
+    const fc = d?.fieldConfidence && typeof d.fieldConfidence === "object" ? d.fieldConfidence : {};
+    const conf = clamp01(d?.confidence, 0.5);
+
+    // An identifier repeated is a hard duplicate. The four together — same currency, amount, day
+    // and recipient, with no identifier matching — is a suspicion for a person to settle, because
+    // it is also the shape of a genuine second payment to the same supplier on a busy day.
+    let suspect = null;
+    // A duplicate check that fails is a duplicate check that did not happen, and swallowing it
+    // leaves a receipt looking as though it passed. Declared out here because it is read below,
+    // outside the block that sets it — inside, it is a free variable at the point of use, and a
+    // free variable in this file has already cost this project a whole evening of uploads that
+    // did nothing at all.
+    let dupeCheckFailed = null;
+    // The image itself is always a key, so this always runs. It used to run only when the
+    // reading had produced a reference — and `p_hash` was hard-coded to null, so the one rule
+    // that catches the same photograph sent twice never ran at all. An unreadable receipt could
+    // be uploaded five times and become five receipts, with the hash that would have caught
+    // every one of them computed, stored, and thrown away at the call.
+    if (img.hash || rn || merchantRn || (d?.currency && amountV != null && d?.txDate && (d?.receiver || d?.sender))) {
+      const local = rowsRef.current.find((r) => r.id !== id && r.status !== "error" && (
+        (img.hash && r.hash === img.hash) ||
+        (rn && r.refNo && normRef(r.refNo) === rn) ||
+        (merchantRn && r.merchantOrderNo && normRef(r.merchantOrderNo) === merchantRn)
+      ));
+      let old = null;
+      try {
+        const { data: hit, error: dupErr } = await supabase.rpc("check_receipt_dupe", {
+          p_hash: img.hash || null,
+          p_ref: rn,
+          p_merchant_ref: merchantRn,
+          p_currency: d?.currency || null,
+          p_amount: amountV ?? null,
+          p_tx_date: d?.txDate || null,
+          p_payee: d?.receiver || d?.sender || null,
+          // The document row is written before the image is read, so by now the receipt in hand
+          // is already in the table it is being compared against.
+          p_exclude_id: id,
+        });
+        if (dupErr) throw dupErr;
+        if (hit?.length) old = hit[0];
+      } catch (cause) {
+        console.error("duplicate check", cause);
+        dupeCheckFailed = cause?.message || "unknown";
+      }
+      // A suspicion is never a refusal: it goes to review with the reason attached.
+      if (old?.kind === "suspect" && !local) { suspect = old; old = null; }
+      if (local || old) {
+        // Say which receipt, by the name both sides can read out, and say what actually matched.
+        // "ژمارەی مامەڵەی … پێشتر تۆمار کراوە" named a reference the person cannot look up, and
+        // said "reference" even when it was the image that repeated.
+        const repeatedIdentifier = rn && local?.refNo && normRef(local.refNo) === rn ? d.refNo : d.merchantOrderNo;
+        const sameImage = (local && img.hash && local.hash === img.hash) || old?.matched_key === "image";
+        const earlier = old?.tracking_code || old?.ref || null;
+        const when = old?.d ? new Date(old.d).toLocaleString("en-GB") : null;
+        const reason = local
+          ? (sameImage
+            ? "هەمان وێنە لەم کۆمەڵەیەدا دووبارە بووەتەوە"
+            : `هەمان ناسنامەی مامەڵە (${repeatedIdentifier}) لەم کۆمەڵەیەدا دووبارە بووەتەوە`)
+          : [
+            sameImage ? "هەمان وێنە پێشتر نێردراوە" : `ژمارەی مامەڵەی ${d.refNo} پێشتر تۆمار کراوە`,
+            earlier ? `— ${earlier}` : null,
+            when ? `لە ${when}` : null,
+            old?.who ? `لەلایەن ${old.who}` : null,
+          ].filter(Boolean).join(" ");
+        return {
+          id, url: img.url, blob: img.blob, hash: img.hash, ocrImage: img.b64 || img.ocrImage, mediaType: img.mediaType,
+          status: "dup", counted: false, reviewRequired: false,
+          rejectCode: local ? "same_batch" : sameImage ? "same_image" : "same_ref",
+          rejectReason: reason, note: reason,
+          dupOf: old?.id || local?.id || null, dupOfDate: old?.d || null, dupOfWho: old?.who || null,
+          amount: amountV, fee: feeV, feeOriginal: feeOrig, feeDiscount: feeDisc, net: netV,
+          orderAmount: d?.orderAmount ?? null,
+          currency: d?.currency, sender: d?.sender, receiver: d?.receiver, refNo: d?.refNo,
+          merchantOrderNo: d?.merchantOrderNo || null,
+          paymentMethod: d?.paymentMethod || null, cardLast4: d?.cardLast4 || null,
+          transactionStatus: d?.transactionStatus || null, recipientNote: d?.recipientNote || null,
+          merchantName: d?.merchantName || null, platformEvidence: d?.platformEvidence || null,
+          txTime: d?.txTime, txDate: d?.txDate, bank: d?.bank, platform: plat,
+          confidence: conf, fieldConfidence: fc, raw: d,
+        };
+      }
+    }
+
+    const reviewReasons = [];
+    let reviewCode = null;
+
+    if (dupeCheckFailed) {
+      reviewReasons.push("پشکنینی دووبارەبوونەوە نەکرا — پێویستە بە دەست دڵنیا ببیتەوە");
+      reviewCode = reviewCode || "dupe_check_unavailable";
+    }
+
+    if (!amountV || amountV <= 0 || !d?.currency || /نەزانراو|unknown/i.test(String(d.currency))) {
+      reviewReasons.push("بڕ یان دراو بە دڵنیایی نەخوێندرایەوە");
+      reviewCode = reviewCode || "missing_required";
+    }
+    if (!rn) {
+      reviewReasons.push("ژمارەی مامەڵە نەدۆزرایەوە");
+      reviewCode = reviewCode || "no_ref";
+    }
+    if (!plat) {
+      reviewReasons.push("پلاتفۆرم بە دڵنیایی نەناسراوەتەوە");
+      reviewCode = reviewCode || "unknown_platform";
+    }
+
+    // Never trust OCR arithmetic. Validate every layout that exposes an order amount,
+    // using integer minor units to avoid floating-point false mismatches.
+    // Checked whenever there is an amount to check — not only when the layout happens to carry
+    // an order amount. Guarding on the order amount is what let a receipt with a mismatched net
+    // pass as "ok" on the screen and then be refused by the send gate, which checks every row:
+    // the interface said three receipts were wrong and marked none of them.
+    let arithmeticValidation = d?.validation || null;
+    if (amountV > 0) {
+      const checked = validateReceiptArithmetic({ amount: amountV, fee: feeV, orderAmount: orderAmountV, netAmount: netV });
+      arithmeticValidation = {
+        ...(arithmeticValidation || {}), type: "gross_order_fee_equation", checked: true,
+        grossMatches: !checked.issues.includes("gross_order_fee_mismatch"), issues: checked.issues,
+        expectedGross: orderAmountV == null ? null : checked.orderAmount + checked.fee,
+      };
+      const objection = arithmeticObjection({ amount: amountV, fee: feeV, orderAmount: orderAmountV, netAmount: netV });
+      if (objection) {
+        // Naming the figures, because "the numbers do not agree" tells nobody which numbers.
+        reviewReasons.push(objection.reason);
+        reviewCode = reviewCode || "amount_validation";
+      }
+    }
+
+    const sameAmountTime = rowsRef.current.find((r) =>
+      r.id !== id && r.status !== "dup" && r.status !== "error" &&
+      Number(r.amount) > 0 && Number(r.amount) === amountV &&
+      r.txTime && d?.txTime && String(r.txTime) === String(d.txTime)
+    );
+    if (sameAmountTime) {
+      reviewReasons.push(`هەمان بڕ و هەمان کات لە فیشێکی تر هەیە — پشکنین پێویستە`);
+      reviewCode = reviewCode || "possible_duplicate";
+    }
+
+    let ageDays = null;
+    if (d?.txDate && /^\d{4}-\d{2}-\d{2}$/.test(d.txDate)) {
+      ageDays = Math.floor((Date.now() - new Date(d.txDate + "T12:00:00").getTime()) / 86400000);
+      if (ageDays > maxAge) {
+        reviewReasons.push(`ڕێکەوتی کۆنە — ${ageDays} ڕۆژ لەمەوبەر`);
+        reviewCode = reviewCode || "old_date";
+      }
+    }
+
+    const low = criticalLowFields(fc, { platform: plat, recipientNote: d?.recipientNote });
+    if (conf < 0.72 || low.length) {
+      reviewReasons.push(low.length ? `دڵنیایی نزم لە: ${low.join("، ")}` : "دڵنیایی گشتیی خوێندنەوە نزمە");
+      reviewCode = reviewCode || "low_confidence";
+    }
+
+    if (d?.note && /دەستکاری|فۆتۆشۆپ|tamper|edited|manipulat/i.test(String(d.note))) {
+      reviewReasons.push(`⚠️ ${d.note}`);
+      reviewCode = reviewCode || "tampered";
+    }
+
+    // Duplicate key 4: everything matches except an identifier. Held for a person, not refused.
+    if (suspect) {
+      reviewReasons.push(`هەمان بڕ، هەمان ڕۆژ و هەمان وەرگر پێشتر تۆمار کراوە${suspect.d ? ` لە ${new Date(suspect.d).toLocaleDateString("en-GB")}` : ""} — دڵنیا بەوە کە دوو پارەدانی جیاوازن`);
+      reviewCode = reviewCode || "possible_duplicate";
+    }
+
+    let note = reviewReasons.join(" · ");
+    if (!note && feeDisc > 0) note = `داشکاندنی فی: ${fmtMoney(data, feeOrig, d?.currency)} → ${fmtMoney(data, feeV, d?.currency)}`;
+    else if (!note && d?.note) note = d.note;
+
+    const status = reviewReasons.length ? "suspect" : "ok";
+    return {
+      id, url: img.url, blob: img.blob, hash: img.hash, ocrImage: img.b64 || img.ocrImage, mediaType: img.mediaType,
+      status, counted: status === "ok", reviewRequired: status === "suspect",
+      rejectCode: status === "suspect" ? reviewCode : null,
+      rejectReason: status === "suspect" ? note : null,
+      note, ageDays,
+      amount: amountV, fee: feeV, feeOriginal: feeOrig, feeDiscount: feeDisc, net: netV,
+      orderAmount: orderAmountV,
+      validation: arithmeticValidation,
+      currency: d?.currency, sender: d?.sender, receiver: d?.receiver, refNo: d?.refNo,
+      merchantOrderNo: d?.merchantOrderNo || null,
+      paymentMethod: d?.paymentMethod || null, cardLast4: d?.cardLast4 || null,
+      transactionStatus: d?.transactionStatus || null, recipientNote: d?.recipientNote || null,
+      merchantName: d?.merchantName || null, platformEvidence: d?.platformEvidence || null,
+      txTime: d?.txTime, txDate: d?.txDate, bank: d?.bank, platform: plat,
+      confidence: conf, fieldConfidence: fc, raw: d,
+      // Carried through to ingestion, where the figures are checked against it.
+      attestation: d?.attestation || null,
+    };
+  };
+
+  /** Durable intake: the transaction assignment supplies every business field. */
+  const durableIntake = async ({ id, img, patchRow }) => {
+    return intakeReceipt({
+      client: supabase,
+      documentId: id,
+      blob: img.blob,
+      mediaType: img.mediaType || "image/jpeg",
+      // Absent for a customer-seller, whose receipt precedes any transaction. A partner
+      // uploading against an assignment supplies one; nothing here does yet.
+      transactionId: null,
+      batchId: receiptCommandRef.current?.batchId || null,
+      // Whose receipt this is, when staff are the ones holding the phone. A customer-seller
+      // uploading their own is recorded against themselves and this is ignored.
+      customerId: staffReview ? (customerId || null) : null,
+      // Read here and declared nowhere, so a staff upload threw ReferenceError while a
+      // customer's did not — the ternary short-circuits before reaching it when staffReview is
+      // false. It is a prop now, filled from the reason the staff screen already asks for.
+      adminOverrideReason: staffReview ? (adminOverrideReason || null) : null,
+      onStage: (stage, info) => patchRow(id, { note: intakeStatusText(info?.state) || stage }),
+    });
+  };
+
+  const onFiles = async (files, source = "gallery") => {
+    // There was a guard here — `if (!transactionId) return flash(...)` — and transactionId is
+    // not a prop of this component, not a state, and not declared anywhere in this file. It was
+    // a free variable, so the line threw ReferenceError the instant anybody chose an image:
+    // no flash, no rows, no error on screen, nothing at all. Every upload, for every role.
+    //
+    // It is gone rather than corrected, because the rule it was reaching for is wrong anyway.
+    // A customer-seller's receipt is what the transaction is made from; asking for a transaction
+    // before accepting the receipt inverts the flow the whole feature exists to replace.
+    const list = Array.from(files || []).filter((f) => f.type?.startsWith("image/"));
+    if (!list.length) return flash("تەنها وێنە هەڵبژێرە");
+    if (working) return;
+
+    setIntakeSource(source);
+    setWorking(true);
+    // Created up front, not at send time: the durable intake and the later ingest must agree
+    // on the batch id so both resolve to one storage path per receipt.
+    //
+    // It used to be built by hand here — `{ batchId: \`receipt-batch-${uid()}\` }` — with no
+    // idempotency key, and `send()` only fills one in when the ref is still empty. Choosing
+    // images always ran this first, so the send that followed carried `p_command_key:
+    // undefined`. JSON.stringify drops an undefined value entirely, so the argument never
+    // reached the server at all: PostgREST could not match the three-argument function, called
+    // it missing from the schema cache, and the fallback route was handed the same nothing.
+    // Every send failed, for every uploader, and none of it was about the receipts.
+    receiptCommandRef.current ||= createReceiptIngestionCommand();
+    const tasks = list.map((file) => ({ id: uid(), file }));
+    setInspectorId((current) => current || tasks[0]?.id || null);
+    commitRows((xs) => [
+      ...xs,
+      ...tasks.map(({ id, file }) => ({
+        id, status: "processing", counted: false, reviewRequired: false,
+        fileName: file.name, note: "ئامادەکردنی وێنە…",
+      })),
+    ]);
+
+    let done = 0;
+    let cooldownUntil = 0;
+
+    // One OCR worker is intentional: vision requests can hit token-per-minute
+    // limits long before request-per-minute limits. This queue uses provider
+    // reset metadata and Retry-After instead of blind concurrency.
+    for (let pos = 0; pos < tasks.length; pos++) {
+      const { id, file } = tasks[pos];
+
+      const cooldownMs = Math.max(0, cooldownUntil - Date.now());
+      if (cooldownMs > 0) {
+        patchRow(id, { note: `چاوەڕوانی خوێندنەوە... ${Math.ceil(cooldownMs / 1000)} چرکە` });
+        await waitMs(cooldownMs);
+      }
+
+      try {
+          patchRow(id, { note: "ئامادەکردنی وێنە…", status: "processing" });
+          const img = await prepImage(file);
+          patchRow(id, { url: img.url, blob: img.blob, hash: img.hash, ocrImage: img.b64, mediaType: img.mediaType, note: "پاراستنی بەڵگە…" });
+
+          // Store the evidence BEFORE reading it. Past this point an OCR failure degrades the
+          // reading but can no longer lose the receipt.
+          patchRow(id, { note: "ناردنی وێنە…", status: "processing" });
+          const intake = await durableIntake({ id, img, patchRow });
+          // Preserve the durable identity before interpreting or retrying OCR. Even an exact
+          // duplicate remains an immutable, discoverable document; only the server may decide
+          // whether it is counted.
+          patchRow(id, { documentId: intake.documentId || id, intakeState: intake.state || null,
+                         stagedPath: intake.storagePath || undefined,
+                         note: intakeStatusText(intake.state), status: "processing" });
+          const d = intake.extraction;
+          if (intake.readError || !d) throw intake.readError || new Error("خوێندنەوەکە چاوەڕوانە");
+          const ready = await classifyParsed(id, img, d);
+          const serverVerdicts = {
+            duplicate: { status: "dup", counted: false, reviewRequired: false, rejectCode: "server_duplicate" },
+            currency_mismatch: { status: "suspect", counted: false, reviewRequired: true, rejectCode: "currency_mismatch" },
+            tamper_suspected: { status: "suspect", counted: false, reviewRequired: true, rejectCode: "tamper_suspected" },
+            rejected: { status: "error", counted: false, reviewRequired: false, rejectCode: "server_rejected" },
+          };
+          const verdict = serverVerdicts[intake.state] || null;
+          patchRow(id, {
+            ...ready,
+            ...(verdict || {}),
+            documentId: intake.documentId || id,
+            intakeState: intake.state || null,
+            stagedPath: intake.storagePath || undefined,
+            ...(verdict ? { note: intakeStatusText(intake.state), rejectReason: intakeStatusText(intake.state) } : {}),
+          });
+
+          // Respect the provider's token reset window before the next image.
+          if (pos < tasks.length - 1) {
+            const paceMs = ocrPaceAfterResult(d);
+            cooldownUntil = Math.max(cooldownUntil, Date.now() + paceMs);
+          }
+        } catch (e) {
+          const temporary = isTemporaryOcrError(e);
+          // What the server said, when it said anything. Every read failure used to reach this
+          // line as the same sentence — the image is safe, it will be retried — so an unset API
+          // key and an expired session were indistinguishable on screen and in a screenshot.
+          const named = receiptReadFailureText(e);
+          const reason = temporary
+            ? ocrRetryNote(e)
+            : `نەتوانرا بخوێندرێتەوە: ${named || errorText(e)}`;
+          patchRow(id, {
+            status: temporary ? "retry" : "error",
+            counted: false,
+            reviewRequired: !temporary,
+            rejectCode: temporary ? "api_retry" : "unreadable",
+            rejectReason: reason,
+            note: reason,
+            retryAfterSeconds: Number(e?.retryAfterSeconds) || null,
+          });
+
+          if (temporary && pos < tasks.length - 1) {
+            const retryMs = Number(e?.retryAfterSeconds) > 0
+              ? Math.ceil(Number(e.retryAfterSeconds) * 1000) + 500
+              : 8000;
+            cooldownUntil = Math.max(cooldownUntil, Date.now() + Math.min(30000, retryMs));
+          }
+        } finally {
+          done += 1;
+          setProg(`${done} لە ${tasks.length}`);
+        }
+      }
+
+    setWorking(false);
+    setProg(null);
+  };
+
+  useEffect(() => {
+    const handoffId = new URLSearchParams(window.location.search).get("receiptShare");
+    if (!handoffId || handoffId === "invalid" || shareImportStarted.current || working) {
+      if (handoffId === "invalid" && !shareImportStarted.current) { shareImportStarted.current = true; flash(sharedReceiptMessage("invalid")); }
+      return;
+    }
+    const owner = `${uploaderId || ""}:${customerId || partnerId || ""}`;
+    if (!uploaderId || (!customerId && !partnerId)) return;
+    shareImportStarted.current = true;
+    let claimed;
+    (async () => {
+      flash(sharedReceiptMessage("loading"));
+      try {
+        claimed = await claimSharedReceiptHandoff(handoffId, owner);
+        if (claimed.status !== "ready") { flash(sharedReceiptMessage(claimed.status)); return; }
+        const checked = await validateClaimedSharedFiles(claimed.files);
+        if (!checked.accepted.length) throw new Error("no valid shared receipt images");
+        await onFiles(checked.accepted, "share");
+        await finishSharedReceiptHandoff(handoffId, claimed.lease);
+        const q = new URLSearchParams(window.location.search); q.delete("receiptShare"); q.delete("shareRejected");
+        window.history.replaceState(null, "", `${window.location.pathname}${q.size ? `?${q}` : ""}${window.location.hash}`);
+        flash(sharedReceiptMessage("ready", claimed.rejected.length + checked.rejected.length));
+      } catch (_) {
+        if (claimed?.lease) await releaseSharedReceiptHandoff(handoffId, claimed.lease).catch(() => {});
+        shareImportStarted.current = false;
+        flash("نەتوانرا وێنە هاوبەشکراوەکان بکرێنەوە؛ تکایە دووبارە هەوڵ بدەوە.");
+      }
+    })();
+  }, [uploaderId, customerId, partnerId]);
+
+  const retryRow = async (id) => {
+    const r = rowsRef.current.find((x) => x.id === id);
+    if (!r?.documentId) return flash("ناسنامەی فیشە پارێزراوەکە بەردەست نییە");
+    patchRow(id, { status: "processing", counted: false, reviewRequired: false, note: "دووبارە دەخوێندرێتەوە…" });
+    try {
+      const serverResult = await requestStoredReceiptOcr(supabase, r.documentId);
+      const d = serverResult.extraction;
+      if (!d) {
+        patchRow(id, {
+          status: serverResult.state === "ocr_failed_retryable" ? "retry" : "suspect",
+          counted: false,
+          reviewRequired: serverResult.state !== "ocr_failed_retryable",
+          note: intakeStatusText(serverResult.state),
+          intakeState: serverResult.state,
+        });
+        return;
+      }
+      const ready = await classifyParsed(id, r, d);
+      patchRow(id, { ...ready, intakeState: serverResult.state });
+    } catch (e) {
+      // The retry path reaches the reader without going through intakeReceipt, so it has to write
+      // the reason down itself or a retried failure is as silent as the first one was.
+      noteReceiptReadFailure(supabase, r.documentId, e);
+      const temporary = isTemporaryOcrError(e);
+      const named = receiptReadFailureText(e);
+      const reason = temporary
+        ? ocrRetryNote(e, "خزمەتگوزاری خوێندنەوە هێشتا کاتێک بەردەست نییە")
+        : `نەتوانرا دووبارە بخوێندرێتەوە: ${named || errorText(e)}`;
+      patchRow(id, {
+        status: temporary ? "retry" : "error",
+        counted: false,
+        reviewRequired: !temporary,
+        rejectCode: temporary ? "api_retry" : "unreadable",
+        rejectReason: reason,
+        note: reason,
+        retryAfterSeconds: Number(e?.retryAfterSeconds) || null,
+      });
+    }
+  };
+
+  const editField = (id, key, value) => {
+    patchRow(id, (r) => {
+      const numeric = ["amount", "fee", "net", "orderAmount", "feeOriginal", "feeDiscount"].includes(key);
+      const next = { ...r, [key]: numeric ? (value === "" ? "" : Number(value)) : value, manualEdited: true };
+      if (["amount", "fee", "orderAmount"].includes(key)) {
+        const recomputed = receiptNetFrom(next);
+        if (recomputed != null) next.net = recomputed;
+      }
+      return next;
+    });
+  };
+
+  const confirmRow = (id) => {
+    const r = rowsRef.current.find((x) => x.id === id);
+    if (!r) return;
+    if (r.status === "dup") return flash("فیشی دووبارە ناتوانرێت وەک فیشی نوێ پشتڕاست بکرێتەوە");
+    if (!(Number(r.amount) > 0) || !String(r.currency || "").trim()) {
+      return flash("بڕ و دراو پێویستن پێش پشتڕاستکردنەوە");
+    }
+    const objection = arithmeticObjection({ amount: r.amount, fee: r.fee, orderAmount: r.orderAmount, netAmount: r.net });
+
+    // Handing a reading to the operator comes first, and is never refused for the arithmetic:
+    // this route exists precisely for figures the uploader is not allowed to put right. Refusing
+    // it here left a customer with a receipt they could neither correct, hand over, nor send —
+    // only delete, which is the one thing evidence must never invite.
+    if (!staffReview && (objection || r.manualEdited || r.status === "suspect")) {
+      patchRow(id, {
+        status: "error", counted: false, reviewRequired: false,
+        rejectCode: objection ? "amount_validation" : "manual_review_required",
+        rejectReason: objection ? objection.reason
+          : "زانیاریی فیشەکە دەستکاری کراوە یان دڵنیایی خوێندنەوە نزمە؛ بۆ پشکنینی ئەدمین تۆمار دەکرێت",
+        note: "بۆ پشکنینی ئەدمین تۆمار دەکرێت",
+        reviewedManually: true,
+      });
+      setEditingId(null);
+      return flash("فیشەکە بۆ پشکنینی ئەدمین ئامادە کرا");
+    }
+
+    // Staff can put it right, so for them it is worth refusing — with the figures named.
+    if (objection) return flash(objection.reason);
+    patchRow(id, {
+      status: "ok", counted: true, reviewRequired: false,
+      rejectCode: null, rejectReason: null,
+      note: r.manualEdited ? "بە دەست پشکنرا و ڕاستکرایەوە ✓" : "بە دەست پشتڕاست کرایەوە ✓",
+      reviewedManually: true,
+    });
+    setEditingId(null);
+  };
+
+  const rejectRow = (id) => {
+    patchRow(id, {
+      status: "error", counted: false, reviewRequired: false,
+      rejectCode: "manual_reject", rejectReason: "بە دەست ڕەتکرایەوە", note: "بە دەست ڕەتکرایەوە",
+      reviewedManually: true,
+    });
+    setEditingId(null);
+  };
+
+  const good = rows.filter((r) => r.status === "ok" && r.counted !== false);
+  const review = rows.filter((r) => r.status === "suspect");
+  const processing = rows.filter((r) => r.status === "processing");
+  const retrying = rows.filter((r) => r.status === "retry");
+  const bad = rows.filter((r) => r.status === "dup" || r.status === "error");
+  const dupN = rows.filter((r) => r.status === "dup").length;
+  const errN = rows.filter((r) => r.status === "error").length;
+  const agg = {};
+  good.forEach((r) => {
+    const c = r.currency || "?";
+    agg[c] = agg[c] || { g: 0, f: 0, n: 0 };
+    agg[c].g += Number(r.amount) || 0;
+    agg[c].f += Number(r.fee) || 0;
+    agg[c].n += Number(r.net) || 0;
+  });
+  const mainCur = Object.keys(agg).sort((a, b) => agg[b].g - agg[a].g)[0] || null;
+
+  const receiptTabCounts = {
+    all: rows.length,
+    ok: good.length,
+    suspect: review.length,
+    retry: retrying.length,
+    dup: dupN,
+    error: errN,
+  };
+  const receiptTabs = [
+    ["all", "هەموو", receiptTabCounts.all],
+    ["ok", "پشتڕاستکراو", receiptTabCounts.ok],
+    ["suspect", "پشکنین", receiptTabCounts.suspect],
+    ["retry", "چاوەڕوانی خوێندنەوە", receiptTabCounts.retry],
+    ["dup", "دووبارە", receiptTabCounts.dup],
+    ["error", "ڕەتکراو/هەڵە", receiptTabCounts.error],
+  ];
+  const platformOptions = Array.from(new Set(rows.map((r) => r.platform || detectPlatform(r.bank)).filter(Boolean))).sort();
+  const normalizedReceiptSearch = normalizeSearchText(reviewSearch);
+  const visibleRows = rows.filter((r) => {
+    if (reviewTab !== "all" && r.status !== reviewTab) return false;
+    const rp = r.platform || detectPlatform(r.bank) || "";
+    if (reviewPlatform !== "all" && rp !== reviewPlatform) return false;
+    if (!normalizedReceiptSearch) return true;
+    return [
+      r.amount, r.currency, r.refNo, r.merchantOrderNo, r.paymentMethod, r.cardLast4, r.transactionStatus, r.recipientNote, r.merchantName, r.receiver, r.sender, r.bank, rp, r.fileName, r.note
+    ].some((v) => normalizeSearchText(v).includes(normalizedReceiptSearch));
+  });
+  const visibleIds = visibleRows.map((r) => r.id);
+  const visibleSelectableIds = visibleRows.filter((r) => r.status !== "processing").map((r) => r.id);
+  const allVisibleSelected = visibleSelectableIds.length > 0 && visibleSelectableIds.every((id) => selectedRows.includes(id));
+  const selectedActual = rows.filter((r) => selectedRows.includes(r.id));
+
+  const toggleSelected = (id) => setSelectedRows((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
+  const toggleAllVisible = () => {
+    setSelectedRows((prev) => {
+      if (allVisibleSelected) return prev.filter((id) => !visibleSelectableIds.includes(id));
+      return Array.from(new Set([...prev, ...visibleSelectableIds]));
+    });
+  };
+  const clearSelected = () => setSelectedRows([]);
+
+  const confirmSelected = () => {
+    const ids = new Set(selectedActual
+      .filter((r) => r.status !== "processing" && r.status !== "dup" && Number(r.amount) > 0 && String(r.currency || "").trim())
+      .map((r) => r.id));
+    if (!ids.size) return flash("هیچ فیشێکی گونجاو بۆ پشتڕاستکردنەوە هەڵنەبژێردراوە");
+    commitRows((xs) => xs.map((r) => ids.has(r.id) ? {
+      ...r,
+      status: "ok",
+      counted: true,
+      reviewRequired: false,
+      rejectCode: null,
+      rejectReason: null,
+      note: r.manualEdited ? "بە دەست پشکنرا و ڕاستکرایەوە ✓" : "بە کۆمەڵەیی پشتڕاست کرایەوە ✓",
+      reviewedManually: true,
+    } : r));
+    setSelectedRows((prev) => prev.filter((id) => !ids.has(id)));
+    if (editingId && ids.has(editingId)) setEditingId(null);
+    flash(`${ids.size} فیش پشتڕاست کرانەوە ✓`);
+  };
+
+  const rejectSelected = () => {
+    const ids = new Set(selectedActual.filter((r) => r.status !== "processing" && r.status !== "dup").map((r) => r.id));
+    if (!ids.size) return flash("هیچ فیشێکی گونجاو بۆ ڕەتکردنەوە هەڵنەبژێردراوە");
+    commitRows((xs) => xs.map((r) => ids.has(r.id) ? {
+      ...r,
+      status: "error",
+      counted: false,
+      reviewRequired: false,
+      rejectCode: "manual_reject",
+      rejectReason: "بە دەست ڕەتکرایەوە",
+      note: "بە دەست ڕەتکرایەوە",
+      reviewedManually: true,
+    } : r));
+    setSelectedRows((prev) => prev.filter((id) => !ids.has(id)));
+    if (editingId && ids.has(editingId)) setEditingId(null);
+    flash(`${ids.size} فیش ڕەتکرانەوە`);
+  };
+
+  const retrySelected = async () => {
+    // Never re-read receipts that are already confirmed unless the user explicitly
+    // changed their status. This keeps quota focused on failed / review rows.
+    const ids = selectedActual
+      .filter((r) => ["retry", "suspect", "error"].includes(r.status) && r.status !== "dup" && r.documentId)
+      .map((r) => r.id);
+
+    if (!ids.length) return flash("هەڵبژاردراوەکان پێویستیان بە دووبارە خوێندنەوە نییە");
+
+    let cooldownUntil = 0;
+    for (let i = 0; i < ids.length; i++) {
+      const waitFor = Math.max(0, cooldownUntil - Date.now());
+      if (waitFor > 0) await waitMs(waitFor);
+
+      const id = ids[i];
+      const before = rowsRef.current.find((r) => r.id === id);
+      await retryRow(id);
+      const after = rowsRef.current.find((r) => r.id === id);
+
+      if (i < ids.length - 1) {
+        if (after?.status === "retry") {
+          const retryMs = Number(after.retryAfterSeconds) > 0
+            ? Math.ceil(Number(after.retryAfterSeconds) * 1000) + 500
+            : 8000;
+          cooldownUntil = Date.now() + Math.min(30000, retryMs);
+        } else {
+          const paceMs = ocrPaceAfterResult(after?.raw);
+          cooldownUntil = Date.now() + paceMs;
+        }
+      }
+    }
+
+    setSelectedRows((prev) => prev.filter((id) => !ids.includes(id)));
+  };
+
+  const retryWaitingRows = async () => {
+    const ids = rowsRef.current.filter((r) => r.status === "retry" && r.documentId).map((r) => r.id);
+    if (!ids.length) return flash("هیچ فیشێکی چاوەڕوانی خوێندنەوە نییە");
+    setSelectedRows(ids);
+    // Run directly because React state selection is asynchronous.
+    let cooldownUntil = 0;
+    for (let i = 0; i < ids.length; i++) {
+      const waitFor = Math.max(0, cooldownUntil - Date.now());
+      if (waitFor > 0) await waitMs(waitFor);
+
+      await retryRow(ids[i]);
+      const after = rowsRef.current.find((r) => r.id === ids[i]);
+      if (i < ids.length - 1) {
+        if (after?.status === "retry") {
+          const retryMs = Number(after.retryAfterSeconds) > 0
+            ? Math.ceil(Number(after.retryAfterSeconds) * 1000) + 500
+            : 8000;
+          cooldownUntil = Date.now() + Math.min(30000, retryMs);
+        } else {
+          cooldownUntil = Date.now() + ocrPaceAfterResult(after?.raw);
+        }
+      }
+    }
+    setSelectedRows([]);
+  };
+
+  const send = async () => {
+    if (working || processing.length) return flash("هێشتا هەندێک فیش دەخوێندرێنەوە");
+    // Staff can put a reading right through the reviewed path, so for them a receipt awaiting
+    // review is worth stopping for. An uploader cannot correct anything — §2 forbids it — so
+    // stopping them leaves no way forward at all, which is how eleven receipts became three
+    // deletions. Theirs travels with the batch instead, marked, for the operator to review.
+    if (review.length && mayEditExtraction(staffReview)) {
+      return flash(`${review.length} فیش پێویستیان بە پشکنینی دەستی هەیە`);
+    }
+    if (retrying.length) return flash(`${retrying.length} فیش بەهۆی کێشەی کاتی خوێندنەوە چاوەڕوانن — ڕەت نەکراونەتەوە`);
+    // The database refuses this too; refusing here means the uploader is told before the images
+    // are sent rather than after.
+    if (!mayUploadDirection(role, dir)) return flash(DIRECTION_REFUSED);
+    // net_amount becomes the transaction amount when the batch is converted, so a row whose
+    // arithmetic does not reconcile must never be counted. One rule decides that, and the same
+    // rule marked the row on the screen — the two used to disagree, so a receipt could look
+    // perfectly fine and still be refused, with nothing on the screen to act on.
+    //
+    // Rejected and unreadable items are evidence too: their image, raw OCR, reason and server
+    // verdict are retained even when no amount exists.
+    const { counted, evidence, objections, blocked } =
+      sendableSet([...good, ...review, ...bad], { mayResolve: mayEditExtraction(staffReview) });
+    if (blocked) {
+      setSendError({
+        code: "receipt_arithmetic",
+        message: `${objections.length} فیش ژمارەکانیان یەک ناگرنەوە. پێش ناردن بیانپشکنە و پشتڕاست بکەرەوە.`,
+        detail: objections.map((o) => o.reason).join(" · "),
+      });
+      return;
+    }
+    // public.receipts declares `amount numeric not null check (amount > 0)` and a currency
+    // matching ^[A-Z]{3,8}$, and the ingestion command re-checks both for EVERY row in the
+    // batch — the rejected ones included. So one image that turned out not to be a receipt at
+    // all, carrying no amount and no currency, refused the whole send with `invalid amount`,
+    // and the eleven good receipts beside it went nowhere.
+    //
+    // Those rows are not lost by being left out: each is already a durable receipt_document
+    // with its image, its reading attempts and the reason it failed, and it stays on the
+    // uploader's screen marked as it is. What has no figures simply cannot be written into a
+    // table whose whole purpose is figures.
+    const storable = (row) => Number(row?.amount) > 0
+      && /^[A-Z]{3,8}$/.test(String(row?.currency || "").trim().toUpperCase());
+    const withoutFigures = evidence.filter((row) => !storable(row));
+    const sendRows = [...counted, ...evidence.filter(storable)];
+    if (!sendRows.length) return flash("هیچ فیشێکی گونجاو بۆ ناردن نییە");
+    const currencies = new Set(counted.map((row) => String(row.currency || "").trim().toUpperCase()).filter(Boolean));
+    if (currencies.size > 1) {
+      setSendError({ code: "mixed_currency", message: "فیشەکانی هەر دراوێک بە جیا بنێرە؛ بۆ نموونە CNY و USD لە یەک ناردندا تێکەڵ مەکە." });
+      return;
+    }
+
+    setSending(true);
+    setSendError(null);
+    receiptCommandRef.current ||= createReceiptIngestionCommand();
+    const command = receiptCommandRef.current;
+    // Written down before the send: if the answer is lost, the question "did they arrive?"
+    // survives a reload and can still be answered.
+    rememberSend(command, sendRows.length);
+    const fallbackCurrencies = new Set(bad.map((row) => String(row.currency || "").trim().toUpperCase()).filter((value) => /^[A-Z]{3,8}$/.test(value)));
+    const batchCurrency = mainCur || (fallbackCurrencies.size === 1 ? [...fallbackCurrencies][0] : "UNKNOWN");
+    const a = mainCur ? agg[mainCur] : { g: 0, f: 0, n: 0 };
+    try {
+      const { data: commitData } = await ingestReceiptBatch({
+        supabase, command, rows: sendRows,
+        onPath: (id, stagedPath) => patchRow(id, { stagedPath }),
+        makeBatch: () => ({
+          id: command.batchId, customer_id: customerId || null, customer_name: customerName || null,
+          partner_id: partnerId || null, direction: dir, currency: batchCurrency,
+          total_gross: a.g, total_fee: a.f, total_net: a.n, dup_n: dupN,
+          rejected_n: bad.length, source: intakeSource,
+        }),
+        makeReceipt: (r, path) => ({
+          id: r.id, batch_id: command.batchId, customer_id: customerId || null, customer_name: customerName || null,
+          direction: dir, amount: r.amount, fee: r.fee || 0, fee_original: r.feeOriginal ?? null,
+          fee_discount: r.feeDiscount || 0, platform: r.platform || null, net_amount: r.net ?? null,
+          currency: r.currency, sender: r.sender || null, receiver: r.receiver || null, ref_no: r.refNo || null,
+          tx_time: r.txTime || null, tx_date: r.txDate || null, bank: r.bank || null, note: r.note || null,
+          image_hash: r.hash, image_path: path, status: r.status === "dup" ? "rejected" : r.status, counted: r.counted !== false,
+          // The verdict this browser reached, which the command then checks for itself against
+          // the amount, the fee, the currency and every receipt already accepted. Without it
+          // `v_accept := coalesce(r->>'intake_status','')='accepted' and ...` is false for every
+          // row, so a send that reported success recorded every receipt as rejected with
+          // "فیشەکە یاساکانی ناردنی نەبڕیوە" and closed the batch with nothing in it.
+          intake_status: r.status === "ok" && r.counted !== false ? "accepted" : "rejected",
+          reject_code: r.rejectCode || null, reject_reason: r.rejectReason || null, dup_of: r.dupOf || null,
+          dup_of_date: r.dupOfDate || null, dup_of_who: r.dupOfWho || null,
+          raw: { ...(r.raw || {}), ocr_v: 6, confidence: r.confidence ?? r.raw?.confidence ?? null,
+            fieldConfidence: r.fieldConfidence || r.raw?.fieldConfidence || null,
+            merchantOrderNo: r.merchantOrderNo || r.raw?.merchantOrderNo || null,
+            orderAmount: r.orderAmount ?? r.raw?.orderAmount ?? null, paymentMethod: r.paymentMethod || r.raw?.paymentMethod || null,
+            cardLast4: r.cardLast4 || r.raw?.cardLast4 || null, transactionStatus: r.transactionStatus || r.raw?.transactionStatus || null,
+            recipientNote: r.recipientNote || r.raw?.recipientNote || null, merchantName: r.merchantName || r.raw?.merchantName || null,
+            platformEvidence: r.platformEvidence || r.raw?.platformEvidence || null,
+            sourceSignedAmount: r.raw?.sourceSignedAmount ?? null, sourceAmountDirection: r.raw?.sourceAmountDirection || null,
+            validation: r.validation || r.raw?.validation || null, reviewedManually: !!r.reviewedManually, manualEdited: !!r.manualEdited,
+            // What the reader read, recorded server-side when it read it. The database
+            // recomputes the digest from the figures above; if they were altered on the way,
+            // the two differ and the batch is refused. §2, enforced rather than displayed.
+            attestation: r.attestation || r.raw?.attestation || null },
+        }),
+      });
+      // The atomic RPC re-checks every receipt server-side (duplicates included) and is the
+      // source of truth; the legacy recovery path does not return these counts, so fall back
+      // to the client's own tally only when the server total is unavailable.
+      const acceptedCount = Number.isFinite(Number(commitData?.accepted_count)) ? Number(commitData.accepted_count) : good.length;
+      const serverRejected = Number.isFinite(Number(commitData?.rejected_count)) ? Number(commitData.rejected_count) - bad.length : 0;
+      const recordedRejects = sendRows.length - counted.length;
+      flash(`${acceptedCount} ${tr("فیش نێردرا")} ✓${recordedRejects ? ` — ${recordedRejects} ${tr("ڕەتکراو بە وێنە و هۆکارەوە تۆمار کران")}` : ""}${withoutFigures.length ? ` — ${withoutFigures.length} ${tr("وێنە نەخوێندرایەوە و بڕ و دراوی نییە؛ وەک بەڵگە پارێزراوە بەڵام نەنێردرا")}` : ""}${serverRejected > 0 ? ` — ⚠️ ${serverRejected} ${tr("لەلایەن سێرڤەرەوە ڕەتکرانەوە؛ هۆکاری هەریەکەیان لەگەڵ فیشەکەدا نووسراوە")}` : ""}`);
+      // Never name a cause the server did not give. This said "rejected as duplicates" whatever
+      // the reason was, and four receipts refused for something else entirely were reported to
+      // the owner as duplicates of nothing — the server had never accepted a single receipt.
+      if (serverRejected > 0) setSendError({
+        code: "server_rejected",
+        message: `${serverRejected} ${tr("فیش لەلایەن سێرڤەرەوە وەرنەگیران")}`,
+        detail: tr("هۆکاری هەریەکەیان لەسەر خودی فیشەکە نووسراوە — لیستی فیشە ڕەتکراوەکان بکەرەوە"),
+      });
+      forgetSend();
+      commitRows([]); receiptCommandRef.current = null; setEditingId(null); setInspectorId(null);
+      setSelectedRows([]); setReviewTab("all"); setReviewSearch(""); setReviewPlatform("all");
+      setIntakeSource("app"); onDone?.();
+    } catch (error) {
+      console.error("receipt ingestion failed", { stage: error.stage, code: error.code, requestId: error.requestId, outcomeUnknown: error.outcomeUnknown });
+      // The write is atomic, so the batch either exists or it does not. Ask, rather than
+      // telling the uploader it failed and sending them into a retry the duplicate check
+      // will then refuse.
+      const settled = await settleFailedSend(supabase, command, error);
+      if (settled.outcome === "landed") {
+        flash(settled.text);
+        commitRows([]); receiptCommandRef.current = null; setEditingId(null); setInspectorId(null);
+        setSelectedRows([]); setReviewTab("all"); setReviewSearch(""); setReviewPlatform("all");
+        setIntakeSource("app"); onDone?.();
+        return;
+      }
+      const message = error.requestId
+        ? error.message
+        : userFacingServiceError(error, _lang, "فیشەکە تۆمار نەکرا؛ تکایە پەیوەندیی ئینتەرنێت بپشکنە و دووبارە هەوڵ بدەوە.");
+      setSendError({
+        stageLabel: error.stage, code: error.code, requestId: error.requestId,
+        // Says which stage broke and what is known about the receipts, instead of only
+        // "sending failed".
+        message: `${stageText(error.stage)} — ${settled.text}`,
+        detail: message,
+        outcomeUnknown: settled.outcome === "unknown",
+      });
+    } finally { setSending(false); }
+  };
+
+  const ST = {
+    processing: { tone: "slate", t: "خوێندنەوە" },
+    ok: { tone: "green", t: "پشتڕاستکراو" },
+    dup: { tone: "red", t: "دووبارە" },
+    suspect: { tone: "amber", t: "پشکنین پێویستە" },
+    retry: { tone: "amber", t: "چاوەڕوانی خوێندنەوە" },
+    error: { tone: "red", t: "ڕەتکراو/هەڵە" },
+  };
+
+  const confidenceLabel = (r) => {
+    const v = r.confidence;
+    if (v == null || !Number.isFinite(Number(v))) return null;
+    return `${Math.round(clamp01(v) * 100)}%`;
+  };
+
+  const fieldConf = (r, key) => {
+    const v = r.fieldConfidence?.[key];
+    if (v == null || !Number.isFinite(Number(v))) return null;
+    const pct = Math.round(clamp01(v) * 100);
+    const color = pct >= 80 ? "var(--pos)" : pct >= 60 ? "var(--warn)" : "var(--neg)";
+    return <span className="text-[9px] font-bold" style={{ color }}>{pct}%</span>;
+  };
+
+  const lifecycleStage = working || processing.length
+    ? "read"
+    : !rows.length
+      ? "capture"
+      : review.length || retrying.length || bad.length
+        ? "review"
+        : good.length
+          ? "verify"
+          : "capture";
+  const inspectedReceipt = inspectorId ? rows.find((r) => r.id === inspectorId) || null : null;
+
+  return (
+    <div className="space-y-4">
+      {!simple && <DeferredPanel compact><ReceiptLifecycle stage={lifecycleStage} lang={_lang} /></DeferredPanel>}
+
+      {!mayChooseDirection && role === "customer" && (
+        <Card className="p-4">
+          <Lbl>{tr("جۆری فیشەکان")}</Lbl>
+          <div className="text-[13px] mt-1" style={{ color: "var(--txt-2)" }}>
+            {tr("فیشی فرۆشتنی خۆت — ئەو پارەیەی بۆت هاتووە.")}
+          </div>
+        </Card>
+      )}
+
+      {mayChooseDirection && (
+        <Card className="p-4">
+          <Lbl>{tr("جۆری فیشەکان")}</Lbl>
+          <div className="flex gap-2">
+            {[["in", tr("پارە هاتووە (کڕین)")], ["out", tr("پارە نێردراوە (فرۆشتن)")]].map(([k, t]) => (
+              <button key={k} onClick={() => setDir(k)}
+                className={`flex-1 py-2.5 rounded-[var(--r-sm)] text-sm font-semibold transition tap ${dir === k ? (k === "in" ? "bg-[var(--pos)] text-white" : "bg-rose-700 text-white") : "bg-[var(--line)] text-[var(--txt-2)]"}`}>{t}</button>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      <Card className="p-5 space-y-4">
+        <input ref={cameraInputRef} type="file" accept="image/*" capture="environment" className="hidden" disabled={working}
+          onChange={(e) => { onFiles(e.target.files, "camera"); e.target.value = ""; }} />
+        <input ref={galleryInputRef} type="file" accept="image/*" multiple className="hidden" disabled={working}
+          onChange={(e) => { onFiles(e.target.files, "gallery"); e.target.value = ""; }} />
+        <input ref={shareInputRef} type="file" accept="image/*" multiple className="hidden" disabled={working}
+          onChange={(e) => { onFiles(e.target.files, "share"); e.target.value = ""; }} />
+
+        {simple ? (
+          <div className="space-y-2.5">
+            <button type="button" disabled={working} onClick={() => galleryInputRef.current?.click()}
+              className="w-full min-h-[76px] px-5 py-4 rounded-2xl flex items-center gap-3 text-start disabled:opacity-50"
+              style={{ background: "linear-gradient(135deg,var(--ac),var(--pos))", color: "#fff", boxShadow: "0 10px 24px -12px rgba(var(--ac-gl),.7)" }}>
+              {working ? <RotateCcw className="w-6 h-6 animate-spin shrink-0" /> : <Upload className="w-6 h-6 shrink-0" />}
+              <span className="min-w-0">
+                <span className="block text-[15px] font-bold">{working ? `فیشەکان دەخوێندرێنەوە ${prog || ""}` : "＋ ناردنی فیش"}</span>
+                <span className="block text-[11px] mt-1 opacity-90">وێنەیەک یان چەند وێنە هەڵبژێرە</span>
+              </span>
+            </button>
+            <button type="button" disabled={working} onClick={() => cameraInputRef.current?.click()}
+              className="w-full min-h-11 px-4 rounded-xl flex items-center justify-center gap-2 text-[12px] font-semibold disabled:opacity-50"
+              style={{ background: "var(--surf-2)", color: "var(--txt-2)", border: "1px solid var(--line)" }}>
+              <Camera className="w-4 h-4" /> وێنەگرتن بە کامێرا
+            </button>
+            <p className="text-[11px] leading-relaxed text-center" style={{ color: "var(--txt-3)" }}>وێنەی بنەڕەتی یەکسەر پارێزراو دەبێت؛ خوێندنەوەکە پێشبینینە و بڕیاری کۆتایی لەلایەن ئەدمینەوە دەدرێت.</p>
+          </div>
+        ) : <>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+          <button type="button" disabled={working} onClick={() => cameraInputRef.current?.click()}
+            className="p-4 rounded-2xl text-start disabled:opacity-50 transition hover:-translate-y-0.5"
+            style={{ background: "color-mix(in srgb, var(--ac) 8%, var(--surf))", border: "1px solid color-mix(in srgb, var(--ac) 20%, var(--line))" }}>
+            <Camera className="w-5 h-5 mb-2" style={{ color: "var(--ac)" }} />
+            <div className="text-[12px] font-bold text-[var(--txt)]">کامێرا</div>
+            <div className="text-[10px] text-[var(--txt-3)] mt-1">وێنەی فیشەکە ئێستا بگرە</div>
+          </button>
+          <button type="button" disabled={working} onClick={() => galleryInputRef.current?.click()}
+            className="p-4 rounded-2xl text-start disabled:opacity-50 transition hover:-translate-y-0.5"
+            style={{ background: "var(--surf-2)", border: "1px solid var(--line)" }}>
+            <Upload className="w-5 h-5 mb-2" style={{ color: "var(--pos)" }} />
+            <div className="text-[12px] font-bold text-[var(--txt)]">گەلەری / فایلەکان</div>
+            <div className="text-[10px] text-[var(--txt-3)] mt-1">یەک یان چەند فیش هەڵبژێرە</div>
+          </button>
+          <button type="button" disabled={working} onClick={() => shareInputRef.current?.click()}
+            className="p-4 rounded-2xl text-start disabled:opacity-50 transition hover:-translate-y-0.5"
+            style={{ background: "color-mix(in srgb, var(--pos) 7%, var(--surf))", border: "1px solid color-mix(in srgb, var(--pos) 18%, var(--line))" }}>
+            <MessageCircle className="w-5 h-5 mb-2" style={{ color: "var(--pos)" }} />
+            <div className="text-[12px] font-bold text-[var(--txt)]">واتساپ / هاوبەشکردن</div>
+            <div className="text-[10px] text-[var(--txt-3)] mt-1">فیشێکی پاشەکەوتکراو یان هاوبەشکراو هەڵبژێرە</div>
+          </button>
+        </div>
+
+        <div role="button" tabIndex={0}
+          onClick={() => !working && galleryInputRef.current?.click()}
+          onKeyDown={(e) => { if (!working && (e.key === "Enter" || e.key === " ")) galleryInputRef.current?.click(); }}
+          onDragOver={(e) => { e.preventDefault(); if (!working) setDragActive(true); }}
+          onDragLeave={() => setDragActive(false)}
+          onDrop={(e) => { e.preventDefault(); setDragActive(false); if (!working) onFiles(e.dataTransfer.files, "drag_drop"); }}
+          className="border-2 border-dashed rounded-[var(--r)] p-6 md:p-8 text-center cursor-pointer transition outline-none"
+          style={dragActive
+            ? { borderColor: "var(--pos)", background: "color-mix(in srgb, var(--pos) 10%, var(--surf))" }
+            : { borderColor: "var(--line-2)", background: working ? "var(--surf-3)" : "var(--surf)" }}>
+          <div className="w-12 h-12 rounded-2xl mx-auto mb-3 flex items-center justify-center" style={{ background: "var(--surf-3)", color: "var(--ac)" }}>
+            {working ? <RotateCcw className="w-5 h-5 animate-spin" /> : <Upload className="w-5 h-5" />}
+          </div>
+          <div className="text-sm font-semibold text-[var(--txt)]">{working ? `خوێندنەوەی فیشەکان... ${prog || ""}` : "فیشەکان لێرە دابنێ یان کلیک بکە"}</div>
+          <div className="text-xs text-[var(--txt-3)] mt-1.5">AI زانیارییەکان دەخوێنێتەوە؛ خانە گومانلێکراوەکان پێش ناردن بە دەست پشتڕاست دەکرێنەوە.</div>
+        </div>
+        </>}
+      </Card>
+
+      {rows.length > 0 && (
+        <>
+          {!simple && <div className="grid grid-cols-2 md:grid-cols-5 gap-2.5">
+            {[
+              ["پشتڕاستکراو", good.length, "var(--pos)"],
+              ["پشکنین پێویستە", review.length, "var(--warn)"],
+              ["چاوەڕوانی خوێندنەوە", retrying.length, "var(--warn)"],
+              ["دووبارە", dupN, "var(--neg)"],
+              ["ڕەتکراو/هەڵە", errN, "var(--neg)"],
+            ].map(([label, value, color]) => (
+              <Card key={label} className="p-3.5">
+                <div className="text-[10.5px]" style={{ color: "var(--txt-3)" }}>{label}</div>
+                <div className="text-xl font-bold mt-1" style={{ ...num, color }}>{value}</div>
+              </Card>
+            ))}
+          </div>}
+
+          {!simple && <Card className="p-3 md:p-4">
+            <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
+              <div>
+                <div className="text-[13px] font-bold text-[var(--txt)]">ناوەندی پشکنینی فیش</div>
+                <div className="text-[10.5px] text-[var(--txt-3)] mt-0.5">فلتەر، هەڵبژاردنی کۆمەڵەیی، دووبارە خوێندنەوە و پشتڕاستکردنەوە لە یەک شوێن.</div>
+              </div>
+              <div className="text-[10.5px] font-semibold" style={{ color: "var(--txt-3)", ...num }}>{visibleRows.length} / {rows.length}</div>
+            </div>
+
+            <div className="flex gap-1 p-1 rounded-xl overflow-x-auto mb-3" style={{ background: "var(--surf-3)" }}>
+              {receiptTabs.map(([key, label, count]) => (
+                <button key={key} onClick={() => { setReviewTab(key); setSelectedRows([]); }}
+                  className="whitespace-nowrap px-3 py-2 rounded-lg text-[11px] font-semibold transition"
+                  style={reviewTab === key
+                    ? { background: "var(--surf)", color: "var(--txt)", boxShadow: "var(--sh-1)" }
+                    : { color: "var(--txt-3)" }}>
+                  {label} <span style={num}>({count})</span>
+                </button>
+              ))}
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_180px_auto] gap-2.5">
+              <div className="relative">
+                <Search className="w-4 h-4 absolute top-1/2 -translate-y-1/2 start-3 text-[var(--txt-3)] pointer-events-none" />
+                <input value={reviewSearch} onChange={(e) => setReviewSearch(e.target.value)}
+                  placeholder="گەڕان بە بڕ، دراو، ژمارە، وەرگر…"
+                  className="w-full ps-9 pe-3 py-2.5 rounded-xl text-[12px] outline-none"
+                  style={{ background: "var(--surf-2)", border: "1px solid var(--line)", color: "var(--txt)" }} />
+              </div>
+              <select value={reviewPlatform} onChange={(e) => setReviewPlatform(e.target.value)}
+                className="w-full px-3 py-2.5 rounded-xl text-[12px] outline-none"
+                style={{ background: "var(--surf-2)", border: "1px solid var(--line)", color: "var(--txt)" }}>
+                <option value="all">هەموو پلاتفۆرمەکان</option>
+                {platformOptions.map((p) => <option key={p} value={p}>{platMeta(p).ku}</option>)}
+              </select>
+              <button onClick={toggleAllVisible} disabled={!visibleSelectableIds.length}
+                className="px-3 py-2.5 rounded-xl text-[11px] font-semibold disabled:opacity-40"
+                style={{ background: "var(--surf-3)", color: "var(--txt-2)", border: "1px solid var(--line)" }}>
+                {allVisibleSelected ? "هەڵوەشاندنەوەی هەموو" : "هەڵبژاردنی هەموو"}
+              </button>
+            </div>
+
+            {selectedActual.length > 0 && (
+              <div className="mt-3 p-3 rounded-xl flex items-center justify-between gap-2 flex-wrap"
+                style={{ background: "color-mix(in srgb, var(--ac) 7%, var(--surf))", border: "1px solid color-mix(in srgb, var(--ac) 18%, var(--line))" }}>
+                <div className="text-[11px] font-semibold" style={{ color: "var(--txt)" }}>
+                  <span style={num}>{selectedActual.length}</span> فیش هەڵبژێردراوە
+                </div>
+                <div className="flex gap-1.5 flex-wrap">
+                  <button onClick={confirmSelected} className="px-3 py-2 rounded-lg text-[11px] font-semibold"
+                    style={{ background: "var(--pos)", color: "#fff" }}>پشتڕاستکردنەوە</button>
+                  <button onClick={retrySelected} className="px-3 py-2 rounded-lg text-[11px] font-semibold"
+                    style={{ background: "var(--surf)", color: "var(--txt-2)", border: "1px solid var(--line)" }}>دووبارە خوێندنەوە</button>
+                  <button onClick={rejectSelected} className="px-3 py-2 rounded-lg text-[11px] font-semibold"
+                    style={{ background: "color-mix(in srgb, var(--neg) 9%, var(--surf))", color: "var(--neg)", border: "1px solid color-mix(in srgb, var(--neg) 20%, var(--line))" }}>ڕەتکردنەوە</button>
+                  <button onClick={clearSelected} className="px-3 py-2 rounded-lg text-[11px] font-semibold"
+                    style={{ color: "var(--txt-3)" }}>پاککردنەوە</button>
+                </div>
+              </div>
+            )}
+          </Card>}
+
+          {retrying.length > 0 && (
+            <Card className="p-4 border-[color-mix(in_srgb,var(--warn)_34%,transparent)] bg-[color-mix(in_srgb,var(--warn)_8%,transparent)]">
+              <div className="flex items-start justify-between gap-3 flex-wrap">
+                <div className="flex items-start gap-2 text-sm text-[var(--warn)]">
+                  <RotateCcw className="w-4 h-4 mt-0.5 shrink-0" />
+                  <div>
+                    <div className="font-semibold">{retrying.length} فیش بەهۆی کێشەی کاتی خوێندنەوە تەواو نەبوو</div>
+                    <div className="text-xs mt-1 opacity-90">ئەم فیشانە ڕەت نەکراونەتەوە و لە کۆی ڕەتکراوەکاندا هەژمار ناکرێن. کەمێک دواتر دووبارە بخوێنەرەوە.</div>
+                  </div>
+                </div>
+                <button onClick={retryWaitingRows} disabled={working}
+                  className="px-3 py-2 rounded-lg text-[11px] font-semibold disabled:opacity-50"
+                  style={{ background: "var(--surf)", color: "var(--txt-2)", border: "1px solid var(--line)" }}>
+                  دووبارە خوێندنەوەی چاوەڕوانەکان
+                </button>
+              </div>
+            </Card>
+          )}
+
+          {review.length > 0 && (
+            <Card className="p-4 border-[color-mix(in_srgb,var(--warn)_34%,transparent)] bg-[color-mix(in_srgb,var(--warn)_9%,transparent)]">
+              <div className="flex items-start gap-2 text-sm text-[var(--warn)]">
+                <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+                <div>
+                  <div className="font-semibold">{review.length} فیش پێویستیان بە پشکنین هەیە</div>
+                  <div className="text-xs mt-1 opacity-90">{simple
+                    ? "وێنە بنەڕەتییەکە پارێزراوە؛ ئەدمین بڕ، دراو و ناسنامەی مامەڵە پشکنین دەکات. تا بڕیاری کۆتایی هەژمار ناکرێت."
+                    : "بڕ، دراو، ژمارەی مامەڵە و ناوی وەرگر بپشکنە؛ پاشان بە فەرمانی تۆمارکراو بڕیار بدە. تا ئەو کاتە هەژمار ناکرێت."}</div>
+                </div>
+              </div>
+            </Card>
+          )}
+
+          {!simple && inspectedReceipt && (
+            <DeferredPanel>
+              <ReceiptSmartInspector receipt={inspectedReceipt} data={data} lang={_lang}
+                Card={Card} Btn={Btn} Pill={Pill} clamp01={clamp01} fmtMoney={fmtMoney} num={num} platMeta={platMeta}
+                onEdit={mayEditExtraction(staffReview) ? () => setEditingId(inspectedReceipt.id) : null}
+                onConfirm={() => confirmRow(inspectedReceipt.id)}
+                onReject={() => rejectRow(inspectedReceipt.id)}
+                onRetry={() => retryRow(inspectedReceipt.id)}
+                onClose={() => setInspectorId(null)} />
+            </DeferredPanel>
+          )}
+
+          {visibleRows.length === 0 && (
+            <Card className="p-5"><Empty t="هیچ فیشێک بەم فلتەرە نەدۆزرایەوە" /></Card>
+          )}
+
+          <div className="space-y-2.5">
+            {visibleRows.map((r, i) => {
+              const st = ST[r.status] || ST.error;
+              const editing = editingId === r.id;
+              const hardDup = r.status === "dup";
+              return (
+                <Card key={r.id} className="p-0 overflow-hidden">
+                  <div className={`p-3.5 md:p-4 ${r.status === "dup" ? "bg-[color-mix(in_srgb,var(--neg)_7%,transparent)]" : r.status === "suspect" ? "bg-[color-mix(in_srgb,var(--warn)_7%,transparent)]" : ""}`}>
+                    <div className="flex items-start gap-3">
+                      {!simple && <label className={`mt-0.5 shrink-0 ${r.status === "processing" ? "opacity-40" : "cursor-pointer"}`}>
+                        <input type="checkbox" className="sr-only" disabled={r.status === "processing"}
+                          checked={selectedRows.includes(r.id)} onChange={() => toggleSelected(r.id)} />
+                        <span className="w-5 h-5 rounded-md flex items-center justify-center"
+                          style={selectedRows.includes(r.id)
+                            ? { background: "var(--ac)", color: "#fff", border: "1px solid var(--ac)" }
+                            : { background: "var(--surf)", color: "transparent", border: "1px solid var(--line-2)" }}>
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                        </span>
+                      </label>}
+                      <div className="text-[10px] w-5 pt-1 text-center shrink-0" style={{ ...num, color: "var(--txt-3)" }}>{i + 1}</div>
+                      {r.url
+                        ? simple
+                          ? <img src={r.url} alt="وێنەی فیشی پارێزراو" className="w-14 h-14 md:w-16 md:h-16 object-cover rounded-xl shrink-0"
+                              style={{ border: "1px solid var(--line)" }} />
+                          : <button type="button" onClick={() => setInspectorId(r.id)} className="shrink-0 rounded-xl" aria-label="پشکنینی فیش">
+                              <img src={r.url} alt="" className="w-14 h-14 md:w-16 md:h-16 object-cover rounded-xl shrink-0"
+                                style={{ border: inspectorId === r.id ? "2px solid var(--ac)" : "1px solid var(--line)" }} />
+                            </button>
+                        : <div className="w-14 h-14 md:w-16 md:h-16 rounded-xl shrink-0 flex items-center justify-center" style={{ background: "var(--surf-3)" }}>
+                            {r.status === "processing" ? <RotateCcw className="w-4 h-4 animate-spin text-[var(--txt-3)]" /> : <Receipt className="w-4 h-4 text-[var(--txt-3)]" />}
+                          </div>}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-bold text-[var(--txt)] text-[15px]" style={num}>{Number(r.amount) > 0 ? fmtMoney(data, r.amount, r.currency) : "—"}</span>
+                          <span className="text-xs text-[var(--txt-2)]">{r.currency || "—"}</span>
+                          {Number(r.fee) > 0 && !Number(r.orderAmount) && <span className="text-[10px]" style={{ ...num, color: "var(--txt-3)" }}>فی {fmtMoney(data, r.fee, r.currency)} · نەت {fmtMoney(data, r.net, r.currency)}</span>}
+                          <Pill tone={st.tone}>{simple && r.status === "ok" ? "OCR خوێندرایەوە" : st.t}</Pill>
+                        </div>
+                        {Number(r.orderAmount) > 0 && (
+                          <div className="text-[10.5px] mt-1 flex flex-wrap gap-x-2 gap-y-0.5" style={{ ...num, color: "var(--txt-3)" }}>
+                            <span>کۆی گشتی {fmtMoney(data, r.amount, r.currency)}</span>
+                            <span>· بڕی بنەڕەتی {fmtMoney(data, r.orderAmount, r.currency)}</span>
+                            <span>· فی {fmtMoney(data, r.fee, r.currency)}</span>
+                            <span>· نەت {fmtMoney(data, r.net, r.currency)}</span>
+                            {r.validation?.checked && (
+                              <span style={{ color: r.validation.grossMatches ? "var(--pos)" : "var(--warn)" }}>
+                                · {r.validation.grossMatches ? "✓ ژمارەکان یەکدەگرنەوە" : "⚠ پشکنینی ژمارەکان"}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                        <div className="text-[11px] text-[var(--txt-2)] mt-1 truncate">
+                          {r.receiver ? <>{tr("بۆ")} <b>{r.receiver}</b></> : <>{tr("وەرگر:")} —</>}
+                          {r.refNo && <span style={num}> · {r.refNo}</span>}
+                        </div>
+                        {r.merchantOrderNo && <div className="text-[10px] text-[var(--txt-3)] mt-0.5" style={num}>Merchant order: {r.merchantOrderNo}</div>}
+                        {(r.paymentMethod || r.cardLast4) && <div className="text-[10px] text-[var(--txt-3)] mt-0.5" style={num}>{r.paymentMethod || "Card"}{r.cardLast4 && !String(r.paymentMethod || "").includes(r.cardLast4) ? ` · ****${r.cardLast4}` : ""}</div>}
+                        {r.recipientNote && !r.receiver && <div className="text-[10px] text-[var(--txt-3)] mt-0.5">Recipient note: {r.recipientNote}</div>}
+                        {r.transactionStatus && <div className="text-[10px] text-[var(--txt-3)] mt-0.5">{r.transactionStatus}</div>}
+                        {r.platform && <div className="text-[10px] text-[var(--txt-3)] mt-0.5">{platMeta(r.platform).ku}</div>}
+                        {r.note && <div className={`text-[10.5px] mt-1.5 leading-relaxed ${r.status === "suspect" ? "text-[var(--warn)]" : r.status === "dup" ? "text-[var(--neg)]" : "text-[var(--txt-3)]"}`}>{r.note}</div>}
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        {/* An uploader supplies the image; the figures come from the evidence.
+                            They may look, and report a discrepancy — they may not retype what
+                            the receipt says. */}
+                        {r.status !== "processing" && !hardDup && (
+                          mayEditExtraction(staffReview) ? (
+                            <button title="پشکنین و دەستکاری" onClick={() => { setInspectorId(r.id); setEditingId(editing ? null : r.id); }}
+                              className="p-2 rounded-lg hover:bg-[var(--surf-3)] text-[var(--txt-2)]"><Pencil className="w-3.5 h-3.5" /></button>
+                          ) : (
+                            <button title="بینینی وردەکاری" onClick={() => setInspectorId(r.id)}
+                              className="p-2 rounded-lg hover:bg-[var(--surf-3)] text-[var(--txt-2)]"><Eye className="w-3.5 h-3.5" /></button>
+                          )
+                        )}
+                        {r.status !== "processing" && !hardDup && r.ocrImage && (
+                          <button title="دووبارە خوێندنەوە" onClick={() => retryRow(r.id)}
+                            className="p-2 rounded-lg hover:bg-[var(--surf-3)] text-[var(--txt-2)]"><RotateCcw className="w-3.5 h-3.5" /></button>
+                        )}
+                        {!simple && <button title="سڕینەوە" onClick={() => { commitRows((xs) => xs.filter((x) => x.id !== r.id)); if (editingId === r.id) setEditingId(null); if (inspectorId === r.id) setInspectorId(null); }}
+                          className="p-2 rounded-lg hover:bg-[color-mix(in_srgb,var(--neg)_9%,transparent)] text-[var(--txt-3)] hover:text-[var(--neg)]"><Trash2 className="w-3.5 h-3.5" /></button>}
+                      </div>
+                    </div>
+
+                    {editing && mayEditExtraction(staffReview) && !hardDup && r.status !== "processing" && (
+                      <div className="mt-4 pt-4 border-t border-[var(--line)]">
+                        <div className="flex items-center justify-between gap-3 mb-3">
+                          <div>
+                            <div className="text-[12px] font-semibold text-[var(--txt)]">پشکنینی دەستی فیش</div>
+                            <div className="text-[10.5px] text-[var(--txt-3)] mt-0.5">ئەو خانانەی دڵنیاییان نزمە بە تایبەتی بپشکنە.</div>
+                          </div>
+                          <button onClick={() => setEditingId(null)} className="p-1.5 text-[var(--txt-3)]"><X className="w-4 h-4" /></button>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          <div><div className="flex justify-between"><Lbl>بڕ</Lbl>{fieldConf(r, "amount")}</div><Inp type="number" value={r.amount ?? ""} onChange={(e) => editField(r.id, "amount", e.target.value)} /></div>
+                          <div><div className="flex justify-between"><Lbl>دراو</Lbl>{fieldConf(r, "currency")}</div><Inp value={r.currency ?? ""} onChange={(e) => editField(r.id, "currency", e.target.value.toUpperCase())} placeholder="IQD / USD / CNY..." /></div>
+                          <div><div className="flex justify-between"><Lbl>فی / عمولە</Lbl>{fieldConf(r, "fee")}</div><Inp type="number" value={r.fee ?? ""} onChange={(e) => editField(r.id, "fee", e.target.value)} /></div>
+                          <div><Lbl>بڕی نەت</Lbl><Inp type="number" value={r.net ?? ""} onChange={(e) => editField(r.id, "net", e.target.value)} /></div>
+                          <div><div className="flex justify-between"><Lbl>{l10n("بڕی بنەڕەتی", "Order amount", "مبلغ الطلب الأساسي")}</Lbl>{fieldConf(r, "orderAmount")}</div><Inp type="number" value={r.orderAmount ?? ""} onChange={(e) => editField(r.id, "orderAmount", e.target.value)} /></div>
+                          <div><div className="flex justify-between"><Lbl>{l10n("ژمارەی مامەڵە", "Order number", "رقم الطلب")}</Lbl>{fieldConf(r, "refNo")}</div><Inp value={r.refNo ?? ""} onChange={(e) => editField(r.id, "refNo", e.target.value)} /></div>
+                          <div><div className="flex justify-between"><Lbl>{l10n("ژمارەی مامەڵەی فرۆشیار", "Merchant order number", "رقم طلب التاجر")}</Lbl>{fieldConf(r, "merchantOrderNo")}</div><Inp value={r.merchantOrderNo ?? ""} onChange={(e) => editField(r.id, "merchantOrderNo", e.target.value)} /></div>
+                          <div><div className="flex justify-between"><Lbl>{l10n("شێوازی پارەدان", "Payment method", "طريقة الدفع")}</Lbl>{fieldConf(r, "paymentMethod")}</div><Inp value={r.paymentMethod ?? ""} onChange={(e) => editField(r.id, "paymentMethod", e.target.value)} placeholder="Visa / Mastercard..." /></div>
+                          <div><Lbl>{l10n("کۆتا ٤ ژمارەی کارت", "Card last 4 digits", "آخر 4 أرقام من البطاقة")}</Lbl><Inp value={r.cardLast4 ?? ""} onChange={(e) => editField(r.id, "cardLast4", e.target.value.replace(/\D/g, "").slice(-4))} placeholder="0233" /></div>
+                          <div><div className="flex justify-between"><Lbl>{l10n("دۆخی مامەڵە", "Transaction status", "حالة المعاملة")}</Lbl>{fieldConf(r, "transactionStatus")}</div><Inp value={r.transactionStatus ?? ""} onChange={(e) => editField(r.id, "transactionStatus", e.target.value)} /></div>
+                          <div><Lbl>{l10n("تێبینی وەرگر", "Recipient note", "ملاحظة المستفيد")}</Lbl><Inp value={r.recipientNote ?? ""} onChange={(e) => editField(r.id, "recipientNote", e.target.value)} /></div>
+                          <div><Lbl>{l10n("ناوی فرۆشیار", "Merchant display name", "اسم التاجر الظاهر")}</Lbl><Inp value={r.merchantName ?? ""} onChange={(e) => editField(r.id, "merchantName", e.target.value)} /></div>
+                          <div><div className="flex justify-between"><Lbl>وەرگر</Lbl>{fieldConf(r, "receiver")}</div><Inp value={r.receiver ?? ""} onChange={(e) => editField(r.id, "receiver", e.target.value)} /></div>
+                          <div><div className="flex justify-between"><Lbl>ناردەر</Lbl>{fieldConf(r, "sender")}</div><Inp value={r.sender ?? ""} onChange={(e) => editField(r.id, "sender", e.target.value)} /></div>
+                          <div><div className="flex justify-between"><Lbl>ئەپ / بانک</Lbl>{fieldConf(r, "platform")}</div><Inp value={r.bank ?? r.platform ?? ""} onChange={(e) => { editField(r.id, "bank", e.target.value); editField(r.id, "platform", detectPlatform(e.target.value) || r.platform); }} /></div>
+                          <div><div className="flex justify-between"><Lbl>بەروار</Lbl>{fieldConf(r, "txDate")}</div><Inp type="date" value={r.txDate ?? ""} onChange={(e) => editField(r.id, "txDate", e.target.value)} /></div>
+                          <div><div className="flex justify-between"><Lbl>کات / دەقی کات</Lbl>{fieldConf(r, "txTime")}</div><Inp value={r.txTime ?? ""} onChange={(e) => editField(r.id, "txTime", e.target.value)} /></div>
+                        </div>
+
+                        <div className="flex flex-wrap gap-2 mt-4">
+                          <Btn className="flex items-center gap-2" onClick={() => confirmRow(r.id)}>
+                            <CheckCircle2 className="w-4 h-4" /> پشتڕاستکردنەوە
+                          </Btn>
+                          {r.ocrImage && <Btn kind="ghost" className="flex items-center gap-2" onClick={() => retryRow(r.id)}><RotateCcw className="w-4 h-4" /> دووبارە خوێندنەوە</Btn>}
+                          <Btn kind="ghost" className="flex items-center gap-2" style={{ color: "var(--neg)" }} onClick={() => rejectRow(r.id)}>
+                            <XCircle className="w-4 h-4" /> ڕەتکردنەوە
+                          </Btn>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </Card>
+              );
+            })}
+          </div>
+
+          {good.length > 0 && <ReceiptTotals rows={good} data={data} title={tr("کۆی گشتی")} showValuation={staffReview} />}
+
+          {!simple && good.length > 0 && (
+            <Btn kind="gold" className="w-full flex items-center justify-center gap-2" onClick={() => setShare(true)}>
+              <Share2 className="w-4 h-4" /> {tr("ناردنی خشتەی وردەکاری")}
+            </Btn>
+          )}
+          {!simple && share && (
+            <ShareTable rows={good} data={data} who={displayValue(customerName)} title={tr("وردەکاری فیشەکان")}
+              flash={flash} onClose={() => setShare(false)} />
+          )}
+
+          {!simple && bad.length > 0 && <RejectedReceipts rows={bad} data={data} title={tr("ئەمانە هەژمار ناکرێن")} />}
+
+          {resumedSend && (
+            <Card className="p-4" style={{ borderColor: "color-mix(in srgb, var(--pos) 35%, var(--line))", background: "color-mix(in srgb, var(--pos) 8%, var(--surf))" }}>
+              <div className="flex items-start gap-2">
+                <CheckCircle2 className="w-4 h-4 mt-0.5 shrink-0" style={{ color: "var(--pos)" }} />
+                <div className="min-w-0 flex-1">
+                  <div className="text-[12px] font-bold" style={{ color: "var(--pos)" }}>{resumedSend.text}</div>
+                  {resumedSend.receiptCount != null && (
+                    <div className="text-[11px] mt-1" style={{ color: "var(--txt-2)" }}>
+                      {resumedSend.receiptCount} {tr("فیش")}
+                      {resumedSend.at ? ` · ${new Date(resumedSend.at).toLocaleString("en-GB")}` : ""}
+                    </div>
+                  )}
+                </div>
+                <button onClick={() => setResumedSend(null)} className="p-1.5 rounded-lg" style={{ color: "var(--txt-3)" }}><X className="w-4 h-4" /></button>
+              </div>
+            </Card>
+          )}
+
+          {sendError && (
+            <Card className="p-4" style={{ borderColor: "color-mix(in srgb, var(--neg) 35%, var(--line))", background: "color-mix(in srgb, var(--neg) 7%, var(--surf))" }}>
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" style={{ color: "var(--neg)" }} />
+                <div className="min-w-0 flex-1">
+                  <div className="text-[12px] font-bold" style={{ color: "var(--neg)" }}>{sendError.message}</div>
+                  {sendError.detail && <div className="text-[11px] mt-1 leading-relaxed" style={{ color: "var(--txt-2)" }}>{sendError.detail}</div>}
+                  {sendError.requestId && <div className="text-[10px] mt-1" dir="ltr" style={{ color: "var(--txt-3)" }}>Support code: {sendError.requestId}</div>}
+                  <div className="text-[10.5px] mt-2" style={{ color: sendError.outcomeUnknown ? "var(--warn)" : "var(--txt-3)" }}>
+                    {sendError.outcomeUnknown
+                      ? "دۆخی DB بە دڵنیایی نەزانرا؛ وێنەکان پاک نەکرانەوە. هەمان ناردن دووبارە بکە—command key پارێزراوە و دووبارە تۆمار نابێت."
+                      : "فیشەکان لێرە ماونەتەوە؛ دوای چارەسەرکردنی هەڵەکە دەتوانیت هەمان ناردن دووبارە بکەیتەوە."}
+                  </div>
+                </div>
+                <button onClick={() => setSendError(null)} className="p-1.5 rounded-lg" style={{ color: "var(--txt-3)" }}><X className="w-4 h-4" /></button>
+              </div>
+            </Card>
+          )}
+
+          {/* Only someone who can actually put a reading right is held up by one. An uploader
+              cannot correct anything, so a receipt awaiting review would leave them with a dead
+              button and no way forward — theirs is sent along, marked, for the operator. */}
+          <Btn className={`w-full ${simple ? "!py-4 !text-[15px] sticky bottom-20 z-10" : ""}`} onClick={send}
+            disabled={sending || working || processing.length > 0 || retrying.length > 0
+              || (review.length > 0 && mayEditExtraction(staffReview))
+              || (!good.length && !review.length && !bad.length)}>
+            {sending
+              ? "ناردن…"
+              : review.length && mayEditExtraction(staffReview)
+                ? `${review.length} فیش پێویستی بە پشکنین هەیە`
+                : retrying.length
+                  ? `${retrying.length} فیش چاوەڕوانی دووبارە خوێندنەوەن`
+                  : `ناردنی ${good.length} فیش${review.length + bad.length ? ` (+ ${review.length + bad.length} بۆ پشکنینی ئەدمین)` : ""}`}
+          </Btn>
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ─────────── ناوەندی فیشەکان (ئەدمین) ─────────── */
+function ReceiptsHub({ data, usr, batches, batchLoadError, reloadBatches, flash, onMakeTx, profile, calc, cur, searchFocus = "" }) {
+  const initialReceiptQuery = useMemo(() => new URLSearchParams(window.location.search), []);
+  const [tab, setTab] = useState(initialReceiptQuery.get("receiptTab") || "accepted");
+  // «من فیش نانێرم، تەنها فرۆشیار ئەینێرێ» — so uploading on behalf of somebody is not one of
+  // this screen's sections. It stays as a capability for the day a seller cannot upload, and
+  // for images shared into the app from elsewhere, opened by asking for it.
+  const [addOpen, setAddOpen] = useState(initialReceiptQuery.get("receiptAdd") === "1");
+  // Open on the work. A send that is waiting for the owner is the reason they opened this
+  // screen, so if anything is waiting that is what shows — once, when the batches first
+  // arrive, and never again, so it cannot pull the reader off a section they chose.
+  const openedOnWork = useRef(false);
+  const [sel, setSel] = useState(null);
+  const [loc, setLoc] = useState("me");
+  const [addFor, setAddFor] = useState("");
+  const [addTxId, setAddTxId] = useState("");
+  const [addReason, setAddReason] = useState("");
+  const [batchSearch, setBatchSearch] = useState(initialReceiptQuery.get("receiptSearch") || "");
+  // Arriving here from the global search: open on the batch the result was about, with the
+  // control tab showing, rather than at the top of a list of two hundred.
+  useEffect(() => {
+    if (!searchFocus) return;
+    setBatchSearch(searchFocus);
+    setTab("accepted");
+    setStageFilter("all");
+    setBatchPage(1);
+  }, [searchFocus]);
+  const [stageFilter, setStageFilter] = useState(initialReceiptQuery.get("receiptStage") || "all");
+  const [batchSort, setBatchSort] = useState(initialReceiptQuery.get("receiptSort") || "newest");
+  const [batchPage, setBatchPage] = useState(1);
+  const customers = data.users.filter((u) => u.role === "customer" && !u.deleted);
+  const partners = data.users.filter((u) => u.role === "partner" && !u.deleted);
+  const addTransactions = data.txs.filter((tx) => !tx.deleted && tx.cpId === addFor
+    && (tx.type === "buy" || (tx.type === "sell" && tx.partnerId)));
+  const u = usdConv(data);
+
+  // The same helper «کاری ئەمڕۆ» counts with. The comment there used to claim these two read a
+  // batch's stage the same way; they did not — each had its own copy of the derivation, and two
+  // copies is how a summary comes to say four while the list under it shows three.
+  const lifecycleOf = batchStage;
+  const lifecycleTone = (stage) => stage === "matched" || stage === "finalized" ? "green" : stage === "rejected" ? "red" : stage === "archived" ? "slate" : "amber";
+  const lifecycleLabel = (stage) => ({ received: l10n("وەرگیرا", "Received", "مستلم"), reading: l10n("دەخوێندرێتەوە", "Reading", "قيد القراءة"), needs_review: l10n("پشکنین پێویستە", "Needs review", "بحاجة إلى مراجعة"), verified: l10n("پشتڕاستکراو", "Verified", "موثّق"), matched: l10n("بەستراو", "Matched", "مرتبط"), rejected: l10n("ڕەتکراو", "Rejected", "مرفوض"), finalized: l10n("کۆتایی‌هاتوو", "Finalized", "مغلق نهائياً"), archived: l10n("ئەرشیفکراو", "Archived", "مؤرشف") }[stage] || stage);
+  // ── Two sections, because there are two ────────────────────────────────────────────────────
+  //
+  //   «تەنها دوو بەش هەیە کە پەیوەندی بە فیشەوە هەبێت. یەکەم ئەو فیشانەی کە یووسەرەکان
+  //    ناردوویانە و دووەم ئەوانەی کە ئەوان ناردوویانە بەس پشکنینیان دەوێت. تەواو، ئیتر
+  //    پێویست بەو هەموو بەشە زیادەیە ناکات.»
+  //
+  //   «٨ وێنە دەنێرێ بۆ نموونە / ٧ دانە قبووڵکراون دانەیەک پشکنینی ئەوێت / ئەوەی پشکنینەکە
+  //    دەپشکنم و دەبێتە بەشێک لە قبووڵکراوەکان.»
+  //
+  // A send either needs the owner or it does not. That is the whole division, and it is the
+  // one the owner reads it by. The four tabs before this — new, matched, upload-on-behalf, and
+  // a second full list with its own filters — were four names for two questions and a job the
+  // owner does not do.
+  const workBuckets = receiptWorkBuckets(batches || []);
+  const reviewBatches = workBuckets.attention;
+  const acceptedBatches = workBuckets.ready;
+  const archivedBatches = workBuckets.archive;
+  const TABS = [
+    ["accepted", `${l10n("ئامادە", "Ready", "جاهزة")} (${acceptedBatches.length})`],
+    ["review", `${l10n("سەرنج", "Attention", "تحتاج انتباهًا")} (${reviewBatches.length})`],
+    ["archive", `${l10n("ئەرشیف", "Archive", "الأرشيف")} (${archivedBatches.length})`],
+  ];
+  const summary = (batches || []).reduce((out, b) => {
+    const stage = lifecycleOf(b); out.total += Number(b.n) || 0; out[stage] = (out[stage] || 0) + (Number(b.n) || 0);
+    out.duplicates += Number(b.dup_n) || 0; out.failed += Number(b.rejected_n) || 0; return out;
+  }, { total: 0, reading: 0, needs_review: 0, verified: 0, matched: 0, rejected: 0, finalized: 0, archived: 0, duplicates: 0, failed: 0 });
+  // The list the reader is looking at: the section they chose, narrowed by what they typed.
+  // A lifecycle filter on top of a two-way split would be a third way of saying the same thing,
+  // which is what «زۆر ناڕوونن» was about, so the chosen section is the only filter.
+  useEffect(() => {
+    if (openedOnWork.current || !batches) return;
+    openedOnWork.current = true;
+    if (initialReceiptQuery.get("receiptTab")) return;
+    if (reviewBatches.length) setTab("review");
+  }, [batches, reviewBatches.length]);
+
+  const filteredBatches = (tab === "review" ? reviewBatches : tab === "archive" ? archivedBatches : acceptedBatches).filter((b) => {
+    const query = normalizeSearchText(batchSearch);
+    const haystack = normalizeSearchText([b.id, b.customer_name, b.partner_id && usr(b.partner_id).name, b.source, b.currency].filter(Boolean).join(" "));
+    return !query || haystack.includes(query);
+  }).sort((a, b) => batchSort === "oldest" ? new Date(a.created_at) - new Date(b.created_at)
+    : batchSort === "amount" ? Number(b.total_net || 0) - Number(a.total_net || 0)
+      : batchSort === "status" ? lifecycleOf(a).localeCompare(lifecycleOf(b)) : new Date(b.created_at) - new Date(a.created_at));
+  const pageSize = 20, pageBatches = filteredBatches.slice(0, batchPage * pageSize);
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    [["receiptTab", tab], ["receiptAdd", addOpen ? "1" : ""], ["receiptSearch", batchSearch], ["receiptStage", stageFilter], ["receiptSort", batchSort]].forEach(([key, value]) => value && value !== "all" && value !== "newest" ? q.set(key, value) : q.delete(key));
+    window.history.replaceState(null, "", `${window.location.pathname}${q.size ? `?${q}` : ""}${window.location.hash}`);
+  }, [tab, batchSearch, stageFilter, batchSort]);
+
+  if (sel) return <BatchDetail id={sel} back={() => { setSel(null); reloadBatches(); }} usr={usr} data={data} profile={profile} onMakeTx={onMakeTx} flash={flash} reloadBatches={reloadBatches} />;
+
+  return (
+    <div className="space-y-4">
+      <H sub={l10n("فیشەکانی کڕیاران و هاوبەشان — پشکنین، کۆکردنەوە و بەستنەوە بە مامەڵە", "Customer and partner receipts — review, reconcile, and match to transactions", "إيصالات الزبائن والشركاء — مراجعة وتسوية وربط بالمعاملات")}>{tr("فیشەکان")}</H>
+
+      {batchLoadError && <StatePanel type="error" title="لیستی فیشەکان بار نەبوو" detail={batchLoadError} onRetry={reloadBatches} compact />}
+
+      <div className="flex gap-1 rounded-[var(--r)] p-1 overflow-x-auto" style={{ background: "var(--surf)", border: "1px solid var(--line)", boxShadow: "var(--sh-1)" }}>
+        {TABS.map(([k, t]) => (
+          <button key={k} onClick={() => setTab(k)}
+            style={tab === k ? { background: "linear-gradient(180deg, var(--ac), var(--pos))", color: "#fff", boxShadow: "0 2px 8px -2px rgba(14,122,107,.4)" } : { color: "var(--txt-2)" }}
+            className={`flex-1 whitespace-nowrap px-3 py-2.5 rounded-[var(--r-sm)] text-sm transition-all tap ${tab === k ? "font-bold" : "font-medium hover:bg-[var(--line)]"}`}>{t}</button>
+        ))}
+      </div>
+
+      {/* One list, for whichever of the two sections is open. «فرۆشیارێک لای خۆی هەموو
+        * فیشەکانی ببینێت کە ناردوویتی ، منیش هەمووی ببینم بەڵام کاتێک وردم کردەوە ، ئاوا
+        * ئاسایی هەر کۆمەلەیەک بەجیا ببینم» — one card per send, opening onto that send. */}
+      <Card className="p-4 space-y-3">
+        <div className="grid grid-cols-1 md:grid-cols-[minmax(240px,1fr)_160px] gap-2">
+          <label className="relative"><span className="sr-only">{l10n("گەڕان لە کۆمەڵە فیشەکان", "Search receipt batches", "البحث في دُفعات الإيصالات")}</span><Search className="absolute start-3 top-3 w-4 h-4 text-[var(--txt-3)]"/><Inp className="ps-9" value={batchSearch} onChange={(e) => { setBatchSearch(e.target.value); setBatchPage(1); }} placeholder={l10n("ناسنامە، کڕیار، هاوبەش، پلاتفۆرم یان دراو…", "Batch ID, customer, partner, platform, or currency…", "معرّف الدفعة أو الزبون أو الشريك أو المنصة أو العملة…")} /></label>
+          <Sel aria-label={l10n("ڕیزکردنی کۆمەڵەکان", "Sort batches", "ترتيب الدُفعات")} value={batchSort} onChange={(e) => setBatchSort(e.target.value)}><option value="newest">{l10n("نوێترین", "Newest", "الأحدث")}</option><option value="oldest">{l10n("کۆنترین", "Oldest", "الأقدم")}</option><option value="amount">{l10n("بڕ", "Amount", "المبلغ")}</option></Sel>
+        </div>
+
+        {!pageBatches.length
+          ? <StatePanel type="empty" compact title={tab === "review"
+              ? l10n("هیچ فیشێک چاوەڕێی تۆ نییە ✓", "Nothing needs your attention ✓", "لا شيء يحتاج انتباهك ✓")
+              : tab === "archive"
+                ? l10n("هیچ فیشێکی ئەرشیفکراو نییە", "No archived receipts", "لا توجد إيصالات مؤرشفة")
+                : l10n("هێشتا هیچ فیشێکی ئامادە نییە", "No ready receipts yet", "لا توجد إيصالات جاهزة بعد")} />
+          : <div className="space-y-2">
+              {pageBatches.map((b, i) => (
+                <Card key={b.id} className="p-4 rise" style={{ animationDelay: `${i * 40}ms` }} onClick={() => setSel(b.id)}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="font-semibold text-[var(--txt)]">{b.customer_name || (b.partner_id ? usr(b.partner_id).name : "—")}</div>
+                      <div className="text-xs text-[var(--txt-2)] mt-0.5" style={num}>{b.n} {tr("فیش")} · {new Date(b.created_at).toLocaleString("en-GB")}</div>
+                      <div className="flex gap-1.5 mt-1.5 flex-wrap">
+                        {b.source === "whatsapp" && (
+                          <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-600 text-white flex items-center gap-1">
+                            <MessageCircle className="w-3 h-3" /> {tr("واتساپ")}
+                          </span>
+                        )}
+                        <Pill tone={b.direction === "out" ? "amber" : "green"}>{DIR_KU[b.direction || "in"]}</Pill>
+                        <Pill tone={lifecycleTone(lifecycleOf(b))}>{lifecycleLabel(lifecycleOf(b))}</Pill>
+                        {(b.rejected_n || b.dup_n) > 0 && <Pill tone="red">{b.rejected_n || b.dup_n} {tr("ڕەتکراو")}</Pill>}
+                        {b.partner_id && <Pill tone="amber">{tr("لای")} {usr(b.partner_id).name}</Pill>}
+                      </div>
+                    </div>
+                    <div className="text-left shrink-0">
+                      <div className="text-xl font-bold text-[var(--pos)]" style={num}>{fmtMoney(data, b.total_net, b.currency)}</div>
+                      <div className="text-[11px] text-[var(--txt-3)]">{b.currency} {tr("بێ فی")}</div>
+                      {u(b.total_net, b.currency) != null && <div className="text-[11px] text-[var(--txt-2)]" style={num}>≈ {fmt(u(b.total_net, b.currency), 0)} $</div>}
+                      {b.total_fee > 0 && <div className="text-[10px] text-[var(--txt-3)]" style={num}>{tr("بە فی")} {fmtMoney(data, b.total_gross, b.currency)}</div>}
+                    </div>
+                  </div>
+                </Card>
+              ))}
+            </div>}
+
+        {pageBatches.length < filteredBatches.length && <Btn kind="ghost" className="w-full" onClick={() => setBatchPage((p) => p + 1)}>{l10n(`${Math.min(pageSize, filteredBatches.length - pageBatches.length)} دانەی تر`, `Load ${Math.min(pageSize, filteredBatches.length - pageBatches.length)} more`, `تحميل ${Math.min(pageSize, filteredBatches.length - pageBatches.length)} إضافية`)}</Btn>}
+        <div className="text-[10px] text-[var(--txt-3)]" aria-live="polite">{l10n(`${pageBatches.length} لە ${filteredBatches.length} کۆمەڵە نیشان دەدرێت؛ بارکردنی سێرڤەر سنووردارە بە ٢٠٠ کۆمەڵە.`, `Showing ${pageBatches.length} of ${filteredBatches.length}; server load is bounded to 200 batches.`, `يتم عرض ${pageBatches.length} من ${filteredBatches.length}؛ تحميل الخادم محدود بـ200 دفعة.`)}</div>
+      </Card>
+
+      {/* Two more sections used to be rendered here, for tab values "loc" and "wa". Neither was
+        * ever in TABS and no button set them, so they had been unreachable for as long as the
+        * four-tab bar existed: two more names for the receipts screen that nobody could open.
+        * LocationReceipts is still rendered by the partner holdings screen, which is where
+        * «فیشەکانی لای هاوبەشەکان» actually belongs. */}
+
+      {/* Not a section. «من فیش نانێرم، تەنها فرۆشیار ئەینێرێ» — but a seller whose phone will
+        * not upload still has to be served, and images shared into ZEMAN from another app land
+        * here too. So it opens when it is asked for, and the reason is written down. */}
+      {!addOpen && (
+        <button type="button" onClick={() => setAddOpen(true)}
+          className="w-full text-[12px] py-2.5 rounded-[var(--r-sm)] tap"
+          style={{ color: "var(--txt-3)", background: "var(--surf-2)", border: "1px solid var(--line)" }}>
+          {tr("ناردنی فیش لە جیاتی کەسێک")}
+        </button>
+      )}
+
+      {addOpen && (
+        <Card className="p-5">
+          <div className="flex items-start justify-between gap-3 mb-1">
+            <SecLbl>{tr("ناردنی فیش لە جیاتی کەسێک")}</SecLbl>
+            <button type="button" onClick={() => { setAddOpen(false); setAddFor(""); }}
+              aria-label={tr("داخستن")} className="p-1.5 rounded-lg" style={{ color: "var(--txt-3)" }}>
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+            <div>
+              <Lbl>{tr("کڕیار")}</Lbl>
+              <Sel value={addFor} onChange={(e) => { setAddFor(e.target.value); setAddTxId(""); }}>
+                <option value="">{tr("هەڵبژێرە…")}</option>
+                {customers.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+              </Sel>
+            </div>
+            <div>
+              <Lbl>{tr("مامەڵەی دیاریکراو")}</Lbl>
+              <Sel value={addTxId} onChange={(event) => setAddTxId(event.target.value)} disabled={!addFor}>
+                <option value="">{tr("هەڵبژێرە…")}</option>
+                {addTransactions.map((tx) => (
+                  <option key={tx.id} value={tx.id}>
+                    {tx.id} · {tx.type === "buy" ? tr("کڕیار فرۆشتوویەتی") : tr("کڕیار کڕیویەتی")}
+                  </option>
+                ))}
+              </Sel>
+            </div>
+            <div className="md:col-span-2">
+              <Lbl>{tr("هۆکاری ناردن لە جیاتی بەکارهێنەر (لانیکەم ٨ پیت)")}</Lbl>
+              <Inp value={addReason} onChange={(event) => setAddReason(event.target.value)} maxLength={700} />
+            </div>
+          </div>
+          {/* direction={addDir} used to be below, and addDir is declared nowhere in this file. It
+              threw ReferenceError during render, so the staff screen for adding a customer's
+              receipts went blank the moment a customer was chosen. `allowDirection` is already
+              set, which means the uploader offers the choice itself — so what belongs here is the
+              starting value, and "in" is the one a customer-seller's evidence always has. */}
+          {addFor && (
+            <ReceiptUploader customerId={addFor} customerName={usr(addFor).name} uploaderId={profile?.id}
+              data={data} direction="in" allowDirection flash={flash} staffReview role={profile?.role}
+              adminOverrideReason={addReason}
+              onDone={() => { setAddFor(""); setAddOpen(false); reloadBatches(); setTab("review"); }} />
+          )}
+        </Card>
+      )}
+    </div>
+  );
+}
+
+/* ─────────── خشتەی وردەکاری بۆ ناردن ─────────── */
+function ShareTable({ rows, data, who, title, onClose, flash }) {
+  const [mode, setMode] = useState("full");
+  const [phone, setPhone] = useState("");
+  const u = usdConv(data);
+  const today = new Date().toLocaleDateString("en-GB");
+
+  const counted = (rows || []).filter((r) => r.counted !== false && r.status !== "dup" && r.status !== "error");
+  const rejected = (rows || []).filter((r) => r.counted === false || r.status === "dup" || r.status === "error");
+
+  const gross = {}, fees = {}, net = {}, byWho = {}, byPlat = {};
+  counted.forEach((r) => {
+    const c = r.currency || "?";
+    const g = +(r.amount) || 0, f = +(r.fee) || 0;
+    const n = r.net != null ? +r.net : (r.net_amount != null ? +r.net_amount : g - f);
+    gross[c] = (gross[c] || 0) + g; fees[c] = (fees[c] || 0) + f; net[c] = (net[c] || 0) + n;
+    const k = (r.receiver || r.sender || "نەزانراو").trim();
+    byWho[k] = byWho[k] || { n: 0, cur: {} };
+    byWho[k].n++; byWho[k].cur[c] = (byWho[k].cur[c] || 0) + n;
+    const pl = r.platform || detectPlatform(r.bank) || "نەزانراو";
+    byPlat[pl] = byPlat[pl] || { n: 0, cur: {} };
+    byPlat[pl].n++; byPlat[pl].cur[c] = (byPlat[pl].cur[c] || 0) + n;
+  });
+  const curs = Object.keys(gross);
+  const whoList = Object.entries(byWho).sort((a, b) => b[1].n - a[1].n);
+  const platList = Object.entries(byPlat).sort((a, b) => b[1].n - a[1].n);
+
+  /* ── دەقی واتساپ ── */
+  const text = (() => {
+    const L = [];
+    L.push(`*${title || "وردەکاری فیشەکان"}*`);
+    if (who) L.push(`👤 ${who}`);
+    L.push(`📅 ${today}`);
+    L.push("");
+
+    if (mode === "rej") {
+      L.push(`⚠️ *${rejected.length} فیش ڕەت کراوەتەوە*`);
+      L.push("");
+      rejected.forEach((r, i) => {
+        const amt = r.amount ? `${fmtMoney(data, r.net_amount ?? r.net ?? r.amount, r.currency)} ${r.currency || ""}` : "—";
+        L.push(`${i + 1}. ${amt}`);
+        L.push(`   ❌ ${r.reject_reason || r.rejectReason || r.note || tr("نەزانراو")}`);
+        const bits = [];
+        if (r.ref_no || r.refNo) bits.push(`ژمارە: ${r.ref_no || r.refNo}`);
+        if (r.tx_time || r.txTime) bits.push(`کات: ${r.tx_time || r.txTime}`);
+        if (bits.length) L.push(`   ${bits.join(" · ")}`);
+        const od = r.dup_of_date || r.dupOfDate;
+        if (od) L.push(`   ↩️ ڕەسەنەکەی: ${new Date(od).toLocaleString("en-GB")}${(r.dup_of_who || r.dupOfWho) ? ` — ${r.dup_of_who || r.dupOfWho}` : ""}`);
+        L.push("");
+      });
+      return L.join("\n");
+    }
+
+    if (mode !== "short") {
+      L.push("```");
+      L.push("#   بڕ         فی    گەیشتوو   وەرگر");
+      L.push("───────────────────────────────────────");
+      counted.forEach((r, i) => {
+        const n = r.net != null ? +r.net : (r.net_amount ?? r.amount);
+        const num2 = String(i + 1).padEnd(3);
+        const am = fmtMoney(data, r.amount, r.currency).padStart(9);
+        const fe = (r.fee ? fmtMoney(data, r.fee, r.currency) : "—").padStart(5);
+        const nt = fmtMoney(data, n, r.currency).padStart(9);
+        const rc = String(r.receiver || "—").slice(0, 12);
+        L.push(`${num2} ${am} ${fe} ${nt}  ${rc}`);
+      });
+      L.push("```");
+      L.push("");
+    }
+
+    if (platList.length > 1) {
+      L.push("*بەپێی پلاتفۆرم*");
+      platList.forEach(([pl, v]) => {
+        const t = Object.entries(v.cur).map(([c, a]) => `${fmtMoney(data, a, c)} ${c}`).join(" / ");
+        L.push(`• ${platMeta(pl).ku}: ${t}  (${v.n})`);
+      });
+      L.push("");
+    }
+
+    L.push("*بەپێی وەرگر*");
+    whoList.forEach(([n, v]) => {
+      const t = Object.entries(v.cur).map(([c, a]) => `${fmtMoney(data, a, c)} ${c}`).join(" / ");
+      L.push(`• ${n}: ${t}  (${v.n})`);
+    });
+    L.push("");
+
+    L.push("*کۆی گشتی*");
+    curs.forEach((c) => {
+      L.push(`${c}:`);
+      L.push(`   بە فییەوە: ${fmtMoney(data, gross[c], c)}`);
+      if (fees[c] > 0) L.push(`   فی: −${fmtMoney(data, fees[c], c)}`);
+      L.push(`   ✅ گەیشتوو: ${fmtMoney(data, net[c], c)}`);
+      const usd = u(net[c], c);
+      if (usd != null) L.push(`   ≈ ${fmt(usd, 0)} USD`);
+    });
+    L.push("");
+    L.push(`📄 ${counted.length} فیش هەژمار کراوە`);
+
+    if (rejected.length) {
+      L.push("");
+      L.push(`⚠️ *${rejected.length} فیش ڕەت کراوەتەوە — هەژمار نەکراون*`);
+      L.push("");
+      rejected.forEach((r, i) => {
+        const amt = r.amount ? `${fmtMoney(data, r.net_amount ?? r.net ?? r.amount, r.currency)} ${r.currency || ""}` : "—";
+        L.push(`${i + 1}. ${amt}`);
+        L.push(`   ❌ ${r.reject_reason || r.rejectReason || r.note || REJECT_KU[r.reject_code || r.rejectCode] || "نەزانراو"}`);
+        const bits = [];
+        if (r.ref_no || r.refNo) bits.push(`ژمارە: ${r.ref_no || r.refNo}`);
+        if (r.tx_time || r.txTime) bits.push(`کات: ${r.tx_time || r.txTime}`);
+        if (r.receiver) bits.push(`وەرگر: ${r.receiver}`);
+        if (bits.length) L.push(`   ${bits.join(" · ")}`);
+        const od = r.dup_of_date || r.dupOfDate;
+        if (od) L.push(`   ↩️ ڕەسەنەکەی: ${new Date(od).toLocaleString("en-GB")}${(r.dup_of_who || r.dupOfWho) ? ` — ${r.dup_of_who || r.dupOfWho}` : ""}`);
+      });
+    }
+    return L.join("\n");
+  })();
+
+  const cleanPhone = (p) => {
+    let x = String(p).replace(/\D/g, "");
+    if (x.startsWith("00")) x = x.slice(2);
+    if (x.startsWith("0")) x = "964" + x.slice(1);       // عێراق
+    return x;
+  };
+
+  const sendWa = () => {
+    const p = cleanPhone(phone);
+    const url = p
+      ? `https://wa.me/${p}?text=${encodeURIComponent(text)}`
+      : `https://wa.me/?text=${encodeURIComponent(text)}`;
+    window.open(url, "_blank");
+  };
+  const copy = () => navigator.clipboard.writeText(text).then(() => flash(tr("کۆپی کرا ✓")));
+
+  return (
+    <div className="fixed inset-0 z-50 bg-slate-900/50 flex items-end md:items-center justify-center md:p-6" onClick={onClose}>
+      <div className="w-full max-w-lg rounded-t-[28px] md:rounded-[24px] max-h-[90vh] overflow-y-auto sheet" style={{ background: "var(--surf)", boxShadow: "var(--sh-3)" }} onClick={(e) => e.stopPropagation()}>
+        <div className="sticky top-0 z-10 px-5 py-4 flex items-center justify-between backdrop-blur-xl" style={{ background: "color-mix(in srgb, var(--surf) 92%, transparent)", borderBottom: "1px solid var(--line)" }}>
+          <div className="font-bold text-[var(--txt)]">{tr("ناردنی خشتە")}</div>
+          <button onClick={onClose} className="p-1.5 text-[var(--txt-3)]"><X className="w-5 h-5" /></button>
+        </div>
+
+        <div className="p-5 space-y-4">
+          <div className="flex gap-1 bg-[var(--line)] rounded-[var(--r-sm)] p-1">
+            {[["full", tr("خشتەی تەواو")], ["short", tr("تەنها کۆکان")], ["rej", tr("تەنها ڕەتکراوەکان")]].map(([k, t]) => (
+              <button key={k} onClick={() => setMode(k)}
+                className={`flex-1 py-2 rounded-lg text-sm ${mode === k ? "bg-[var(--surf)] text-[var(--pos)] font-bold shadow-sm" : "text-[var(--txt-2)]"}`}>{t}</button>
+            ))}
+          </div>
+
+          {/* پێشبینین */}
+          <div className="border border-[var(--line)] rounded-[var(--r)] overflow-hidden">
+            <div className="bg-slate-900 text-white px-4 py-3">
+              <div className="font-bold">{title || "وردەکاری فیشەکان"}</div>
+              <div className="text-xs text-[var(--txt-3)] mt-0.5">{who ? `${who} · ` : ""}<span style={num}>{today}</span></div>
+            </div>
+            <div className="p-4 space-y-3">
+              {mode === "full" && counted.length > 0 && (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="text-[var(--txt-3)] border-b border-[var(--line)]">
+                        <th className="text-right py-1.5 w-6">#</th>
+                        <th className="text-right">{tr("بڕ")}</th>
+                        <th className="text-right">{tr("فی")}</th>
+                        <th className="text-right">{tr("گەیشتوو")}</th>
+                        <th className="text-right">{tr("وەرگر")}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {counted.map((r, i) => (
+                        <tr key={r.id || i} className="border-b border-[var(--line)]">
+                          <td className="py-1.5 text-[var(--txt-3)]" style={num}>{i + 1}</td>
+                          <td style={num}>{fmtMoney(data, r.amount, r.currency)}</td>
+                          <td style={num} className={r.fee ? "text-[var(--neg)]" : "text-[var(--txt-3)]"}>{r.fee ? fmtMoney(data, r.fee, r.currency) : "—"}</td>
+                          <td style={num} className="font-bold">{fmtMoney(data, r.net ?? r.net_amount ?? r.amount, r.currency)}</td>
+                          <td className="text-[var(--txt-2)] truncate max-w-[80px]">{r.receiver || "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {platList.length > 1 && (
+                <div>
+                  <div className="text-[10px] font-bold text-[var(--txt-3)] uppercase mb-1">{tr("بەپێی پلاتفۆرم")}</div>
+                  {platList.map(([pl, v]) => (
+                    <div key={pl} className="flex justify-between text-xs py-1">
+                      <span className="text-[var(--txt-2)]">{platMeta(pl).ku} <span className="text-[var(--txt-3)]">({v.n})</span></span>
+                      <span className="font-bold" style={num}>{Object.entries(v.cur).map(([c, a]) => `${fmt(a, 0)} ${c}`).join(" / ")}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div>
+                <div className="text-[10px] font-bold text-[var(--txt-3)] uppercase mb-1">{tr("بەپێی وەرگر")}</div>
+                {whoList.map(([n, v]) => (
+                  <div key={n} className="flex justify-between text-xs py-1">
+                    <span className="text-[var(--txt-2)]">{n} <span className="text-[var(--txt-3)]">({v.n})</span></span>
+                    <span className="font-bold" style={num}>{Object.entries(v.cur).map(([c, a]) => `${fmt(a, 0)} ${c}`).join(" / ")}</span>
+                  </div>
+                ))}
+              </div>
+
+              {curs.map((c) => (
+                <div key={c} className="bg-[var(--line)] rounded-[var(--r-sm)] p-3">
+                  <div className="text-[10px] font-bold text-[var(--txt-3)] mb-1">{c}</div>
+                  <div className="flex justify-between text-xs py-0.5"><span className="text-[var(--txt-2)]">{tr("بە فییەوە")}</span><span style={num}>{fmtMoney(data, gross[c], c)}</span></div>
+                  {fees[c] > 0 && <div className="flex justify-between text-xs py-0.5"><span className="text-[var(--txt-2)]">{tr("فی")}</span><span style={num} className="text-[var(--neg)]">−{fmtMoney(data, fees[c], c)}</span></div>}
+                  <div className="flex justify-between pt-1.5 mt-1 border-t border-[var(--line)] items-baseline">
+                    <span className="text-xs font-bold">{tr("گەیشتوو")}</span>
+                    <div className="text-left">
+                      <div className="text-lg font-bold text-[var(--pos)]" style={num}>{fmtMoney(data, net[c], c)}</div>
+                      {u(net[c], c) != null && <div className="text-[10px] text-[var(--txt-3)]" style={num}>≈ {fmt(u(net[c], c), 0)} $</div>}
+                    </div>
+                  </div>
+                </div>
+              ))}
+
+              <div className="text-[11px] text-[var(--txt-3)]" style={num}>{counted.length} فیش هەژمار کراوە</div>
+
+              {rejected.length > 0 && (
+                <div className="border border-[color-mix(in_srgb,var(--neg)_26%,transparent)] bg-[color-mix(in_srgb,var(--neg)_9%,transparent)] rounded-[var(--r-sm)] p-3 mt-2">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-[var(--neg)] mb-2">
+                    <AlertTriangle className="w-3.5 h-3.5" />
+                    {rejected.length} فیش ڕەت کراوەتەوە — هەژمار نەکراون
+                  </div>
+                  <div className="space-y-2">
+                    {rejected.map((r, i) => (
+                      <div key={r.id || i} className="bg-[var(--surf)] rounded-lg p-2.5">
+                        <div className="flex items-baseline gap-2">
+                          <span className="text-[10px] text-[var(--txt-3)]" style={num}>{i + 1}.</span>
+                          <span className="text-sm font-bold text-[var(--txt-3)] line-through" style={num}>
+                            {r.amount ? fmtMoney(data, r.net_amount ?? r.net ?? r.amount, r.currency) : "—"}
+                          </span>
+                          <span className="text-[10px] text-[var(--txt-3)]">{r.currency || ""}</span>
+                        </div>
+                        <div className="text-[11px] text-[var(--neg)] mt-1 leading-snug">
+                          ❌ {r.reject_reason || r.rejectReason || r.note || REJECT_KU[r.reject_code || r.rejectCode] || "نەزانراو"}
+                        </div>
+                        <div className="text-[10px] text-[var(--txt-3)] mt-0.5 flex flex-wrap gap-x-2" style={num}>
+                          {(r.ref_no || r.refNo) && <span>ژمارە {r.ref_no || r.refNo}</span>}
+                          {(r.tx_time || r.txTime) && <span>· {r.tx_time || r.txTime}</span>}
+                          {r.receiver && <span>· {r.receiver}</span>}
+                        </div>
+                        {(r.dup_of_date || r.dupOfDate) && (
+                          <div className="text-[10px] text-[var(--txt-2)] mt-1 bg-[var(--line)] rounded px-1.5 py-1" style={num}>
+                            ↩️ ڕەسەنەکەی: {new Date(r.dup_of_date || r.dupOfDate).toLocaleString("en-GB")}
+                            {(r.dup_of_who || r.dupOfWho) && ` — ${r.dup_of_who || r.dupOfWho}`}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* ناردن */}
+          <div>
+            <Lbl>{tr("ژمارەی واتساپ (ئارەزوومەندانە)")}</Lbl>
+            <Inp type="tel" dir="ltr" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="07701234567" />
+            <div className="text-[11px] text-[var(--txt-3)] mt-1">{tr("بەتاڵی بهێڵەرەوە بۆ هەڵبژاردنی کەس لە واتساپ")}</div>
+          </div>
+
+          <div className="flex gap-2">
+            <Btn className="flex-1 flex items-center justify-center gap-1.5" onClick={sendWa}>
+              <MessageCircle className="w-4 h-4" /> {tr("ناردن بە واتساپ")}
+            </Btn>
+            <Btn kind="ghost" className="flex-1" onClick={copy}>{tr("کۆپیکردن")}</Btn>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+/* ─────────── فیشەکانی شوێنێک (لای خۆم یان لای هاوبەشێک) ─────────── */
+function LocationReceipts({ partnerId, data, title, flash, showValuation = true }) {
+  const [recs, setRecs] = useState(null);
+  const [recErr, setRecErr] = useState("");
+  const [mode, setMode] = useState("month");
+  const [dir, setDir] = useState("all");
+  const [share, setShare] = useState(false);
+
+  const loadLocationReceipts = async () => {
+    setRecs(null);
+    setRecErr("");
+    try {
+      // ١) فیشە دابەشکراوەکان (partner_id لەسەر خودی فیشەکە)
+      const q1 = partnerId
+        ? supabase.from("receipts").select("*").eq("partner_id", partnerId)
+        : supabase.from("receipts").select("*").is("partner_id", null);
+      const directRes = await q1;
+      if (directRes.error) throw directRes.error;
+      const direct = directRes.data || [];
+
+      // ٢) کۆمەڵەکانی ئەم شوێنە
+      let q = supabase.from("receipt_batches").select("id, customer_name, partner_id");
+      q = partnerId ? q.eq("partner_id", partnerId) : q.is("partner_id", null);
+      const batchRes = await q;
+      if (batchRes.error) throw batchRes.error;
+      const bs = batchRes.data || [];
+      const names = Object.fromEntries(bs.map((x) => [x.id, x.customer_name]));
+
+      let fromBatch = [];
+      if (bs.length) {
+        const receiptRes = await supabase.from("receipts").select("*").in("batch_id", bs.map((x) => x.id));
+        if (receiptRes.error) throw receiptRes.error;
+        // ئەوانەی خۆیان partner_id ـی جیایان هەیە، لێرە نایەن
+        fromBatch = (receiptRes.data || []).filter((r) => !r.partner_id || r.partner_id === (partnerId || null));
+      }
+
+      const seen = new Set();
+      const merged = [...direct, ...fromBatch].filter((r) => (seen.has(r.id) ? false : (seen.add(r.id), true)))
+        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+      setRecs(merged.map((r) => ({ ...r, customer_name: r.customer_name || names[r.batch_id] })));
+    } catch (e) {
+      console.error("location-receipts", e);
+      setRecErr(e?.message || "نەتوانرا فیشەکان وەربگیرێن");
+      setRecs([]);
+    }
+  };
+
+  useEffect(() => { loadLocationReceipts(); }, [partnerId]);
+
+  if (recs === null) return <Card><StatePanel type="loading" title={tr("بارکردن…")} compact /></Card>;
+  if (recErr) return <Card><StatePanel type="error" title="نەتوانرا فیشەکان وەربگیرێن" detail={recErr} onRetry={loadLocationReceipts} compact /></Card>;
+
+  const t = new Date(), iso = (d) => d.toISOString().slice(0, 10);
+  const w = new Date(t); w.setDate(w.getDate() - w.getDay());
+  const m = new Date(t.getFullYear(), t.getMonth(), 1);
+  const y = new Date(t.getFullYear(), 0, 1);
+  const from = mode === "day" ? iso(t) : mode === "week" ? iso(w) : mode === "month" ? iso(m) : mode === "year" ? iso(y) : "0000-01-01";
+  let list = recs.filter((r) => ((r.tx_date || r.created_at || "").slice(0, 10)) >= from);
+  if (dir !== "all") list = list.filter((r) => (r.direction || "in") === dir);
+
+  return (
+    <div className="space-y-3">
+      {title && <div className="font-bold text-[var(--txt)]">{title}</div>}
+      <div className="flex gap-1 rounded-[var(--r)] p-1 overflow-x-auto" style={{ background: "var(--surf)", border: "1px solid var(--line)", boxShadow: "var(--sh-1)" }}>
+        {[["day", tr("ئەمڕۆ")], ["week", tr("هەفتە")], ["month", tr("مانگ")], ["year", tr("ساڵ")], ["all", tr("هەمووی")]].map(([k, lbl]) => (
+          <button key={k} onClick={() => setMode(k)}
+            className={`flex-1 whitespace-nowrap py-2.5 px-3 rounded-lg text-sm ${mode === k ? "bg-[var(--pos)] text-white font-semibold" : "text-[var(--txt-2)]"}`}>{lbl}</button>
+        ))}
+      </div>
+      <div className="flex gap-1 rounded-[var(--r)] p-1" style={{ background: "var(--surf)", border: "1px solid var(--line)", boxShadow: "var(--sh-1)" }}>
+        {[["all", tr("هەمووی")], ["in", tr("هاتوو")], ["out", tr("نێردراو")]].map(([k, lbl]) => (
+          <button key={k} onClick={() => setDir(k)}
+            className={`flex-1 py-2 rounded-lg text-sm ${dir === k ? "bg-slate-900 text-white font-semibold" : "text-[var(--txt-2)]"}`}>{lbl}</button>
+        ))}
+      </div>
+      <ReceiptTotals rows={list} data={data} showValuation={showValuation} />
+
+      <Btn kind="gold" className="w-full flex items-center justify-center gap-2" onClick={() => setShare(true)}>
+        <Share2 className="w-4 h-4" /> {tr("ناردنی خشتەی وردەکاری")}
+      </Btn>
+      {share && (
+        <ShareTable rows={list} data={data} title={title || "فیشەکان"}
+          flash={flash} onClose={() => setShare(false)} />
+      )}
+
+      <RejectedReceipts rows={list} />
+      <ReceiptList rows={list} showFrom />
+    </div>
+  );
+}
+
+/* ─────────── وردەکاری کۆمەڵەیەک ─────────── */
+function BatchDetail({ id, back, usr, data, profile, onMakeTx, flash, reloadBatches }) {
+  const [b, setB] = useState(null);
+  const [recs, setRecs] = useState(null);
+  const [intakeItems, setIntakeItems] = useState([]);
+  const [events, setEvents] = useState([]);
+  const [candidates, setCandidates] = useState([]);
+  const [receiptPolicy, setReceiptPolicy] = useState(null);
+  const [matchReason, setMatchReason] = useState("");
+  const [matchBusy, setMatchBusy] = useState(null);
+  const [decisionBusy, setDecisionBusy] = useState(null);
+  const [finalizationReason, setFinalizationReason] = useState("");
+  const [finalizationBusy, setFinalizationBusy] = useState(false);
+  // §4.14: the canonical totals, computed on the server and read identically by the
+  // administrator here and by the person who sent the receipts in their own portal.
+  const [summary, setSummary] = useState(null);
+  const [summaryError, setSummaryError] = useState("");
+  const [split, setSplit] = useState(false);
+  const [share, setShare] = useState(false);
+  const [pick, setPick] = useState({});        // {receiptId: partnerId|""}
+  const [saving, setSaving] = useState(false);
+  const [allocationReason, setAllocationReason] = useState("دابەشکردنی فیش بەپێی شوێنی پارە");
+  // ── «٣ دانەیان هەڵدەبژێرم و مامەڵەیەکی لێوە درووست ئەکەم» ────────────────────────────────
+  //
+  // The server has taken an arbitrary list of receipt ids since 202608110001 — it checks they
+  // are accepted, unused, one currency and at most one partner, and leaves the batch open when
+  // some are left. What was missing was the way to say which ones. The amount still comes from
+  // the receipts and still cannot be typed over.
+  //
+  // Declared up here with the other hooks on purpose: the first version sat below the loading
+  // return, so it ran on some renders and not others. React counts hooks, and verify:journey
+  // caught the whole screen collapsing with "Rendered more hooks than during the previous
+  // render" before this reached anywhere real.
+  const [chosen, setChosen] = useState(() => new Set());
+  const pickOne = (id) => setChosen((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+  const matchCommandRef = useRef(null);
+  const decisionCommandRef = useRef(null);
+  const finalizationCommandRef = useRef(null);
+  const partners = data.users.filter((u) => u.role === "partner" && !u.deleted);
+
+  const load = async () => {
+    const [bb, rr, ii, aa, cc, pp] = await Promise.all([
+      supabase.from("receipt_batches").select("*").eq("id", id).single(),
+      supabase.from("receipts").select("*").eq("batch_id", id).order("created_at"),
+      supabase.from("receipt_intake_items").select("*").eq("batch_id", id).order("created_at"),
+      supabase.from("receipt_audit_events").select("*").eq("batch_id", id).order("created_at", { ascending: true }),
+      supabase.rpc("sarraf_receipt_match_candidates", { p_batch_id: id, p_limit: 5 }),
+      loadReceiptPolicy(supabase).catch(() => null),
+    ]);
+    try {
+      setSummary(await loadBatchSummary(supabase, id));
+      setSummaryError("");
+    } catch (error) {
+      console.error("batch summary", error);
+      setSummary(null);
+      setSummaryError(error?.message || "کۆکانەی سێرڤەر بار نەبوو");
+    }
+    setB(bb.data || null); setRecs(rr.data || []); setIntakeItems(ii.error ? [] : (ii.data || []));
+    const auditedEvents = aa.error ? [] : (aa.data || []).map((event) => ({
+      id: `audit-${event.id}`,
+      event_type: event.event_type,
+      created_at: event.created_at,
+      actor_user_id: event.actor_id,
+      detail: event.metadata?.reason || event.metadata?.decision || null,
+    }));
+    setEvents(auditedEvents.sort((left, right) => new Date(left.created_at) - new Date(right.created_at)));
+    setCandidates(cc.error ? [] : (cc.data || []));
+    setReceiptPolicy(pp || null);
+    setPick(Object.fromEntries((rr.data || []).map((r) => [r.id, r.partner_id || ""])));
+  };
+  useEffect(() => { load(); }, [id]);
+
+  if (!b || !recs) return <Card><Empty t={tr("بارکردن…")} /></Card>;
+  const good = recs.filter((r) => r.counted !== false && r.status !== "dup" && r.status !== "error");
+  const persistedItems = intakeItems.length ? intakeItems : recs.map((receipt) => ({
+    ...receipt,
+    intake_status: receipt.counted !== false && receipt.status !== "dup" && receipt.status !== "error" ? "accepted" : "rejected",
+    rule_code: receipt.reject_code,
+    rule_reason: receipt.reject_reason,
+  }));
+  const rejectedEvidence = persistedItems.filter((item) => item.intake_status === "rejected").map((item) => ({
+    ...item,
+    status: "error",
+    counted: false,
+    reject_code: item.rule_code || item.reject_code,
+    reject_reason: item.rule_reason || item.reject_reason,
+  }));
+  const unconvertedIds = new Set(persistedItems.filter((item) => item.intake_status === "accepted" && !item.transaction_id).map((item) => item.id));
+  const hasConvertedReceipts = persistedItems.some((item) => item.intake_status === "accepted" && item.transaction_id);
+  const convertibleReceipts = good.filter((receipt) => unconvertedIds.has(receipt.id));
+  const canCreateTransaction = b.receipt_stage === "verified" && convertibleReceipts.length > 0;
+  const canManageCustody = b.receipt_stage === "verified" && convertibleReceipts.length > 0;
+  const isOut = (b.direction || "in") === "out";
+
+  // گروپکردن بەپێی هاوبەش
+  const groups = {};
+  good.forEach((r) => {
+    const k = pick[r.id] || "";
+    groups[k] = groups[k] || { rows: [], n: 0 };
+    groups[k].rows.push(r); groups[k].n++;
+  });
+  const groupKeys = Object.keys(groups);
+  const conversionGroups = {};
+  convertibleReceipts.forEach((receipt) => {
+    const key = pick[receipt.id] || "";
+    conversionGroups[key] = conversionGroups[key] || { rows: [], n: 0 };
+    conversionGroups[key].rows.push(receipt);
+    conversionGroups[key].n += 1;
+  });
+  const conversionGroupKeys = Object.keys(conversionGroups);
+
+  // A receipt converted in another press is gone from convertibleReceipts, so a stale id in the
+  // set would silently shrink the total. The selection is always read through what is still there.
+  const selected = convertibleReceipts.filter((r) => chosen.has(r.id));
+  const selectedTotal = selected.reduce((sum, r) => sum + (Number(r.net_amount ?? r.amount) || 0), 0);
+  const selectedCurrencies = [...new Set(selected.map((r) => r.currency))];
+  const selectedPartners = [...new Set(selected.map((r) => r.partner_id || ""))];
+  // The same three rules the server enforces, said here instead of after the press.
+  const selectionObjection = selected.length === 0 ? null
+    : selectedCurrencies.length > 1 ? tr("فیشە هەڵبژێردراوەکان یەک دراو نین")
+    : selectedPartners.length > 1 ? tr("فیشە هەڵبژێردراوەکان لای یەک هاوبەش نین")
+    : null;
+  const remainingTotal = convertibleReceipts.reduce((sum, receipt) => sum + (Number(receipt.net_amount ?? receipt.amount) || 0), 0);
+  const remainingCurrency = convertibleReceipts[0]?.currency || b.currency;
+
+  const saveSplit = async () => {
+    if (allocationReason.trim().length < 8) return flash("هۆکاری دابەشکردن لانیکەم ٨ پیت بێت");
+    setSaving(true);
+    try {
+      await assignReceiptCustody(supabase, {
+        batchId: id,
+        allocations: convertibleReceipts.map((r) => ({ receipt_id: r.id, partner_id: pick[r.id] || null })),
+        reason: allocationReason,
+      });
+      flash("دابەشکردن پاشەکەوت کرا ✓");
+      setSplit(false); await load(); reloadBatches && reloadBatches();
+    } catch (e) { console.error(e); flash("هەڵە لە پاشەکەوتکردن"); }
+    finally { setSaving(false); }
+  };
+
+  const setAll = (pid) => setPick((current) => ({ ...current, ...Object.fromEntries(convertibleReceipts.map((r) => [r.id, pid])) }));
+
+  const confirmMatch = async (candidate) => {
+    const minimum = receiptPolicy?.min_match_score ?? 80;
+    const reasonBelow = receiptPolicy?.require_reason_below ?? 90;
+    if (Number(candidate.score) < minimum) {
+      return flash(`ئەم پێشنیارە ژێر سنووری یاسای ${minimum}% ـە`);
+    }
+    if (Number(candidate.score) < reasonBelow && matchReason.trim().length < 8) {
+      return flash(`بۆ نمرەی کەمتر لە ${reasonBelow}%، هۆکارێکی ڕوون بنووسە`);
+    }
+    if (!matchCommandRef.current || matchCommandRef.current.txId !== candidate.tx_id) {
+      matchCommandRef.current = { txId: candidate.tx_id, key: createReceiptReviewCommand("accept", id, candidate.tx_id) };
+    }
+    setMatchBusy(candidate.tx_id);
+    try {
+      await reviewReceiptBatch(supabase, { batchId: id, decision: "accept", txId: candidate.tx_id,
+        reviewReason: matchReason, commandKey: matchCommandRef.current.key });
+      flash("فیشەکان بە مامەڵەکەوە بەسترانەوە ✓");
+      matchCommandRef.current = null;
+      setMatchReason("");
+      await load();
+      reloadBatches && reloadBatches();
+    } catch (error) {
+      console.error("receipt match", error);
+      flash(`بەستنەوە سەرکەوتوو نەبوو — ${errorTextOr(error, "هەڵە")}`, "error");
+    } finally {
+      setMatchBusy(null);
+    }
+  };
+
+  const decideWithoutMatch = async (decision) => {
+    if (matchReason.trim().length < 8) return flash("هۆکاری بڕیارەکە لانیکەم ٨ پیت بێت");
+    if (!decisionCommandRef.current || decisionCommandRef.current.decision !== decision) {
+      decisionCommandRef.current = { decision, key: createReceiptReviewCommand(decision, id) };
+    }
+    setDecisionBusy(decision);
+    try {
+      await reviewReceiptBatch(supabase, { batchId: id, decision, reviewReason: matchReason,
+        commandKey: decisionCommandRef.current.key });
+      flash(decision === "reject" ? "کۆمەڵە فیشەکە ڕەتکرایەوە ✓" : "کۆمەڵە فیشەکە بۆ ڕاستکردنەوە گەڕێندرایەوە ✓");
+      decisionCommandRef.current = null;
+      setMatchReason("");
+      await load();
+      reloadBatches && reloadBatches();
+    } catch (error) {
+      console.error("receipt decision", error);
+      flash(errorTextOr(error, "بڕیاری فیش جێبەجێ نەکرا"), "error");
+    } finally {
+      setDecisionBusy(null);
+    }
+  };
+
+  const finalizeDecision = async () => {
+    const sameMaker = b?.decision_by && b.decision_by === profile?.id;
+    const ownerOverride = sameMaker && profile?.adminLevel === "owner";
+    const requiredLength = ownerOverride ? 12 : 8;
+    if (finalizationReason.trim().length < requiredLength) {
+      return flash(`هۆکاری پشکنینی کۆتایی لانیکەم ${requiredLength} پیت بێت`);
+    }
+    if (sameMaker && !ownerOverride) return flash("ئەدمینێکی جیاواز دەبێت پشکنینی کۆتایی ئەم بڕیارە بکات");
+    // §4.15: the decision is taken against a particular set of figures and says which. If they
+    // have moved since this screen read them, the server refuses and the screen reloads rather
+    // than finalizing numbers nobody looked at.
+    const version = versionOf(summary);
+    if (!version) return flash("کۆکانەی سێرڤەر بار نەبووە — تکایە پەڕەکە نوێ بکەرەوە");
+    finalizationCommandRef.current ||= createReceiptReviewCommand("finalize", id);
+    setFinalizationBusy(true);
+    try {
+      await finalizeReceiptBatch(supabase, { batchId: id, finalizationReason,
+        ownerOverride, commandKey: finalizationCommandRef.current, summaryVersion: version });
+      finalizationCommandRef.current = null;
+      setFinalizationReason("");
+      flash("بڕیاری فیش پشکنینی کۆتایی و تۆماری وردبینی بۆ کرا ✓");
+      await load();
+      reloadBatches && reloadBatches();
+    } catch (error) {
+      console.error("receipt finalization", error);
+      if (isStale(error)) {
+        // A fresh key, because the figures this one was minted against no longer exist.
+        finalizationCommandRef.current = null;
+        await load();
+        flash(STALE_MESSAGE, "error");
+      } else {
+        flash(errorTextOr(error, "پشکنینی کۆتایی سەرکەوتوو نەبوو"), "error");
+      }
+    } finally {
+      setFinalizationBusy(false);
+    }
+  };
+
+  const lifecycleStage = b.receipt_stage === "received" ? "capture"
+    : b.receipt_stage === "reading" ? "read"
+      : b.receipt_stage === "needs_review" ? "review"
+        : b.receipt_stage === "verified" ? "verify"
+          : b.receipt_stage === "matched" ? "match"
+            : b.receipt_stage === "rejected" ? "review"
+                : b.receipt_stage === "finalized" ? "archive"
+                  : b.receipt_stage === "archived" ? "archive"
+                    : b.tx_id ? "match" : "verify";
+  const requiresFinalization = receiptPolicy?.require_finalization !== false;
+  const eventLabels = {
+    received: "کۆمەڵە وەرگیرا", ai_read: "AI خوێندییەوە", needs_review: "پشکنینی مرۆڤ پێویستە",
+    verified: "پشتڕاست کرایەوە", matched: "بە مامەڵەوە بەسترا", unlinked: "بەستنەوە هەڵوەشایەوە",
+    decision_rejected: "بڕیاری ڕەتکردنەوە تۆمار کرا", correction_requested: "گەڕێندرایەوە بۆ ڕاستکردنەوە",
+    finalized: "بڕیارەکە پشکنینی کۆتایی بۆ کرا", policy_updated: "یاسای فیش نوێ کرایەوە",
+    archived: "ئەرشیف کرا", rejected_summary: "ڕەتکراوەکان تۆمار کران", split_updated: "دابەشکردن نوێکرایەوە",
+  };
+
+  return (
+    <div className="space-y-4">
+      <Back onClick={back} t={tr("گەڕانەوە")} />
+      <DeferredPanel compact><ReceiptLifecycle stage={lifecycleStage} lang={_lang} /></DeferredPanel>
+      <div className="flex items-start justify-between flex-wrap gap-2">
+        <div>
+          <h2 className="text-xl font-bold text-[var(--txt)]">{b.customer_name || (b.partner_id ? usr(b.partner_id).name : "—")}</h2>
+          <div className="text-xs text-[var(--txt-2)] mt-0.5" style={num}>{new Date(b.created_at).toLocaleString("en-GB")}</div>
+        </div>
+        <div className="flex gap-1.5 flex-wrap">
+          <Pill tone={isOut ? "amber" : "green"}>{DIR_KU[b.direction || "in"]}</Pill>
+          {b.receipt_stage === "rejected"
+            ? <Pill tone="red">ڕەتکراوە</Pill>
+            : b.status === "new"
+              ? <Pill tone="green">{tr("چاوەڕوانی مامەڵە")}</Pill>
+              : b.tx_id
+                ? <Pill tone="slate">{tr("بەستراوە")}</Pill>
+                : <Pill tone="slate">بڕیار تەواوە</Pill>}
+        </div>
+      </div>
+
+      {/* The canonical figures, from the server. The same read model the sender's own portal
+          shows, so the two screens can never disagree about what this batch came to. */}
+      {summaryError
+        ? <Card className="p-4"><StatePanel type="error" title={tr("کۆکانەی سێرڤەر بار نەبوو")} detail={summaryError} onRetry={load} compact /></Card>
+        : <React.Suspense fallback={null}><CanonicalBatchSummary summary={summary} ui={{ Card, Pill, tr, num }} /></React.Suspense>}
+
+      <ReceiptTotals rows={recs} data={data} />
+
+      <Card className="p-4">
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div>
+            <div className="text-[13px] font-bold text-[var(--txt)]">دۆخی پاراستنی فیشەکان</div>
+            <div className="text-[11px] text-[var(--txt-3)] mt-1">
+              هەموو وێنە و وردەکارییەکان تۆمار کراون؛ تەنها فیشە پەسەندکراوەکان لە کۆی مامەڵەدا هەژمار دەکرێن.
+            </div>
+          </div>
+          <Pill tone={canCreateTransaction || b.tx_id ? "green" : rejectedEvidence.length ? "red" : "amber"}>
+            {canCreateTransaction ? "ئامادەی مامەڵە" : b.tx_id ? "بە مامەڵەوە بەستراوە" : "مامەڵە قوفڵە"}
+          </Pill>
+        </div>
+        <div className="grid grid-cols-3 gap-2 mt-3" role="status" aria-label="پوختەی پاراستنی فیش">
+          {[["هەموو", persistedItems.length, "var(--txt)"], ["پەسەندکراو", good.length, "var(--pos)"], ["ڕەتکراو", rejectedEvidence.length, "var(--neg)"]].map(([label, value, color]) => (
+            <div key={label} className="rounded-xl p-3 text-center" style={{ background: "var(--surf-2)", border: "1px solid var(--line)" }}>
+              <div className="text-[10px] text-[var(--txt-3)]">{label}</div>
+              <div className="text-lg font-bold mt-1" style={{ ...num, color }}>{value}</div>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      <Btn kind="gold" className="w-full flex items-center justify-center gap-2" onClick={() => setShare(true)}>
+        <Share2 className="w-4 h-4" /> {tr("ناردنی خشتەی وردەکاری")}
+      </Btn>
+      {share && (
+        <ShareTable rows={recs} data={data} who={b.customer_name || (b.partner_id ? usr(b.partner_id).name : "")}
+          title={tr("وردەکاری فیشەکان")} flash={flash} onClose={() => setShare(false)} />
+      )}
+
+      {canCreateTransaction && !hasConvertedReceipts && (
+        <Card className="p-5">
+          <div className="flex items-start justify-between gap-3 flex-wrap mb-4">
+            <div>
+              <SecLbl>{tr("بەستنەوەی زیرەک")}</SecLbl>
+              <div className="text-[11px] text-[var(--txt-3)] mt-1">پێشنیارەکان تەنها یارمەتیدەرن؛ بەستنەوە تەنها دوای پشتڕاستکردنەوەی تۆ ئەنجام دەدرێت.</div>
+            </div>
+            <div className="flex gap-1.5 flex-wrap">
+              <Pill tone="amber">{tr("پەسەندکردنی مرۆڤ پێویستە")}</Pill>
+              <Pill tone="slate">یاسا {receiptPolicy?.version || "—"} · لانیکەم {receiptPolicy?.min_match_score ?? 80}%</Pill>
+            </div>
+          </div>
+          <div className="space-y-3">
+            {candidates.length === 0 && <StatePanel type="empty" title="هیچ مامەڵەیەکی گونجاو بۆ بەستنەوە نەدۆزرایەوە" detail="دەتوانیت لە فیشە پەسەندکراوەکان مامەڵەیەکی نوێ دروست بکەیت، یان کۆمەڵەکە ڕەت بکەیتەوە." compact />}
+            {candidates.map((candidate) => {
+              const reasons = candidate.reasons || {};
+              const minimum = receiptPolicy?.min_match_score ?? 80;
+              const reasonBelow = receiptPolicy?.require_reason_below ?? 90;
+              const belowPolicy = Number(candidate.score) < minimum;
+              const reasonRequired = Number(candidate.score) < reasonBelow;
+              return (
+                <div key={candidate.tx_id} className="rounded-2xl p-4" style={{ background: "var(--surf-2)", border: "1px solid var(--line)" }}>
+                  <div className="flex items-start justify-between gap-3 flex-wrap">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-[13px] font-bold text-[var(--txt)]" style={num}>#{candidate.tx_code || "—"}</span>
+                        <Pill tone={candidate.score >= minimum ? "green" : "red"}>{candidate.score}%</Pill>
+                        <span className="text-[10px] text-[var(--txt-3)]">{candidate.tx_type} · {candidate.tx_status}</span>
+                      </div>
+                      <div className="text-[12px] font-semibold text-[var(--txt)] mt-2" style={num}>
+                        {fmtMoney(data, candidate.tx_amount, candidate.tx_currency)} {candidate.tx_currency} · {candidate.tx_counterparty || "—"}
+                      </div>
+                      <div className="text-[10px] text-[var(--txt-3)] mt-1" style={num}>{candidate.tx_date ? new Date(candidate.tx_date).toLocaleString("en-GB") : "—"}</div>
+                    </div>
+                    <Btn onClick={() => confirmMatch(candidate)} disabled={!!matchBusy || !!decisionBusy || belowPolicy || (reasonRequired && matchReason.trim().length < 8)}>
+                      {matchBusy === candidate.tx_id ? "بەستنەوە…" : belowPolicy ? "ژێر سنووری یاسا" : "پەسەندکردن و بەستنەوە"}
+                    </Btn>
+                  </div>
+                  <div className="flex gap-1.5 flex-wrap mt-3">
+                    <Pill tone={Number(reasons.amount_delta || 0) <= Math.max(0.01, Math.abs(Number(b.total_net || 0)) * 0.001) ? "green" : "amber"}>جیاوازی بڕ: <span style={num}>{fmt(Number(reasons.amount_delta || 0), 2)}</span></Pill>
+                    <Pill tone={reasons.currency_match ? "green" : "red"}>دراو {reasons.currency_match ? "✓" : "✕"}</Pill>
+                    <Pill tone={reasons.direction_match ? "green" : "red"}>ئاڕاستە {reasons.direction_match ? "✓" : "✕"}</Pill>
+                    <Pill tone={reasons.counterparty_match ? "green" : "slate"}>لایەن {reasons.counterparty_match ? "✓" : "—"}</Pill>
+                    <Pill tone="slate"><span style={num}>{fmt(Number(reasons.time_hours || 0), 1)}</span> کاتژمێر</Pill>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="mt-4">
+            <Lbl>هۆکاری بڕیار {candidates.some((candidate) => candidate.score < (receiptPolicy?.require_reason_below ?? 90)) ? "(بۆ نمرەی ژێر سنوور، ڕەتکردنەوە یان ڕاستکردنەوە پێویستە)" : "(بۆ ڕەتکردنەوە یان ڕاستکردنەوە پێویستە)"}</Lbl>
+            <Inp value={matchReason} onChange={(e) => setMatchReason(e.target.value)} placeholder="بۆ نموونە: بڕ/دراو/کڕیار یەکناگرنەوە، یان پشکنینەکە پشتڕاستە" />
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-3 pt-3 border-t border-[var(--line)]">
+            <Btn kind="danger" onClick={() => decideWithoutMatch("reject")} disabled={!!matchBusy || !!decisionBusy || receiptPolicy?.allow_reject === false || matchReason.trim().length < 8}>
+              {decisionBusy === "reject" ? "ڕەتکردنەوە…" : "ڕەتکردنەوەی کۆمەڵە"}
+            </Btn>
+            <Btn kind="ghost" onClick={() => decideWithoutMatch("correction")} disabled={!!matchBusy || !!decisionBusy || receiptPolicy?.allow_correction === false || matchReason.trim().length < 8}>
+              {decisionBusy === "correction" ? "گەڕاندنەوە…" : "گەڕاندنەوە بۆ ڕاستکردنەوە"}
+            </Btn>
+          </div>
+        </Card>
+      )}
+
+      <Card className="p-5">
+        <SecLbl>{tr("مێژووی وردبینی")}</SecLbl>
+        <div className="mt-4 space-y-0">
+          {(events.length ? events : [{ id: "created", event_type: "received", created_at: b.created_at, detail: "Legacy batch" }]).map((event, index, list) => (
+            <div key={event.id} className="flex gap-3 min-h-[58px]">
+              <div className="flex flex-col items-center">
+                <span className="w-7 h-7 rounded-full flex items-center justify-center shrink-0" style={{ background: index === list.length - 1 ? "var(--ac)" : "var(--pos)", color: "#fff" }}>
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                </span>
+                {index < list.length - 1 && <span className="w-px flex-1" style={{ background: "var(--line-2)" }} />}
+              </div>
+              <div className="pb-4 min-w-0">
+                <div className="text-[12px] font-semibold text-[var(--txt)]">{eventLabels[event.event_type] || formatAuditAction(event.event_type)}</div>
+                <div className="text-[10px] text-[var(--txt-3)] mt-0.5" style={num}>{event.created_at ? new Date(event.created_at).toLocaleString("en-GB") : "—"}</div>
+                {(event.detail || event.actor_user_id) && <div className="text-[10.5px] text-[var(--txt-2)] mt-1">{event.detail || ""}{event.actor_user_id ? ` · ${usr(event.actor_user_id).name || event.actor_user_id}` : ""}</div>}
+              </div>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      <RejectedReceipts rows={rejectedEvidence} />
+
+      {/* دابەشکردن بەسەر هاوبەشەکان */}
+      {canManageCustody && partners.length > 0 && (
+        <Card className="p-5">
+          <div className="flex items-center justify-between mb-3">
+            <SecLbl>{tr("دابەشکردن بەسەر هاوبەشەکان")}</SecLbl>
+            <button onClick={() => setSplit(!split)} className="text-xs font-semibold text-[var(--pos)]">
+              {split ? "داخستن" : "دەستکاری"}
+            </button>
+          </div>
+
+          {!split ? (
+            groupKeys.length <= 1 && !groupKeys[0] ? (
+              <div className="text-sm text-[var(--txt-2)]">{tr("هەموو فیشەکان یەکجار وەردەگیرێن — گەر دەتەوێت بەسەر چەند هاوبەشێک دابەشیان بکەیت، «دەستکاری» لێبدە")}</div>
+            ) : (
+              <div className="space-y-2">
+                {groupKeys.map((k) => {
+                  const g = groups[k];
+                  const tot = {};
+                  g.rows.forEach((r) => { const c = r.currency || "?"; tot[c] = (tot[c] || 0) + (+(r.net_amount ?? r.amount) || 0); });
+                  return (
+                    <div key={k || "none"} className="flex items-center justify-between py-2.5 border-b border-[var(--line)] last:border-0">
+                      <div>
+                        <div className="font-semibold text-[var(--txt)]">{k ? usr(k).name : "قاسەی گشتی (لای خۆم)"}</div>
+                        <div className="text-xs text-[var(--txt-3)]" style={num}>{g.n} فیش</div>
+                      </div>
+                      <div className="text-left">
+                        {Object.entries(tot).map(([c, v]) => (
+                          <div key={c} className="font-bold text-[var(--txt)]" style={num}>{fmt(v, 0)} <span className="text-xs font-normal text-[var(--txt-2)]">{c}</span></div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )
+          ) : (
+            <div className="space-y-2.5">
+              <div className="flex gap-1.5 flex-wrap mb-2">
+                <span className="text-xs text-[var(--txt-2)] self-center">{tr("هەمووی بۆ:")}</span>
+                <button onClick={() => setAll("")} className="px-2.5 py-1 rounded-lg bg-[var(--line)] hover:bg-[var(--line)] text-xs font-semibold">{tr("قاسەی گشتی")}</button>
+                {partners.map((p) => (
+                  <button key={p.id} onClick={() => setAll(p.id)} className="px-2.5 py-1 rounded-lg bg-[var(--line)] hover:bg-[var(--pos)] hover:text-white text-xs font-semibold transition">{p.name}</button>
+                ))}
+              </div>
+              {convertibleReceipts.map((r, i) => (
+                <div key={r.id} className="flex items-center gap-2.5 p-2.5 bg-[var(--line)] rounded-[var(--r-sm)]">
+                  <span className="text-xs text-[var(--txt-3)] w-5" style={num}>{i + 1}</span>
+                  {r.image_path && <ReceiptImg path={r.image_path} className="w-10 h-10 object-cover rounded-lg border border-[var(--line)] shrink-0" />}
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-bold text-[var(--txt)]" style={num}>{fmtMoney(data, r.net_amount ?? r.amount, r.currency)} <span className="text-xs font-normal text-[var(--txt-2)]">{r.currency}</span></div>
+                    <div className="text-[11px] text-[var(--txt-3)] truncate">{r.receiver || "—"}</div>
+                  </div>
+                  <select value={pick[r.id] ?? ""} onChange={(e) => setPick({ ...pick, [r.id]: e.target.value })}
+                    className="border border-[var(--line)] rounded-lg px-2 py-1.5 text-xs bg-[var(--surf)] shrink-0 max-w-[130px]">
+                    <option value="">{tr("قاسەی گشتی")}</option>
+                    {partners.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </select>
+                </div>
+              ))}
+              <div>
+                <Lbl>{tr("هۆکاری دانانی فیشەکان لای هاوبەش")}</Lbl>
+                <Inp value={allocationReason} onChange={(event) => setAllocationReason(event.target.value)}
+                  placeholder={tr("بۆ نموونە: پارەکە لای ئەم هاوبەشە دانرا")} />
+              </div>
+              <Btn className="w-full" onClick={saveSplit} disabled={saving}>{saving ? tr("جێبەجێکردن…") : tr("پاشەکەوتکردنی دابەشکردن")}</Btn>
+            </div>
+          )}
+        </Card>
+      )}
+
+      {/* Choosing which receipts, one by one. «٣ دانەیان هەڵدەبژێرم و مامەڵەیەکی لێوە درووست
+        * ئەکەم ، لە بڕەکە بڕی ئەو ٣ فیشە دابنێ ، ئەوانی تریش بە هەمان شێواز.» */}
+      {canCreateTransaction && (
+        <Card className="p-5">
+          <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
+            <SecLbl>{tr("هەڵبژاردنی فیشەکان")}</SecLbl>
+            <div className="flex gap-1.5">
+              <button type="button" onClick={() => setChosen(new Set(convertibleReceipts.map((r) => r.id)))}
+                className="px-2.5 py-1 rounded-lg text-xs font-semibold"
+                style={{ background: "var(--line)", color: "var(--txt-2)" }}>{tr("هەموویان")}</button>
+              <button type="button" onClick={() => setChosen(new Set())}
+                className="px-2.5 py-1 rounded-lg text-xs font-semibold"
+                style={{ background: "var(--line)", color: "var(--txt-2)" }}>{tr("پاککردنەوەی هەڵبژاردن")}</button>
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            {convertibleReceipts.map((r, i) => {
+              const on = chosen.has(r.id);
+              return (
+                <label key={r.id}
+                  className="flex items-center gap-2.5 p-2.5 rounded-[var(--r-sm)] cursor-pointer tap"
+                  style={on
+                    ? { background: "var(--ac-bg)", border: "1px solid color-mix(in srgb, var(--ac) 34%, transparent)" }
+                    : { background: "var(--surf-2)", border: "1px solid var(--line)" }}>
+                  <input type="checkbox" checked={on} onChange={() => pickOne(r.id)}
+                    className="w-4 h-4 accent-[var(--ac)] shrink-0"
+                    aria-label={`${tr("فیش")} ${i + 1} — ${fmtMoney(data, r.net_amount ?? r.amount, r.currency)} ${r.currency}`} />
+                  <span className="text-xs text-[var(--txt-3)] w-5" style={num}>{i + 1}</span>
+                  {r.image_path && <ReceiptImg path={r.image_path} className="w-9 h-9 object-cover rounded-lg border border-[var(--line)] shrink-0" />}
+                  <span className="min-w-0 flex-1">
+                    <span className="text-sm font-bold text-[var(--txt)] block" style={num}>
+                      {fmtMoney(data, r.net_amount ?? r.amount, r.currency)}
+                      <span className="text-xs font-normal text-[var(--txt-2)]"> {r.currency}</span>
+                    </span>
+                    <span className="text-[11px] text-[var(--txt-3)] truncate block">
+                      {r.receiver || "—"}{r.partner_id ? ` · ${tr("لای")} ${usr(r.partner_id).name}` : ""}
+                    </span>
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+
+          {selected.length > 0 && (
+            <div className="mt-3 pt-3 border-t border-[var(--line)]">
+              <div className="flex items-center justify-between gap-3 mb-2 flex-wrap">
+                <span className="text-sm text-[var(--txt-2)]">
+                  <b style={num}>{selected.length}</b> {tr("فیش هەڵبژێردراوە")}
+                </span>
+                <span className="text-lg font-bold" style={{ ...num, color: "var(--pos)" }}>
+                  {fmtMoney(data, selectedTotal, selectedCurrencies[0])} {selectedCurrencies[0]}
+                </span>
+              </div>
+              {selectionObjection
+                ? <div className="text-[12px] mb-2" style={{ color: "var(--neg)" }}>{selectionObjection}</div>
+                : null}
+              <Btn kind={isOut ? "danger" : "primary"} className="w-full" disabled={!!selectionObjection}
+                onClick={() => onMakeTx({ ...b, total_net: selectedTotal, currency: selectedCurrencies[0],
+                  n: selected.length, partner_id: selected[0]?.partner_id || null,
+                  receipt_ids: selected.map((r) => r.id) })}>
+                {isOut
+                  ? tr("درووستکردنی فرۆشتن لەم فیشە هەڵبژێردراوانە")
+                  : tr("درووستکردنی کڕین لەم فیشە هەڵبژێردراوانە")}
+              </Btn>
+            </div>
+          )}
+        </Card>
+      )}
+
+      {canCreateTransaction && (
+        <Card className={`p-5 ${isOut ? "border-[color-mix(in_srgb,var(--neg)_34%,transparent)] bg-[color-mix(in_srgb,var(--neg)_8%,transparent)]" : "border-[color-mix(in_srgb,var(--pos)_34%,transparent)] bg-[color-mix(in_srgb,var(--pos)_8%,transparent)]"}`}>
+          {conversionGroupKeys.length > 1 ? (
+            <>
+              <div className="text-sm text-[var(--txt)] mb-3">
+                {tr("فیشە ماوەکان بەسەر")} <b>{conversionGroupKeys.length}</b> {tr("شوێندا دابەش کراون — بۆ هەریەکەیان مامەڵەیەکی جیا دروست بکە:")}
+              </div>
+              <div className="space-y-2">
+                {conversionGroupKeys.map((k) => {
+                  const g = conversionGroups[k];
+                  const cu = g.rows[0]?.currency;
+                  const tot = g.rows.reduce((s2, r) => s2 + (+(r.net_amount ?? r.amount) || 0), 0);
+                  return (
+                    <Btn key={k || "none"} kind={isOut ? "danger" : "primary"} className="w-full flex items-center justify-between"
+                      onClick={() => onMakeTx({ ...b, total_net: tot, currency: cu, n: g.n, partner_id: k || null, receipt_ids: g.rows.map((row) => row.id), _group: k || null })}>
+                      <span>{k ? usr(k).name : "قاسەی گشتی"}</span>
+                      <span style={num}>{fmt(tot, 0)} {cu}</span>
+                    </Btn>
+                  );
+                })}
+              </div>
+            </>
+          ) : (
+            <>
+              <div className={`text-sm mb-3 ${isOut ? "text-[var(--neg)]" : "text-[var(--pos)]"}`}>
+                {isOut
+                  ? <>{tr("ئەم بڕەی پەسەندکراوە ماوە:")} <b style={num}>{fmtMoney(data, remainingTotal, remainingCurrency)} {remainingCurrency}</b> {tr("— فرۆشتنێکی لێ دروست بکە")}</>
+                  : <>{tr("ئەم بڕەی پەسەندکراوە ماوە:")} <b style={num}>{fmtMoney(data, remainingTotal, remainingCurrency)} {remainingCurrency}</b> {tr("— کڕینێکی لێ دروست بکە")}</>}
+              </div>
+              <Btn kind={isOut ? "danger" : "primary"} className="w-full"
+                onClick={() => onMakeTx({ ...b, total_net: remainingTotal, currency: remainingCurrency, n: convertibleReceipts.length,
+                  partner_id: conversionGroupKeys[0] || null, receipt_ids: convertibleReceipts.map((row) => row.id) })}>
+                {isOut ? "درووستکردنی فرۆشتن لەم فیشانەوە" : "درووستکردنی کڕین لەم فیشانەوە"}
+              </Btn>
+            </>
+          )}
+        </Card>
+      )}
+      {(b.tx_id || b.decision_status === "rejected") && (
+        <Card className="p-5">
+          <div className="flex items-start justify-between gap-3 flex-wrap">
+            <div>
+              <div className="text-sm text-[var(--txt-2)]">
+                {b.decision_status === "rejected"
+                  ? "کۆمەڵە فیشەکە ڕەتکراوەتەوە"
+                  : <>{tr("بەستراوە بە مامەڵەی")} <b style={num}>#{(data.txs.find((t) => t.id === b.tx_id) || {}).code || "—"}</b></>}
+              </div>
+              <div className="flex gap-1.5 mt-2 flex-wrap">
+                {b.matched_score != null && <Pill tone={b.matched_score >= (receiptPolicy?.min_match_score ?? 80) ? "green" : "amber"}>گونجان {b.matched_score}%</Pill>}
+                <Pill tone={b.decision_status === "rejected" ? "red" : "green"}>{b.decision_status || (b.tx_id ? "accepted" : "—")}</Pill>
+                <Pill tone={b.receipt_stage === "finalized" || !requiresFinalization ? "green" : "amber"}>{b.receipt_stage === "finalized" ? "پشکنینی کۆتایی تەواوە" : requiresFinalization ? "چاوەڕوانی پشکنینی کۆتایی" : "بڕیار تەواوە · پشکنینی کۆتایی ئارەزوومەندانەیە"}</Pill>
+                {b.policy_version && <Pill tone="slate">یاسا {b.policy_version}</Pill>}
+              </div>
+              {(b.decision_reason || b.match_reason) && <div className="text-[10.5px] text-[var(--txt-3)] mt-2">{b.decision_reason || b.match_reason}</div>}
+            </div>
+          </div>
+          {b.receipt_stage !== "finalized" && b.receipt_stage !== "archived" && (
+            <div className="mt-4 pt-4 border-t border-[var(--line)]">
+              <Lbl>{requiresFinalization ? "هۆکاری پشکنینی کۆتایی" : "پشکنینی کۆتایی ئارەزوومەندانە"} {b.decision_by === profile?.id && profile?.adminLevel === "owner" ? "(دەسەڵاتی خاوەن؛ لانیکەم ١٢ پیت)" : "(لانیکەم ٨ پیت)"}</Lbl>
+              {b.decision_by === profile?.id && profile?.adminLevel !== "owner" && <div className="text-[10.5px] text-[var(--warn)] mb-2">بڕیاردەر و پشکنەری کۆتایی دەبێت دوو ئەدمینی جیاواز بن.</div>}
+              <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto] gap-2.5">
+                <Inp value={finalizationReason} onChange={(e) => setFinalizationReason(e.target.value)} placeholder="یاسا و پەیوەندیی نێوان مامەڵە و فیشەکان پشتڕاست کرایەوە" />
+                <Btn onClick={finalizeDecision} disabled={finalizationBusy || profile?.role !== "admin" || (b.decision_by === profile?.id && profile?.adminLevel !== "owner") || finalizationReason.trim().length < (b.decision_by === profile?.id && profile?.adminLevel === "owner" ? 12 : 8)}>
+                  {finalizationBusy ? "پشکنینی کۆتایی…" : "پشکنینی کۆتایی بڕیار"}
+                </Btn>
+              </div>
+            </div>
+          )}
+          {b.receipt_stage === "finalized" && <div className="mt-4 pt-4 border-t border-[var(--line)] text-[11px] text-[var(--pos)] flex items-center gap-2"><CheckCircle2 className="w-4 h-4" /> پشکنینی کۆتایی و تۆماری وردبینی تەواوە{b.finalized_at ? ` · ${new Date(b.finalized_at).toLocaleString("en-GB")}` : ""}</div>}
+        </Card>
+      )}
+
+      <ReceiptList rows={recs} />
+    </div>
+  );
+}
+
+/* ─────────── ئەرشیفی فیشەکانی کڕیارێک ─────────── */
+function ReceiptArchive({ customerId, data, flash, simple = false, previewing = false }) {
+  const [scan, setScan] = useState(false);
+  const [recs, setRecs] = useState(null);
+  const [share, setShare] = useState(false);
+  const [portalSummary, setPortalSummary] = useState(null);
+  const [portalSummaryError, setPortalSummaryError] = useState("");
+  const [q, setQ] = useState(""); const [from, setFrom] = useState(""); const [to, setTo] = useState("");
+  // Their own receipts, one row each, by name — which is where a refused one is refused *to*
+  // somebody rather than merely refused. The batch summary above says what was counted; this
+  // says what happened to each image, and gives the way back out of a rejection.
+  const [mine, setMine] = useState(null);
+  const [mineError, setMineError] = useState("");
+
+  // The subject is named on every call, including a customer reading their own screen. Passing
+  // their own id is the same question the server would have answered anyway, and it means the
+  // portal never asks "what is mine" — a question whose answer depends on who is signed in
+  // rather than on whose screen this is. That difference is the whole defect: an administrator
+  // previewing a customer's portal was shown their own receipts.
+  const reloadMine = useCallback(async () => {
+    if (!simple) return;
+    try {
+      setMine(await loadMyReceipts(supabase, 50, customerId));
+      setMineError("");
+    } catch (error) {
+      console.error("my receipts", error);
+      setMineError(userFacingServiceError(error, _lang, "فیشەکانی خۆت بار نەبوون"));
+    }
+  }, [simple, customerId]);
+
+  useEffect(() => { reloadMine(); }, [reloadMine]);
+
+  // §11. The selection is a list of ids from a checkbox column, which is a request and not an
+  // authorization: sarraf_release_receipts_for_bundle decides which of them the subject may
+  // actually have, and everything below works only from what it returned. customerId is passed
+  // as the subject for the same reason the loaders above take it — an administrator previewing
+  // a customer's portal must bundle that customer's receipts, not their own.
+  const bundleThese = useCallback(async (ids, { mode = "share", onProgress } = {}) => {
+    const built = await buildBundleForReceipts(supabase, ids, {
+      subjectId: customerId, onProgress,
+    });
+    const name = bundleArchiveName(built.included);
+    const delivery = mode === "save"
+      ? await shareOrSaveBundle(built.zip, name, { navigatorImpl: null })
+      : await shareOrSaveBundle(built.zip, name);
+    return { ...built, delivery };
+  }, [customerId]);
+
+  // The upload is the ordinary one; the link is made after it, so a replacement that cannot be
+  // linked is still a receipt that arrived rather than an image that was lost.
+  const replaceOne = async (receipt, file) => {
+    const intake = await intakeReceipt({
+      client: supabase, blob: file, mediaType: file.type || "image/jpeg",
+    });
+    await replaceReceipt(supabase, receipt.id, intake.documentId);
+  };
+
+  // «هەر لە تەنیشت خۆیا دیلێتکردنی ئەو فیشە هەبێت.»  It leaves the sender's list and nothing is
+  // destroyed. The command key is derived from the document rather than generated, so pressing
+  // twice — a slow network, an impatient second tap — is the same press, not two.
+  //
+  // Offered only to the person whose portal this is. An administrator previewing it may not put
+  // somebody else's refusal away: that would take from the person who needs it the one signal
+  // telling them to send a better photograph, and the server refuses it either way.
+  const dismissOne = async (receipt) => {
+    await dismissRejectedReceipt(supabase, receipt.id, receiptDismissCommandKey(receipt.id));
+  };
+
+  useEffect(() => {
+    let active = true;
+    if (simple) {
+      setPortalSummaryError("");
+      loadPortalReceiptSummary(supabase, 365, customerId).then((summary) => {
+        if (active) setPortalSummary(summary);
+      }).catch((error) => {
+        if (!active) return;
+        console.error("portal receipt summary", error);
+        setPortalSummaryError(userFacingServiceError(error, _lang, "پوختەی فیشەکان بار نەبوو"));
+        setPortalSummary({ totals: [], batches: [] });
+      });
+      return () => { active = false; };
+    }
+    supabase.from("receipts").select("*").eq("customer_id", customerId).order("created_at", { ascending: false }).limit(500)
+      .then(({ data: d }) => { if (active) setRecs(d || []); });
+    return () => { active = false; };
+  }, [customerId, simple]);
+
+  if (simple) {
+    if (portalSummary === null) return <Card><StatePanel type="loading" title={tr("بارکردن…")} compact /></Card>;
+    // A customer who has sent nothing has no summary to read, and the server says so as a
+    // refusal. Drawn as a red failure it reads as "the system is broken" to somebody whose
+    // only fault is being new — which is the first thing they see, before they have sent
+    // anything, on the screen that exists for sending. An empty summary is an empty summary.
+    const summaryShown = portalSummaryError ? { totals: [], batches: [] } : portalSummary;
+    return (
+      <div className="space-y-3">
+        <DeferredPanel><PortalReceiptSummary summary={summaryShown} data={data}
+          ui={{ Card, Empty, Hero, Pill, fmtMoney, tr, num }}
+          loadSummary={(batchId) => loadBatchSummary(supabase, batchId)} /></DeferredPanel>
+        <MyReceipts receipts={mine} loading={mine === null} error={mineError}
+          onReload={reloadMine} onReplace={replaceOne} onBundle={bundleThese}
+          onDismiss={previewing ? null : dismissOne}
+          ui={{ Card, Pill, Empty, StatePanel, tr }} />
+      </div>
+    );
+  }
+
+
+  if (!recs) return <Card><Empty t={tr("بارکردن…")} /></Card>;
+  const list = simple ? recs : recs.filter((r) => {
+    const d = (r.tx_date || r.created_at || "").slice(0, 10);
+    if (from && d < from) return false;
+    if (to && d > to) return false;
+    if (!q) return true;
+    return `${r.receiver || ""} ${r.sender || ""} ${r.ref_no || ""} ${r.amount || ""} ${r.bank || ""}`.includes(q);
+  });
+
+  return (
+    <div className="space-y-3">
+      {!simple && <Card className="p-4 space-y-2.5">
+        <div className="flex gap-2">
+          <Inp value={q} onChange={(e) => setQ(e.target.value)} placeholder={tr("گەڕان بە ناو، ژمارەی مامەڵە، بڕ…")} className="flex-1" />
+          <button onClick={() => setScan(true)}
+            className="w-[50px] shrink-0 rounded-[var(--r-sm)] flex items-center justify-center tap"
+            style={{ background: "var(--surf-2)", border: "1px solid var(--line)", color: "var(--txt-2)" }}>
+            <Camera className="w-[18px] h-[18px]" />
+          </button>
+        </div>
+        {scan && <Scanner onFound={(v) => { setQ(v); setScan(false); }} onClose={() => setScan(false)} />}
+        <div className="grid grid-cols-2 gap-2.5">
+          <div><Lbl>{tr("لە")}</Lbl><Inp type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></div>
+          <div><Lbl>{tr("بۆ")}</Lbl><Inp type="date" value={to} onChange={(e) => setTo(e.target.value)} /></div>
+        </div>
+      </Card>}
+      <ReceiptTotals rows={list} data={data} compact showValuation={!simple} />
+
+      {!simple && <Btn kind="gold" className="w-full flex items-center justify-center gap-2" onClick={() => setShare(true)}>
+        <Share2 className="w-4 h-4" /> {tr("ناردنی خشتەی وردەکاری")}
+      </Btn>}
+      {!simple && share && <ShareTable rows={list} data={data} title={tr("ئەرشیفی فیشەکان")} flash={flash} onClose={() => setShare(false)} />}
+
+      {!simple && <RejectedReceipts rows={list} />}
+      <ReceiptList rows={list} />
+    </div>
+  );
+}
+
+/* ─────────── فیشەکانی هاوبەشێک (پۆرتاڵی خۆی) ─────────── */
+function PartnerReceipts({ partnerId, data, flash }) {
+  // The partner's own portal: their receipts, in the currency the receipts name. A valuation in
+  // dollars is the house's bookkeeping, not theirs.
+  return <LocationReceipts partnerId={partnerId} data={data} flash={flash} showValuation={false} />;
+}
+
+/* کەشف حساب — پوختەی حیسابی کڕیارێک بۆ ناردن */
+function Statement({ u, txs, c, cur, onClose, flash }) {
+  const today = new Date().toLocaleDateString("en-GB");
+  const [mode, setMode] = useState("all");
+  const owe = Object.entries(c.owe || {}).filter(([, v]) => v);
+  const due = Object.entries(c.due || {}).filter(([, v]) => v);
+  // لە ڕوانگەی کڕیارەوە: کڕینی من = فرۆشتنی ئەو
+  const filtered = mode === "all" ? txs : txs.filter((t) => (mode === "buy" ? t.type === "sell" : t.type === "buy"));
+  const last = filtered.slice(0, 20);
+  const MODE_KU = { all: "هەموو مامەڵەکان", buy: "کڕینەکانی ئەو", sell: "فرۆشتنەکانی ئەو" };
+  // کۆکردنەوە
+  const sums = {};
+  filtered.forEach((t) => {
+    const k = t.type === "buy" ? "sold" : "bought";      // ئەو فرۆشتوویەتی / کڕیویەتی
+    sums[k] = sums[k] || {};
+    sums[k][t.curId] = (sums[k][t.curId] || 0) + t.amount;
+  });
+
+  const text = (() => {
+    const L = ["📄 کەشف حساب", `👤 ${u.name}`, `📅 ${today}`, `📋 ${MODE_KU[mode]}`, ""];
+    if (sums.sold) { L.push("── ئەو فرۆشتوویەتی بە من ──"); Object.entries(sums.sold).forEach(([cid, v]) => L.push(`   ${fmt(v, cur(cid).dec ?? 0)} ${cur(cid).code}`)); L.push(""); }
+    if (sums.bought) { L.push("── ئەو کڕیویەتی لە من ──"); Object.entries(sums.bought).forEach(([cid, v]) => L.push(`   ${fmt(v, cur(cid).dec ?? 0)} ${cur(cid).code}`)); L.push(""); }
+    L.push("── دوا مامەڵەکان ──");
+    last.forEach((t) => {
+      const kind = t.type === "buy" ? "فرۆشتنت" : "کڕینت";
+      L.push(`${new Date(t.date).toLocaleDateString("en-GB")} · ${kind} ${fmt(t.amount, cur(t.curId).dec ?? 0)} ${cur(t.curId).code} = ${fmt(t.total, cur(t.againstId).dec ?? 0)} ${cur(t.againstId).code}${t.status === "pending" ? " (چاوەڕوان)" : ""}`);
+    });
+    L.push("");
+    L.push("── حیسابی کۆتایی ──");
+    if (owe.length) { L.push("پارەی تۆ لای من:"); owe.forEach(([cid, v]) => L.push(`   ${fmt(v, cur(cid).dec ?? 0)} ${cur(cid).code}`)); }
+    if (due.length) { L.push("قەرزی تۆ:"); due.forEach(([cid, v]) => L.push(`   ${fmt(v, cur(cid).dec ?? 0)} ${cur(cid).code}`)); }
+    if (!owe.length && !due.length) L.push("حیساب پاکە ✅");
+    return L.join("\n");
+  })();
+
+  const copy = () => navigator.clipboard.writeText(text).then(() => flash(tr("کۆپی کرا ✓")));
+  const share = async () => { if (navigator.share) { try { await navigator.share({ text }); } catch {} } else copy(); };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-slate-900/50 flex items-end md:items-center justify-center md:p-6" onClick={onClose}>
+      <div className="w-full max-w-lg rounded-t-[28px] md:rounded-[24px] max-h-[88vh] overflow-y-auto sheet" style={{ background: "var(--surf)", boxShadow: "var(--sh-3)" }} onClick={(ev) => ev.stopPropagation()}>
+        <div className="sticky top-0 z-10 px-5 py-4 flex items-center justify-between backdrop-blur-xl" style={{ background: "color-mix(in srgb, var(--surf) 92%, transparent)", borderBottom: "1px solid var(--line)" }}>
+          <div className="font-bold text-[var(--txt)]">{tr("کەشف حساب")}</div>
+          <button onClick={onClose} className="p-1.5 text-[var(--txt-3)]"><X className="w-5 h-5" /></button>
+        </div>
+        <div className="p-5">
+          <div className="flex gap-1 bg-[var(--line)] rounded-[var(--r-sm)] p-1 mb-4">
+            {[["all", tr("هەمووی")], ["buy", tr("کڕینی ئەو")], ["sell", tr("فرۆشتنی ئەو")]].map(([k, t]) => (
+              <button key={k} onClick={() => setMode(k)}
+                className={`flex-1 py-2 rounded-lg text-sm ${mode === k ? "bg-[var(--surf)] text-[var(--pos)] font-bold shadow-sm" : "text-[var(--txt-2)]"}`}>{t}</button>
+            ))}
+          </div>
+          <div className="border border-[var(--line)] rounded-[var(--r)] overflow-hidden">
+            <div className="bg-slate-900 text-white px-4 py-3">
+              <div className="font-bold">{u.name}</div>
+              <div className="text-xs text-[var(--txt-3)] mt-0.5" style={num}>{today} · {MODE_KU[mode]}</div>
+            </div>
+            <div className="p-4">
+              {(sums.sold || sums.bought) && (
+                <div className="grid grid-cols-2 gap-2 mb-3">
+                  <div className="bg-[color-mix(in_srgb,var(--pos)_10%,transparent)] rounded-[var(--r-sm)] p-2.5">
+                    <div className="text-[10px] text-[var(--pos)]/70">{tr("فرۆشتوویەتی بە من")}</div>
+                    {sums.sold ? Object.entries(sums.sold).map(([cid, v]) => (
+                      <div key={cid} className="text-sm font-bold text-[var(--pos)]" style={num}>{fmt(v, cur(cid).dec ?? 0)} {cur(cid).code}</div>
+                    )) : <div className="text-sm text-[var(--txt-3)]">—</div>}
+                  </div>
+                  <div className="bg-[color-mix(in_srgb,var(--neg)_10%,transparent)] rounded-[var(--r-sm)] p-2.5">
+                    <div className="text-[10px] text-[var(--neg)]/70">{tr("کڕیویەتی لە من")}</div>
+                    {sums.bought ? Object.entries(sums.bought).map(([cid, v]) => (
+                      <div key={cid} className="text-sm font-bold text-[var(--neg)]" style={num}>{fmt(v, cur(cid).dec ?? 0)} {cur(cid).code}</div>
+                    )) : <div className="text-sm text-[var(--txt-3)]">—</div>}
+                  </div>
+                </div>
+              )}
+              <div className="text-[11px] font-bold text-[var(--txt-3)] uppercase mb-2">{tr("دوا مامەڵەکان")}</div>
+              {last.length === 0 ? <div className="text-sm text-[var(--txt-3)]">{tr("هیچ")}</div> :
+                last.map((t) => (
+                  <div key={t.id} className="flex justify-between items-center py-1.5 border-b border-[var(--line)] last:border-0 text-sm">
+                    <span className="text-[var(--txt-2)]">
+                      <span style={num} className="text-xs text-[var(--txt-3)]">{new Date(t.date).toLocaleDateString("en-GB")}</span>
+                      <span className="mr-2">{t.type === "buy" ? "فرۆشتنت" : "کڕینت"}</span>
+                      {t.status === "pending" && <Pill tone="amber">{tr("چاوەڕوان")}</Pill>}
+                    </span>
+                    <span className="font-bold" style={num}>{fmt(t.amount, cur(t.curId).dec ?? 0)} {cur(t.curId).code}</span>
+                  </div>
+                ))}
+              <div className="mt-3 pt-3 border-t border-[var(--line)] space-y-1.5">
+                {owe.map(([cid, v]) => (
+                  <div key={cid} className="flex justify-between text-sm">
+                    <span className="text-[var(--txt-2)]">{tr("پارەی تۆ لای من")}</span>
+                    <span className="font-bold text-[var(--neg)]" style={num}>{fmt(v, cur(cid).dec ?? 0)} {cur(cid).code}</span>
+                  </div>
+                ))}
+                {due.map(([cid, v]) => (
+                  <div key={cid} className="flex justify-between text-sm">
+                    <span className="text-[var(--txt-2)]">{tr("قەرزی تۆ")}</span>
+                    <span className="font-bold text-[var(--pos)]" style={num}>{fmt(v, cur(cid).dec ?? 0)} {cur(cid).code}</span>
+                  </div>
+                ))}
+                {!owe.length && !due.length && <div className="text-sm text-[var(--pos)] font-semibold text-center py-1">{tr("حیساب پاکە ✅")}</div>}
+              </div>
+            </div>
+          </div>
+          <div className="flex gap-2 mt-4">
+            <Btn className="flex-1" onClick={share}>{tr("ناردن")}</Btn>
+            <Btn kind="ghost" className="flex-1" onClick={copy}>{tr("کۆپیکردن")}</Btn>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ══════════════════ قەرزی ZEMAN بۆ نووسینگە ══════════════════ */
+//
+// What an office has covered out of its own money and has not been paid back for. It rises the
+// moment the office presses «پارەم دا» and is the number the owner is answering when they say
+// «حسابی نووسینگەکە بدەم» — so the figure and the button that clears it belong on one card, and
+// that card is shown both on the office's own page and on the admin centre's office screen.
+function OfficeDebts({ data, calc, officeId, title, officeSettle, readOnly }) {
+  const owed = data.currencies
+    .map((c) => ({ c, v: (calc.acctCash[officeId] || {})[c.id] || 0 }))
+    .filter((r) => r.v > 0);
+  return (
+    <Card className="p-5">
+      <SecLbl>{title ? `${tr("قەرزی ZEMAN بۆ")} ${title}` : tr("قەرزی ZEMAN بۆ ئەم نووسینگەیە")}</SecLbl>
+      {owed.length === 0 ? <Empty t={tr("هیچ قەرزێک نەماوە ✓")} /> : owed.map(({ c, v }) => (
+        <div key={c.id} className="flex flex-wrap justify-between items-center gap-3 py-2.5 border-b border-[var(--line)] last:border-0">
+          <span className="text-sm text-[var(--txt-2)]">{c.name}</span>
+          <Money v={v} dec={c.dec} />
+          {!readOnly && (
+            <Btn kind="primary" className="flex items-center gap-1.5"
+              onClick={() => officeSettle(officeId, c.id, v)}>
+              <CheckCircle2 className="w-4 h-4" /> {tr("حسابی نووسینگە دەدەمەوە")}
+            </Btn>
+          )}
+        </div>
+      ))}
+      {owed.length > 0 && (
+        <div className="text-[11.5px] mt-3" style={{ color: "var(--txt-3)" }}>
+          {tr("ئەم پارەیە لە قاسەی گشتی دەردەچێت کاتێک حسابەکە دەدەیتەوە")}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+/**
+ * Sending an office money before it pays, and seeing what it is already holding.
+ *
+ *   «کاتێک هەر مامەڵەیەک دەکەم، ئەگەر پارەکەی نوسینگە بیدات، ئەوە لای من لە قاسە دەڕوات و
+ *    دەچێتە ناو حسابی نوسینگە.»
+ *
+ * Two opposite facts about the same office, kept apart on purpose and never added together:
+ * money it is HOLDING for the owner (this card), and money the owner OWES it for what it paid
+ * out of its own pocket (OfficeDebts, above). An office can be in both at once, and a single
+ * "balance" that netted them would hide which is which.
+ */
+function OfficeAdvance({ data, cur, officeId, officeAdvanceTo, readOnly }) {
+  const [curId, setCurId] = useState("");
+  const [amount, setAmount] = useState("");
+  const [held, setHeld] = useState(null);
+  const [reload, setReload] = useState(0);
+
+  // A failure to read what the office holds must leave the form standing: sending money is the
+  // thing the owner came here to do, and it does not depend on this figure.
+  useEffect(() => {
+    let alive = true;
+    loadOfficeHoldings(supabase, officeId)
+      .then((rows) => { if (alive) setHeld(rows); })
+      .catch(() => { if (alive) setHeld([]); });
+    return () => { alive = false; };
+  }, [officeId, reload]);
+
+  const send = async () => {
+    const value = Number(amount);
+    const ok = await officeAdvanceTo(officeId, curId, value);
+    if (ok !== false) { setAmount(""); setReload((n) => n + 1); }
+  };
+
+  return (
+    <Card className="p-5">
+      <SecLbl>{tr("پارەی ئێستا لای ئەم نووسینگەیە")}</SecLbl>
+      {held === null ? <Empty t={tr("بارکردن…")} />
+        : held.length === 0 ? <Empty t={tr("هیچ پارەیەکی من لای ئەم نووسینگەیە نییە")} />
+        : held.map((row) => (
+          <div key={`${row.officeId}-${row.currencyId}`}
+               className="flex justify-between items-center py-2.5 border-b border-[var(--line)] last:border-0">
+            <span className="text-sm text-[var(--txt-2)]">{cur(row.currencyId).name}</span>
+            <Money v={row.holding} dec={cur(row.currencyId).dec} />
+          </div>
+        ))}
+
+      {!readOnly && (
+        <div className="mt-4 pt-4 border-t border-[var(--line)] space-y-2.5">
+          <Lbl>{tr("ناردنی پارە بۆ ئەم نووسینگەیە")}</Lbl>
+          <div className="grid grid-cols-2 gap-2.5">
+            <Sel value={curId} onChange={(e) => setCurId(e.target.value)} aria-label={tr("دراو")}>
+              <option value="">{tr("دراو")}</option>
+              {data.currencies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </Sel>
+            <Inp type="number" inputMode="decimal" value={amount} placeholder={tr("بڕ")}
+                 aria-label={tr("بڕ")} onChange={(e) => setAmount(e.target.value)} />
+          </div>
+          <Btn kind="primary" className="w-full flex items-center justify-center gap-1.5"
+               disabled={!curId || !(Number(amount) > 0)} onClick={send}>
+            <ArrowLeftRight className="w-4 h-4" /> {tr("پارە بنێرە")}
+          </Btn>
+          <div className="text-[11.5px]" style={{ color: "var(--txt-3)" }}>
+            {tr("ئەم پارەیە لە قاسەی گشتی دەردەچێت و دەچێتە حسابی نووسینگە")}
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+/* ══════════════════ ناوەندی بەکارهێنەران ══════════════════ */
+function PeopleHub(p) {
+  const [tab, setTab] = useState("customers");
+  const TABS = [["customers", tr("کڕیاران"), Users], ["partners", tr("هاوبەشان"), Handshake], ["investors", tr("وەبەرهێنەران"), TrendingUp],
+    ["money", tr("پارە و گواستنەوە"), ArrowLeftRight], ["office", tr("نووسینگە"), Building2], ["manage", tr("بەڕێوەبردن"), UserCog]];
+  return (
+    <div className="space-y-4">
+      <div className="flex gap-1 flex-wrap bg-[var(--surf)] border border-[var(--line)] rounded-[var(--r)] p-1.5">
+        {TABS.map(([id, t, Ic]) => (
+          <button key={id} onClick={() => { setTab(id); p.setDetailId(null); }}
+            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-[var(--r-sm)] text-sm whitespace-nowrap transition ${tab === id ? "bg-[var(--pos)] text-white font-semibold shadow-sm" : "text-[var(--txt-2)] hover:bg-[var(--line)]"}`}>
+            <Ic className="w-4 h-4" /> {t}
+          </button>
+        ))}
+      </div>
+      {tab === "customers" && <Customers {...p} />}
+      {tab === "partners" && <Partners {...p} />}
+      {tab === "investors" && <Investors {...p} />}
+      {tab === "money" && <AccountMoney {...p} />}
+      {tab === "office" && <Office {...p} officeId={(p.data.users.find((x) => x.role === "office" && !x.deleted) || {}).id} />}
+      {tab === "manage" && <UsersAdmin {...p} />}
+    </div>
+  );
+}
+
+/* ══════════════════ پارە دانان/دەرهێنان + گواستنەوەی حساب ══════════════════ */
+function AccountMoney({ data, cur, usr, accountMove, accountTransfer, flash }) {
+  const [mode, setMode] = useState("move");
+  const all = data.users.filter((u) => u.role !== "admin" && !u.deleted);
+  const [mv, setMv] = useState({ dir: "in", userId: "", curId: data.currencies[0]?.id, amount: "", note: "" });
+  const [xfer, setXfer] = useState({ fromId: "", toId: "", curId: data.currencies[0]?.id, amount: "", note: "" });
+  const hist = useMemo(() => {
+    const rows = data.acct || [];
+    const out = [];
+    const seenTransfers = new Set();
+
+    for (const h of rows) {
+      if ((h.type === "transfer_out" || h.type === "transfer_in") && h.refId) {
+        if (seenTransfers.has(h.refId)) continue;
+        seenTransfers.add(h.refId);
+        const pair = rows.filter((x) => x.refId === h.refId);
+        const from = pair.find((x) => x.type === "transfer_out");
+        const to = pair.find((x) => x.type === "transfer_in");
+        out.push({
+          id: `transfer:${h.refId}`, kind: "transfer", curId: h.curId,
+          amount: Math.abs(Number(from?.amount ?? to?.amount ?? 0)),
+          fromName: from ? usr(from.userId).name : "—",
+          toName: to ? usr(to.userId).name : "—",
+          note: from?.note || to?.note || null,
+          date: from?.date || to?.date || h.date,
+        });
+      } else if (h.type === "deposit" || h.type === "withdraw") {
+        out.push({
+          id: h.id, kind: "move", dir: Number(h.amount) >= 0 ? "in" : "out",
+          userName: usr(h.userId).name, curId: h.curId, amount: Math.abs(Number(h.amount) || 0),
+          note: h.note, date: h.date,
+        });
+      }
+    }
+    return out.sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 60);
+  }, [data.acct, data.users]);
+
+  const roleLbl = (u) => `${u.name} (${ROLE_KU[u.role]})`;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex gap-1 rounded-[var(--r)] p-1" style={{ background: "var(--surf)", border: "1px solid var(--line)", boxShadow: "var(--sh-1)" }}>
+        {[["move", tr("پارە دانان / دەرهێنان")], ["transfer", tr("گواستنەوەی حساب")]].map(([k, t]) => (
+          <button key={k} onClick={() => setMode(k)}
+            className={`flex-1 py-2.5 rounded-lg text-sm ${mode === k ? "bg-[var(--pos)] text-white font-semibold" : "text-[var(--txt-2)] hover:bg-[var(--line)]"}`}>{t}</button>
+        ))}
+      </div>
+
+      {mode === "move" ? (
+        <Card className="p-5">
+          <SecLbl>{tr("پارە داخڵکردن یان دەرهێنان لە حسابی هەر کەسێک")}</SecLbl>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+            <div>
+              <Lbl>{tr("جۆر")}</Lbl>
+              <Sel value={mv.dir} onChange={(e) => setMv({ ...mv, dir: e.target.value })}>
+                <option value="in">{tr("وەرگرتن (پارە دێت)")}</option>
+                <option value="out">{tr("دان (پارە دەڕوات)")}</option>
+              </Sel>
+            </div>
+            <div>
+              <Lbl>{tr("کەس")}</Lbl>
+              <Sel value={mv.userId} onChange={(e) => setMv({ ...mv, userId: e.target.value })}>
+                <option value="">{tr("هەڵبژێرە…")}</option>
+                {all.map((u) => <option key={u.id} value={u.id}>{roleLbl(u)}</option>)}
+              </Sel>
+            </div>
+            <div><Lbl>{tr("دراو")}</Lbl><Sel value={mv.curId} onChange={(e) => setMv({ ...mv, curId: e.target.value })}>{data.currencies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</Sel></div>
+            <div><Lbl>{tr("بڕ")}</Lbl><Inp type="number" value={mv.amount} onChange={(e) => setMv({ ...mv, amount: e.target.value })} placeholder="0" /></div>
+            <div><Lbl>{tr("تێبینی")}</Lbl><Inp value={mv.note} onChange={(e) => setMv({ ...mv, note: e.target.value })} /></div>
+            <div className="flex items-end">
+              <Btn className="w-full" onClick={() => { accountMove(mv); setMv({ ...mv, amount: "", note: "" }); }}>{tr("تۆمارکردن")}</Btn>
+            </div>
+          </div>
+          {mv.userId && (
+            <div className="text-xs text-[var(--txt-2)] mt-3 bg-[var(--line)] rounded-[var(--r-sm)] p-3">
+              {usr(mv.userId).role === "investor" && "سەرمایەی وەبەرهێنەرەکە زیاد/کەم دەکرێت"}
+              {usr(mv.userId).role === "partner" && "باڵانسی هاوبەشەکە زیاد/کەم دەکرێت"}
+              {usr(mv.userId).role === "customer" && "پارە لە قاسەی گشتی دەچێت یان دێت"}
+              {usr(mv.userId).role === "office" && "پارە لە قاسەی گشتی دەچێت یان دێت"}
+            </div>
+          )}
+        </Card>
+      ) : (
+        <Card className="p-5">
+          <SecLbl>{tr("گواستنەوەی پارە لە حسابێکەوە بۆ حسابێکی تر")}</SecLbl>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+            <div>
+              <Lbl>{tr("لە حسابی")}</Lbl>
+              <Sel value={xfer.fromId} onChange={(e) => setXfer({ ...xfer, fromId: e.target.value })}>
+                <option value="">{tr("هەڵبژێرە…")}</option>
+                {all.map((u) => <option key={u.id} value={u.id}>{roleLbl(u)}</option>)}
+              </Sel>
+            </div>
+            <div>
+              <Lbl>{tr("بۆ حسابی")}</Lbl>
+              <Sel value={xfer.toId} onChange={(e) => setXfer({ ...xfer, toId: e.target.value })}>
+                <option value="">{tr("هەڵبژێرە…")}</option>
+                {all.filter((u) => u.id !== xfer.fromId).map((u) => <option key={u.id} value={u.id}>{roleLbl(u)}</option>)}
+              </Sel>
+            </div>
+            <div><Lbl>{tr("دراو")}</Lbl><Sel value={xfer.curId} onChange={(e) => setXfer({ ...xfer, curId: e.target.value })}>{data.currencies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</Sel></div>
+            <div><Lbl>{tr("بڕ")}</Lbl><Inp type="number" value={xfer.amount} onChange={(e) => setXfer({ ...xfer, amount: e.target.value })} placeholder="0" /></div>
+            <div><Lbl>{tr("تێبینی")}</Lbl><Inp value={xfer.note} onChange={(e) => setXfer({ ...xfer, note: e.target.value })} /></div>
+            <div className="flex items-end">
+              <Btn kind="gold" className="w-full" onClick={() => { accountTransfer(xfer); setXfer({ ...xfer, amount: "", note: "" }); }}>{tr("گواستنەوە")}</Btn>
+            </div>
+          </div>
+          {xfer.fromId && xfer.toId && +xfer.amount > 0 && (
+            <div className="text-sm text-[var(--txt)] mt-3 bg-[color-mix(in_srgb,var(--pos)_10%,transparent)] border border-[color-mix(in_srgb,var(--pos)_26%,transparent)] rounded-[var(--r-sm)] p-3">
+              <b style={num}>{fmt(+xfer.amount, cur(xfer.curId).dec ?? 0)} {cur(xfer.curId).code}</b>{tr("لە")}<b>{usr(xfer.fromId).name}</b> {tr("دەبڕدرێت و دەچێتە حسابی")} <b>{usr(xfer.toId).name}</b>
+            </div>
+          )}
+        </Card>
+      )}
+
+      <SecLbl>{tr("مێژوو")}</SecLbl>
+      {hist.length === 0 ? (
+          <Card className="p-4"><Empty t="هێشتا هیچ جوڵانەوەی حساب نییە" /></Card>
+        ) : hist.map((h) => (
+          <Card key={h.id} className="p-3.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+            {h.kind === "transfer"
+              ? <><Pill tone="amber">{tr("گواستنەوە")}</Pill>
+                  <span className="text-[var(--txt)]">{h.fromName} <span className="text-[var(--txt-3)]">←</span> {h.toName}</span></>
+              : <><Pill tone={h.dir === "in" ? "green" : "red"}>{h.dir === "in" ? "وەرگرتن" : "دان"}</Pill>
+                  <span className="text-[var(--txt)]">{h.userName}</span></>}
+            <span className="font-bold" style={num}>{fmt(h.amount, cur(h.curId).dec ?? 0)} {cur(h.curId).code}</span>
+            {h.note && <span className="text-xs text-[var(--txt-2)]">{h.note}</span>}
+            <span className="text-[11px] text-[var(--txt-3)] mr-auto" style={num}>{new Date(h.date).toLocaleString("en-GB")}</span>
+          </Card>
+        ))}
+    </div>
+  );
+}
+
+/* ══════════════════ قاسەی ئەکاونتێک ══════════════════ */
+function AccountSafe({ userId, data, calc, cur, usr, accountMove, accountTransfer, flash, compact, readOnly }) {
+  const [tab, setTab] = useState("balance");
+  const u = usr(userId);
+  const bal = calc.acctCash[userId] || {};
+  const debt = calc.acctDebt[userId] || {};
+  const moves = (data.acct || []).filter((e) => e.userId === userId).slice().reverse();
+  const all = data.users.filter((x) => x.role !== "admin" && !x.deleted && x.id !== userId);
+  const [mv, setMv] = useState({ dir: "in", curId: data.currencies[0]?.id, amount: "", note: "" });
+  const [xfer, setXfer] = useState({ toId: "", curId: data.currencies[0]?.id, amount: "", note: "" });
+  const [q, setQ] = useState("");
+
+  const rows = data.currencies.map((c) => ({ c, v: bal[c.id] || 0 })).filter((r) => r.v || !compact);
+  const TY = { deposit: "دانان", withdraw: "دەرهێنان", transfer_in: "هاتووە", transfer_out: "نێردراوە", settle: "حیسابکردنەوە" };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex gap-1 rounded-[var(--r)] p-1 overflow-x-auto" style={{ background: "var(--surf)", border: "1px solid var(--line)", boxShadow: "var(--sh-1)" }}>
+        {(readOnly ? [["balance", tr("قاسە")], ["hist", tr("مێژوو")]] : [["balance", tr("قاسە")], ["move", tr("زیادکردن / کەمکردن")], ["transfer", tr("گواستنەوە")], ["hist", tr("مێژوو")]]).map(([k, t]) => (
+          <button key={k} onClick={() => setTab(k)}
+            style={tab === k ? { background: "linear-gradient(180deg, var(--ac), var(--pos))", color: "#fff", boxShadow: "0 2px 8px -2px rgba(14,122,107,.4)" } : { color: "var(--txt-2)" }}
+            className={`flex-1 whitespace-nowrap px-3 py-2.5 rounded-[var(--r-sm)] text-sm transition-all tap ${tab === k ? "font-bold" : "font-medium hover:bg-[var(--line)]"}`}>{t}</button>
+        ))}
+      </div>
+
+      {tab === "balance" && (
+        <div className="grid md:grid-cols-2 gap-4">
+          <Card className="p-5">
+            <SecLbl>{tr("قاسە — پارەی لای من")}</SecLbl>
+            {rows.length === 0 ? <Empty t={tr("بەتاڵە")} /> :
+              rows.map(({ c, v }) => (
+                <div key={c.id} className="flex items-center justify-between py-2.5 border-b border-[var(--line)] last:border-0">
+                  <span className="text-sm text-[var(--txt-2)] flex items-center gap-2"><CurBadge c={c} size="sm" /> {c.name}</span>
+                  <Money v={v} dec={0} />
+                </div>
+              ))}
+            <div className="text-[11px] text-[var(--txt-3)] mt-3">
+              {readOnly ? "بۆ زیادکردن یان دەرهێنانی پارە، پەیوەندی بە نووسینگە بکە" : "پارەی ڕاستەقینەی ئەم کەسە کە لای من دانراوە"}
+            </div>
+          </Card>
+
+          <Card className="p-5">
+            <SecLbl>{tr("قەرز — حیسابی مامەڵەکان")}</SecLbl>
+            {data.currencies.filter((c) => debt[c.id]).length === 0 ? <Empty t={tr("حیساب پاکە")} /> :
+              data.currencies.filter((c) => debt[c.id]).map((c) => {
+                const v = debt[c.id];
+                return (
+                  <div key={c.id} className="flex items-center justify-between py-2.5 border-b border-[var(--line)] last:border-0">
+                    <span className="text-sm text-[var(--txt-2)] flex items-center gap-2"><CurBadge c={c} size="sm" /> {c.name}</span>
+                    <div className="text-left">
+                      <Money v={Math.abs(v)} dec={0} />
+                      <div className={`text-[10px] font-semibold ${v > 0 ? "text-[var(--neg)]" : "text-[var(--pos)]"}`}>
+                        {v > 0 ? "قەرزاری ئەوم" : "ئەو قەرزارە"}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            <div className="text-[11px] text-[var(--txt-3)] mt-3">{tr("لە مامەڵە چاوەڕوانەکانەوە")}</div>
+          </Card>
+        </div>
+      )}
+
+      {tab === "move" && !readOnly && (
+        <Card className="p-5">
+          <SecLbl>{tr("زیادکردن یان کەمکردنی پارە")}</SecLbl>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Lbl>{tr("جۆر")}</Lbl>
+              <Sel value={mv.dir} onChange={(e) => setMv({ ...mv, dir: e.target.value })}>
+                <option value="in">{tr("زیادکردن (پارە دەخەمە سەری)")}</option>
+                <option value="out">{tr("کەمکردن (پارە دەردەهێنم)")}</option>
+              </Sel>
+            </div>
+            <div><Lbl>{tr("دراو")}</Lbl><Sel value={mv.curId} onChange={(e) => setMv({ ...mv, curId: e.target.value })}>{data.currencies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</Sel></div>
+            <div><Lbl>{tr("بڕ")}</Lbl><Inp type="number" value={mv.amount} onChange={(e) => setMv({ ...mv, amount: e.target.value })} placeholder="0" /></div>
+            <div><Lbl>{tr("تێبینی")}</Lbl><Inp value={mv.note} onChange={(e) => setMv({ ...mv, note: e.target.value })} /></div>
+          </div>
+          {+mv.amount > 0 && (
+            <div className="mt-3 text-sm bg-[var(--line)] border border-[var(--line)] rounded-[var(--r-sm)] p-3">
+              {tr("باڵانسی ئێستا")} <b style={num}>{fmtMoney(data, bal[mv.curId] || 0, mv.curId)}</b>
+              <span className="mx-2 text-[var(--txt-3)]">←</span>
+              {tr("دوای ئەمە")} <b style={num} className={mv.dir === "in" ? "text-[var(--pos)]" : "text-[var(--neg)]"}>
+                {fmtMoney(data, (bal[mv.curId] || 0) + (mv.dir === "in" ? 1 : -1) * roundMoney(data, +mv.amount, mv.curId), mv.curId)}
+              </b> {cur(mv.curId).code}
+            </div>
+          )}
+          <Btn className="w-full mt-4" onClick={() => { accountMove({ ...mv, userId }); setMv({ ...mv, amount: "", note: "" }); }}>
+            تۆمارکردن
+          </Btn>
+        </Card>
+      )}
+
+      {tab === "transfer" && !readOnly && (
+        <Card className="p-5">
+          <SecLbl>{tr("گواستنەوە بۆ حسابێکی تر")}</SecLbl>
+          <Inp value={q} onChange={(e) => setQ(e.target.value)} placeholder={tr("گەڕان بە ناو یان ژمارە…")} className="mb-2" />
+          <div className="max-h-40 overflow-y-auto mb-3 space-y-1">
+            {all.filter((x) => !q || (x.name || "").includes(q) || (x.phone || "").includes(q)).map((x) => (
+              <button key={x.id} onClick={() => setXfer({ ...xfer, toId: x.id })}
+                className={`w-full text-right px-3 py-2 rounded-lg transition ${xfer.toId === x.id ? "bg-[var(--pos)] text-white" : "hover:bg-[var(--line)]"}`}>
+                <div className="text-sm font-semibold">{x.name}</div>
+                <div className={`text-[10px] ${xfer.toId === x.id ? "text-emerald-100" : "text-[var(--txt-3)]"}`}>{ROLE_KU[x.role]}</div>
+              </button>
+            ))}
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div><Lbl>{tr("دراو")}</Lbl><Sel value={xfer.curId} onChange={(e) => setXfer({ ...xfer, curId: e.target.value })}>{data.currencies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</Sel></div>
+            <div><Lbl>{tr("بڕ")}</Lbl><Inp type="number" value={xfer.amount} onChange={(e) => setXfer({ ...xfer, amount: e.target.value })} placeholder="0" /></div>
+          </div>
+          {xfer.toId && +xfer.amount > 0 && (
+            <div className="mt-3 text-sm bg-[color-mix(in_srgb,var(--pos)_10%,transparent)] border border-[color-mix(in_srgb,var(--pos)_26%,transparent)] rounded-[var(--r-sm)] p-3">
+              <b style={num}>{fmt(+xfer.amount, cur(xfer.curId).dec ?? 0)} {cur(xfer.curId).code}</b>{tr("لە")}<b>{u.name}</b> {tr("دەبڕدرێت و دەچێتە حسابی")} <b>{usr(xfer.toId).name}</b>
+            </div>
+          )}
+          <Btn kind="gold" className="w-full mt-4" disabled={!xfer.toId}
+            onClick={() => { accountTransfer({ ...xfer, fromId: userId }); setXfer({ ...xfer, amount: "", note: "" }); }}>
+            گواستنەوە
+          </Btn>
+        </Card>
+      )}
+
+      {tab === "hist" && (
+        moves.length === 0 ? <Card><Empty t={tr("هیچ جوڵانەوەیەک نییە")} /></Card> :
+          moves.map((e) => (
+            <Card key={e.id} className="p-3.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+              <Pill tone={e.amount >= 0 ? "green" : "red"}>{TY[e.type] || e.type}</Pill>
+              <span className="font-bold" style={num}>{e.amount >= 0 ? "+" : ""}{fmt(e.amount, cur(e.curId).dec ?? 0)} {cur(e.curId).code}</span>
+              {e.note && <span className="text-xs text-[var(--txt-2)]">{e.note}</span>}
+              <span className="text-[11px] text-[var(--txt-3)] mr-auto" style={num}>{new Date(e.date).toLocaleString("en-GB")}</span>
+            </Card>
+          ))
+      )}
+    </div>
+  );
+}
+
+/* ══════════════════ کڕیاران ══════════════════ */
+function Customers({ data, calc, cur, usr, detailId, setDetailId, onSave, settle, flash, ...rest }) {
+  const customers = data.users.filter((u) => u.role === "customer" && !u.deleted);
+  const [q, setQ] = useState("");
+  if (detailId) return <CustomerDetail id={detailId} back={() => setDetailId(null)} data={data} calc={calc} cur={cur} usr={usr} onSave={onSave} settle={settle} flash={flash} {...rest} />;
+  const list = customers.filter((u) => !q || (u.name || "").includes(q) || (u.phone || "").includes(q));
+  return (
+    <div className="space-y-3">
+      <Inp value={q} onChange={(e) => setQ(e.target.value)} placeholder={tr("گەڕان بە ناو یان ژمارە…")} />
+      {list.length === 0 ? <Card><Empty t={tr("هیچ کڕیارێک نەدۆزرایەوە")} /></Card> :
+        list.map((u) => {
+          const cnt = data.txs.filter((t) => !t.deleted && t.cpId === u.id).length;
+          const c = calc.cust[u.id];
+          const owe = c ? Object.entries(c.owe).filter(([, v]) => v) : [];
+          const due = c ? Object.entries(c.due).filter(([, v]) => v) : [];
+          return (
+            <Card key={u.id} className="p-4" onClick={() => setDetailId(u.id)}>
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="font-semibold text-[var(--txt)]">{u.name}</div>
+                  <div className="text-xs text-[var(--txt-2)] mt-0.5">{cnt} مامەڵە{u.phone && <span style={num}> · {u.phone}</span>}</div>
+                </div>
+                <div className="text-left shrink-0 space-y-0.5">
+                  {owe.map(([cid, v]) => <div key={cid} className="text-xs text-[var(--neg)] font-semibold">{tr("قەرزاری ئەوم:")} <span style={num}>{fmt(v, cur(cid).dec ?? 0)}</span> {cur(cid).code}</div>)}
+                  {due.map(([cid, v]) => <div key={cid} className="text-xs text-[var(--pos)] font-semibold">{tr("لای ئەو:")} <span style={num}>{fmt(v, cur(cid).dec ?? 0)}</span> {cur(cid).code}</div>)}
+                  {!owe.length && !due.length && <div className="text-xs text-[var(--txt-3)]">{tr("حیساب پاکە")}</div>}
+                </div>
+              </div>
+            </Card>
+          );
+        })}
+    </div>
+  );
+}
+
+/* دوو قاسەی کڕیار + مێژووی فلتەرکراو */
+function CustomerDetail({ id, back, data, calc, cur, usr, onSave, settle, flash, ...rest }) {
+  const u = usr(id);
+  const [stmt, setStmt] = useState(false);
+  const c = calc.cust[id] || { owe: {}, due: {} };
+  const base = data.txs.filter((t) => !t.deleted && t.cpId === id).reverse();
+  const [list, f, setF] = useTxFilter(base, cur, usr);
+  const [tab, setTab] = useState("history");
+  return (
+    <div className="space-y-4">
+      <Back onClick={back} t={tr("گەڕانەوە بۆ لیستی کڕیاران")} />
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <h2 className="text-xl font-bold text-[var(--txt)]">{u.name}</h2>
+          {(u.phone || u.address) && <div className="text-xs text-[var(--txt-2)] mt-0.5">{u.phone && <span style={num}>{u.phone}</span>}{u.phone && u.address && " · "}{u.address}</div>}
+        </div>
+        <div className="flex gap-2">
+          {u.phone && (
+            <Btn kind="ghost" className="flex items-center gap-1.5"
+              onClick={() => rest.waNotify?.(u, tr("ئاگاداری"), `${tr("حیسابەکەت")}: ${Object.entries(c.owe).map(([k, v]) => `${fmt(v, 0)} ${cur(k).code}`).join(" · ") || tr("پاکە")}`)}>
+              <MessageCircle className="w-4 h-4" /> {tr("واتساپ")}
+            </Btn>
+          )}
+          <Btn kind="ghost" className="flex items-center gap-1.5" onClick={() => setStmt(true)}>
+            <Share2 className="w-4 h-4" /> {tr("کەشف حساب")}
+          </Btn>
+        </div>
+      </div>
+      {stmt && <Statement u={u} txs={base} c={c} cur={cur} flash={flash} onClose={() => setStmt(false)} />}
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <Card className="p-4 border-[color-mix(in_srgb,var(--neg)_26%,transparent)] bg-[color-mix(in_srgb,var(--neg)_8%,transparent)]">
+          <div className="text-xs font-semibold text-[var(--neg)] mb-2">{tr("پارەی ئەو لای من (قەرزاری ئەوم)")}</div>
+          {Object.entries(c.owe).filter(([, v]) => v).length === 0 ? <div className="text-sm text-[var(--txt-3)]">{tr("هیچ")}</div> :
+            Object.entries(c.owe).filter(([, v]) => v).map(([cid, v]) => (
+              <div key={cid} className="flex justify-between py-1">
+                <span className="text-sm text-[var(--txt-2)]">{cur(cid).name}</span>
+                <span className="text-lg font-bold text-[var(--neg)]" style={num}>{fmt(v, 0)}</span>
+              </div>
+            ))}
+        </Card>
+        <Card className="p-4 border-[color-mix(in_srgb,var(--pos)_26%,transparent)] bg-[color-mix(in_srgb,var(--pos)_8%,transparent)]">
+          <div className="text-xs font-semibold text-[var(--pos)] mb-2">{tr("پارەی من لای ئەو (قەرزارمە)")}</div>
+          {Object.entries(c.due).filter(([, v]) => v).length === 0 ? <div className="text-sm text-[var(--txt-3)]">{tr("هیچ")}</div> :
+            Object.entries(c.due).filter(([, v]) => v).map(([cid, v]) => (
+              <div key={cid} className="flex justify-between py-1">
+                <span className="text-sm text-[var(--txt-2)]">{cur(cid).name}</span>
+                <span className="text-lg font-bold text-[var(--pos)]" style={num}>{fmt(v, 0)}</span>
+              </div>
+            ))}
+        </Card>
+      </div>
+
+      <div className="flex gap-1 rounded-[var(--r)] p-1 overflow-x-auto" style={{ background: "var(--surf)", border: "1px solid var(--line)", boxShadow: "var(--sh-1)" }}>
+        {[["history", tr("مێژوو")], ["safe", tr("قاسە")], ["receipts", tr("فیشەکان")], ["new", tr("مامەڵەی نوێ")]].map(([k, t]) => (
+          <button key={k} onClick={() => setTab(k)}
+            className={`flex-1 px-4 py-2.5 rounded-lg text-sm ${tab === k ? "bg-[var(--pos)] text-white font-semibold" : "text-[var(--txt-2)] hover:bg-[var(--line)]"}`}>{t}</button>
+        ))}
+      </div>
+
+      {tab === "safe" ? <AccountSafe userId={id} data={data} calc={calc} cur={cur} usr={usr} flash={flash} {...rest} />
+      : tab === "receipts" ? <ReceiptArchive customerId={id} data={data} flash={flash} /> : tab === "new" ? (
+        <TxForm data={data} calc={calc} cur={cur} usr={usr} {...rest} onSave={(fm, e) => onSave({ ...fm, cpMode: "acc", cpId: id, cpName: "" }, e)} lockCp={id} />
+      ) : (
+        <>
+          <TxFilterBar data={data} f={f} setF={setF} count={list.length} />
+          {list.length === 0 ? <Card><Empty t={tr("هیچ مامەڵەیەک نەدۆزرایەوە")} /></Card> :
+            list.map((t) => <TxRow key={t.id} t={t} cur={cur} usr={usr} ledger={data.ledger} settle={settle} />)}
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ══════════════════ هاوبەشان ══════════════════ */
+function Partners({ data, calc, cur, usr, transfer, detailId, setDetailId }) {
+  const partners = data.users.filter((u) => u.role === "partner" && !u.deleted);
+  const [tf, setTf] = useState({ partnerId: "", curId: data.currencies[0]?.id, amount: "", dir: "to" });
+  const [sel, setSel] = useState(null);
+  if (sel) {
+    const p = partners.find((x) => x.id === sel);
+    return <div className="space-y-4"><Back onClick={() => setSel(null)} t={tr("گەڕانەوە بۆ لیستی هاوبەشان")} /><PartnerDetail p={p} data={data} calc={calc} cur={cur} /></div>;
+  }
+  const fr = tf.partnerId ? (usr(tf.partnerId).rate || 0) : 0;
+  return (
+    <div className="space-y-3">
+      <Card className="p-5">
+        <SecLbl>{tr("گواستنەوەی پارە")}</SecLbl>
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+          <div><Lbl>{tr("ئاڕاستە")}</Lbl><Sel value={tf.dir} onChange={(e) => setTf({ ...tf, dir: e.target.value })}><option value="to">{tr("بۆ لای هاوبەش")}</option><option value="back">{tr("لە لای هاوبەشەوە")}</option></Sel></div>
+          <div><Lbl>{tr("هاوبەش")}</Lbl><Sel value={tf.partnerId} onChange={(e) => setTf({ ...tf, partnerId: e.target.value })}><option value="">—</option>{partners.map((p) => {
+            const b = (calc.partner[p.id] || {})[tf.curId] || 0;
+            return <option key={p.id} value={p.id}>{p.name} — {fmt(Math.abs(b), cur(tf.curId).dec)}{b < 0 ? " (قەرز)" : ""}</option>;
+          })}</Sel></div>
+          <div><Lbl>{tr("دراو")}</Lbl><Sel value={tf.curId} onChange={(e) => setTf({ ...tf, curId: e.target.value })}>{data.currencies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</Sel></div>
+          <div><Lbl>{tr("بڕ")}</Lbl><Inp type="number" value={tf.amount} onChange={(e) => setTf({ ...tf, amount: e.target.value })} placeholder="0" /></div>
+          <div className="flex items-end"><Btn kind="gold" className="w-full" onClick={() => { transfer(tf); setTf({ ...tf, amount: "" }); }}>{tr("گواستنەوە")}</Btn></div>
+        </div>
+        {tf.dir === "to" && fr > 0 && +tf.amount > 0 && (
+          <div className="mt-3 text-sm text-[var(--txt-2)] bg-[var(--line)] border border-[var(--line)] rounded-[var(--r-sm)] p-3">
+            {tr("عمولەی")} {fr}{tr("٪")} = <b style={num}>{fmtMoney(data, roundMoney(data, roundMoney(data, +tf.amount, tf.curId) * fr / 100, tf.curId), tf.curId)}</b> {tr("— باڵانسی دوایی:")} <b style={num}>{fmtMoney(data, roundMoney(data, +tf.amount, tf.curId) - roundMoney(data, roundMoney(data, +tf.amount, tf.curId) * fr / 100, tf.curId), tf.curId)}</b>
+          </div>
+        )}
+      </Card>
+      {partners.map((p) => {
+        const bal = calc.partner[p.id] || {};
+        const hasDebt = Object.values(bal).some((v) => v < 0);
+        return (
+          <Card key={p.id} className="p-4 flex items-center justify-between" onClick={() => setSel(p.id)}>
+            <div>
+              <div className="font-semibold text-[var(--txt)]">{p.name} <span className="text-xs text-[var(--txt-3)] font-normal">· عمولە {p.rate}٪</span></div>
+              <div className="text-xs text-[var(--txt-2)] mt-0.5">
+                {Object.entries(bal).filter(([, v]) => v).map(([cid, v]) => `${fmt(v, cur(cid).dec)} ${cur(cid).code}`).join(" · ") || "بەتاڵ"}
+                {hasDebt && <span className="text-[var(--neg)] font-bold"> {tr("· قەرز")}</span>}
+              </div>
+            </div>
+            <ChevronLeft className="w-5 h-5 text-[var(--txt-3)]" />
+          </Card>
+        );
+      })}
+    </div>
+  );
+}
+
+function PartnerDetail({ p, data, calc, cur }) {
+  const bal = calc.partner[p.id] || {};
+  const fees = {};
+  data.ledger.forEach((e) => { if (e.partnerId === p.id && e.type === "partner_fee") fees[e.curId] = (fees[e.curId] || 0) + Math.abs(e.amount); });
+  const hist = data.ledger.filter((e) => e.partnerId === p.id).slice().reverse();
+  const TY = { buy: "کڕین — دانان", sell: "فرۆشتن لە ئەکاونتەکەی", transfer: "گواستنەوە", partner_fee: "عمولە" };
+  return (
+    <div className="space-y-4">
+      <h2 className="text-xl font-bold text-[var(--txt)]">{p.name}</h2>
+      <div className="grid md:grid-cols-2 gap-4">
+        <Card className="p-5">
+          <SecLbl>{tr("باڵانس (سالب = قەرز لەسەر تۆ)")}</SecLbl>
+          {Object.keys(bal).length === 0 ? <Empty t={tr("بەتاڵە")} /> :
+            Object.entries(bal).map(([cid, v]) => (
+              <div key={cid} className="flex justify-between py-2 border-b border-[var(--line)] last:border-0">
+                <span className="text-sm text-[var(--txt-2)]">{cur(cid).name}</span><Money v={v} dec={cur(cid).dec} />
+              </div>
+            ))}
+        </Card>
+        <Card className="p-5">
+          <SecLbl>عمولەی وەرگیراو ({p.rate}٪)</SecLbl>
+          {Object.keys(fees).length === 0 ? <Empty t={tr("هێشتا هیچ")} /> :
+            Object.entries(fees).map(([cid, v]) => (
+              <div key={cid} className="flex justify-between py-2 border-b border-[var(--line)] last:border-0">
+                <span className="text-sm text-[var(--txt-2)]">{cur(cid).name}</span><Money v={v} dec={cur(cid).dec} pos />
+              </div>
+            ))}
+          <div className="text-[11px] text-[var(--txt-3)] mt-2">{tr("دەستبەجێ لە کاتی تێکردندا کەم کراوەتەوە")}</div>
+        </Card>
+      </div>
+      <SecLbl>مێژووی ئاڵووگۆر ({hist.length})</SecLbl>
+      {hist.length === 0 ? <Card><Empty t={tr("هیچ نییە")} /></Card> :
+        hist.map((e) => (
+          <Card key={e.id} className="p-3.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+            <Pill tone={e.amount >= 0 ? "green" : "red"}>{e.amount >= 0 ? "هاتنە ژوورەوە" : "چوونە دەرەوە"}</Pill>
+            <span><Money v={e.amount} dec={cur(e.curId).dec} /> {cur(e.curId).code}</span>
+            <span className="text-[var(--txt-2)]">{TY[e.type] || e.type}</span>
+            <span className="text-[11px] text-[var(--txt-3)] mr-auto" style={num}>{new Date(e.date).toLocaleString("en-GB")}</span>
+          </Card>
+        ))}
+    </div>
+  );
+}
+
+/* ══════════════════ وەبەرهێنەران ══════════════════ */
+function Investors({ data, calc, cur, invUnpaid, invShare, profitAll }) {
+  const investors = data.users.filter((u) => u.role === "investor" && !u.deleted);
+  const [sel, setSel] = useState(null);
+  if (sel) {
+    const u = investors.find((x) => x.id === sel);
+    return <div className="space-y-4"><Back onClick={() => setSel(null)} t={tr("گەڕانەوە بۆ لیستی وەبەرهێنەران")} /><InvestorDetail u={u} data={data} calc={calc} cur={cur} invUnpaid={invUnpaid} invShare={invShare} profitAll={profitAll} /></div>;
+  }
+  return (
+    <div className="space-y-3">
+      {investors.length === 0 ? <Card><Empty t={tr("هیچ وەبەرهێنەرێک نییە")} /></Card> :
+        investors.map((u) => {
+          const cap = calc.invCap[u.id] || {};
+          return (
+            <Card key={u.id} className="p-4 flex items-center justify-between" onClick={() => setSel(u.id)}>
+              <div>
+                <div className="font-semibold text-[var(--txt)]">{u.name} <span className="text-xs text-[var(--txt-3)] font-normal">· خێر {u.rate}٪</span></div>
+                <div className="text-xs text-[var(--txt-2)] mt-0.5">
+                  {Object.entries(cap).filter(([, v]) => v).map(([cid, v]) => `${fmt(v, cur(cid).dec)} ${cur(cid).code}`).join(" · ") || "سەرمایە دانەنراوە"}
+                </div>
+              </div>
+              <ChevronLeft className="w-5 h-5 text-[var(--txt-3)]" />
+            </Card>
+          );
+        })}
+    </div>
+  );
+}
+
+function InvestorDetail({ u, data, calc, cur, invUnpaid, mine }) {
+  const cap = calc.invCap[u.id] || {};
+  const hist = data.ledger.filter((e) => e.investorId === u.id).slice().reverse();
+  const rows = data.currencies.map((c) => {
+    const capV = cap[c.id] || 0;
+    const up = invUnpaid(u.id, c.id);
+    return { c, capV, up, tot: capV + up };
+  }).filter((r) => r.capV || r.up);
+  const main = rows[0];
+
+  return (
+    <div className="space-y-5">
+      {!mine && <h2 className="text-[22px] font-semibold" style={{ color: "var(--txt)" }}>{u.name}</h2>}
 
       <div className="relative pt-4 pb-1 aura">
         <Hero label={mine ? tr("کۆی ماڵی من") : tr("کۆی ماڵی") + " " + u.name}
