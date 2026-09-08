@@ -70,7 +70,7 @@ export function MyReceipts({ receipts, loading, error, onReload, onReplace, onDi
       // choice standing, because the person has not finished with it.
       if (result?.delivery !== "cancelled") setPicked(new Set());
     } catch (e) {
-      setFailed(e?.message || tr("پاکێجەکە ئامادە نەبوو"));
+      setFailed(e?.code === "offline" ? tr("ئینتەرنێت نییە") : (e?.message || tr("پاکێجەکە ئامادە نەبوو")));
     } finally {
       setPacking(null);
     }

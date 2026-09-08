@@ -40,9 +40,6 @@ const BUCKET = "receipts";
 /** Long enough to download a hundred images on a slow phone, short enough not to be a key. */
 export const SIGNED_URL_SECONDS = 300;
 
-export const OFFLINE_BUNDLE_MESSAGE =
-  "پەیوەندی نییە — پەکەتی بەڵگەنامە پێویستی بە سێرڤەرە و هیچ شتێک نەنێردرا";
-
 /**
  * Ask the server which of these receipts may leave.
  *
@@ -155,7 +152,7 @@ export async function buildBundleForReceipts(client, receiptIds, {
   navigatorImpl = typeof navigator === "undefined" ? null : navigator,
 } = {}) {
   if (navigatorImpl && navigatorImpl.onLine === false) {
-    throw new BundleError("offline", OFFLINE_BUNDLE_MESSAGE);
+    throw new BundleError("offline", "offline");
   }
   const { asked, released, skipped } = await releaseForBundle(client, receiptIds, subjectId);
   if (released.length === 0) {

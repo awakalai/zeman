@@ -1,5 +1,65 @@
 # ZEMAN enhancement batches
 
+> **Recovery status — 2026-09-08**
+>
+> The deployed `main` line and earlier verified work had diverged. Recovery now proceeds on
+> `codex/recovery-stabilization` from production commit `393f2b0`. The ordered source of truth is
+> [RECOVERY_BATCH_PLAN.md](./RECOVERY_BATCH_PLAN.md). Entries below are retained as historical
+> evidence and must not be read as proof that the entire product is complete.
+
+## Recovery Batch 1 — deployed baseline stabilization
+
+**Status:** Implemented, locally verified, and installed on the live database. Production web
+publication is the only remaining release step for this batch.
+
+### Completed
+
+- Restored the missing owner assignment for `sarraf_action_inbox_v3(integer)` so the deployed
+  Smart Inbox function uses the established restricted definer role rather than an accidental
+  migration owner.
+- Removed the unsafe office path from the general Smart Inbox. An office must use its dedicated,
+  assignment-scoped portal; the shared receipt/transaction inbox is business-admin only.
+- Scoped Party 360 and cash reconciliation to the authenticated actor's tenant on every source
+  table, fixed multi-currency account aggregation, and assigned both functions to
+  `sarraf_definer`.
+- Added the five missing English/Arabic timeline labels that made the production unit suite fail.
+- Kept the offline receipt-bundle refusal as a stable service error code and localized it at the
+  UI boundary instead of embedding one-language user copy in a service.
+- Applied and verified the live read-model migrations as
+  `20260908013139_restrict_action_inbox_to_business_admins` and
+  `20260908013215_tenant_scope_operational_read_models`. No ledger, journal, WAC, balance, or
+  transaction row was mutated.
+
+### Evidence
+
+- Focused authorization, tenant, receipt-bundle, and i18n tests: **39/39 passed**.
+- `npm test`: **940/940 passed**.
+- `npm run verify:source`: passed across 400 tracked files, 132 migrations, and 4 service-key routes.
+- `npm run verify:search`: passed.
+- `npm run verify:i18n`: 633 requested keys have English and Arabic entries; the one-language
+  interface ratchet no longer regressed.
+- `npm run verify:names`: passed across 116 files.
+- `npm run verify:brand`, `npm run verify:share`, and `npm run verify:production`: passed.
+- `npm run build`: passed.
+- `git diff --check`: passed.
+- Live SQL inspection confirms all three functions are security-definer functions owned by
+  `sarraf_definer`, are not executable by `public` or `anon`, and retain explicit body-level
+  role/tenant authorization.
+- Supabase advisors were recorded. The three new authenticated security-definer warnings are
+  intentional RPC exposure with body authorization; the older project-wide advisor backlog is
+  reserved for Recovery Batch 13 rather than mixed into this stabilization batch.
+
+### Preserved work
+
+- The original dirty worktree and its partial office-payment reversal files were not changed.
+- The earlier `codex/zeman-rebuild` commits remain reachable and will be reconciled in later
+  batches instead of being overwritten or blindly merged.
+
+### Next batch
+
+Recovery Batch 2: reconcile manager onboarding, phone/password login and recovery, and the
+clear-account guard before deactivation.
+
 This file records work against the professional product and UX enhancement mandate. A batch is
 not called complete because its code exists; the status below names the evidence that was run.
 

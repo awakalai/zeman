@@ -39,13 +39,22 @@ test("receipt follow-up queues cover required finalization and finalized decisio
   assert.match(sql, /revoke all on function public\.sarraf_integrity_center_v2\(integer\) from public, anon/);
 });
 
-test("smart inbox SQL scopes staff, bounds output, and exposes no mutation action", async () => {
+test("smart inbox is admin-only, bounded, and exposes no mutation action", async () => {
   const sql = await readFile(new URL("../supabase/migrations/202609070001_smart_work_inbox.sql", import.meta.url), "utf8");
-  assert.match(sql, /v_actor\.role not in \('admin', 'office'\)/);
+  assert.match(sql, /v_actor\.role <> 'admin'/);
   assert.match(sql, /least\(greatest\(coalesce\(p_limit, 80\), 1\), 100\)/);
-  assert.match(sql, /'action', jsonb_build_object\('kind', 'navigation'/);
   assert.doesNotMatch(sql, /\b(?:insert\s+into|update\s+public\.|delete\s+from|truncate\s+)\b/i);
   assert.match(sql, /revoke all on function public\.sarraf_action_inbox_v3\(integer\) from public, anon/);
+});
+
+test("the live upgrade also removes office access from an already-installed smart inbox", async () => {
+  const sql = await readFile(new URL("../supabase/migrations/20260908013139_restrict_action_inbox_to_business_admins.sql", import.meta.url), "utf8");
+  assert.match(sql, /security definer/i);
+  assert.match(sql, /set search_path = pg_catalog, public/i);
+  assert.match(sql, /v_actor\.role <> 'admin'/);
+  assert.doesNotMatch(sql, /v_actor\.role[^\n]*office/i);
+  assert.match(sql, /revoke all on function public\.sarraf_action_inbox_v3\(integer\) from public, anon/i);
+  assert.match(sql, /alter function public\.sarraf_action_inbox_v3\(integer\) owner to sarraf_definer/i);
 });
 
 test("operational center errors are not converted into empty success", async () => {

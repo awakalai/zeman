@@ -1,4 +1,6 @@
--- Scoped Party 360 read model and currency reconciliation center.
+-- Forward repair for already-deployed Party 360 and currency reconciliation read models.
+-- This intentionally repeats the complete definitions so every environment receives the tenant
+-- guards, multi-currency aggregation fix, protected ownership, and explicit execution grants.
 --
 -- These are read-only explanations over the existing append-only/accounting tables. They do not
 -- replace commands, expose profit, or resolve discrepancies. Tenant and role policies still apply

@@ -1,5 +1,5 @@
--- Smart Work Inbox: the same bounded read model for owners and operational staff.
--- The action is navigation only; financial mutations still require their command RPCs.
+-- Offices have their own assignment-scoped portal. The general action inbox contains receipt
+-- review and transaction work and therefore belongs only to business administrators.
 begin;
 
 create or replace function public.sarraf_action_inbox_v3(p_limit integer default 80)
@@ -13,7 +13,11 @@ declare
   v_actor public.app_users%rowtype;
   v_limit integer := least(greatest(coalesce(p_limit, 80), 1), 100);
 begin
-  select * into v_actor from public.app_users where auth_id = auth.uid() and not deleted;
+  select * into v_actor
+    from public.app_users
+   where auth_id = auth.uid()
+     and not deleted;
+
   if not found or v_actor.role <> 'admin' then
     raise exception using errcode = '42501', message = 'operations are not authorized';
   end if;
@@ -24,10 +28,12 @@ $$;
 
 revoke all on function public.sarraf_action_inbox_v3(integer) from public, anon;
 grant execute on function public.sarraf_action_inbox_v3(integer) to authenticated;
-comment on function public.sarraf_action_inbox_v3(integer) is
-  'Bounded business-admin read queue. Offices use their dedicated, assignment-scoped portal.';
 
 grant create on schema public to sarraf_definer;
 alter function public.sarraf_action_inbox_v3(integer) owner to sarraf_definer;
 revoke create on schema public from sarraf_definer;
+
+comment on function public.sarraf_action_inbox_v3(integer) is
+  'Bounded business-admin read queue. Offices use their dedicated, assignment-scoped portal.';
+
 commit;
