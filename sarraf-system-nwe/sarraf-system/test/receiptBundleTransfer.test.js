@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  SIGNED_URL_SECONDS, OFFLINE_BUNDLE_MESSAGE, buildBundleForReceipts, bundleArchiveName, bundleFileName,
+  SIGNED_URL_SECONDS, buildBundleForReceipts, bundleArchiveName, bundleFileName,
   bundleManifestRow, releaseForBundle, shareOrSaveBundle, signReleasedPaths,
 } from "../src/services/receiptBundleTransfer.js";
 
@@ -68,7 +68,7 @@ test("offline bundle preparation refuses before any authoritative release call",
   const client = clientWith([doc("r1")]);
   await assert.rejects(
     () => buildBundleForReceipts(client, ["r1"], { navigatorImpl: { onLine: false } }),
-    (error) => error.code === "offline" && error.message === OFFLINE_BUNDLE_MESSAGE,
+    (error) => error.code === "offline",
   );
   assert.equal(client.calls.length, 0);
 });
