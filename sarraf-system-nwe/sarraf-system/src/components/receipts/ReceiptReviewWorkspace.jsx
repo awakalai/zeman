@@ -36,7 +36,7 @@ const COPY = {
     convention: "یاسای نرخ", availableRate: "نرخی بەردەست", noRate: "نرخی ئەم ڕۆژە هێشتا دانەنراوە",
     rateValue: "چەند یەکەی ئەم دراوە = 1 USD", rateReason: "هۆکاری دانانی نرخ (لانیکەم ٨ پیت)",
     setRate: "دانانی وەشانی نوێی نرخ", finalReason: "هۆکاری جێگیرکردن (لانیکەم ٨ پیت)",
-    finalize: "جێگیرکردن و ئامادەکردن بۆ ناردن", mfa: "ئەم هەنگاوە MFA ـی ئەدمین پێویستە",
+    finalize: "جێگیرکردن و ئامادەکردن بۆ ناردن",
     frozen: "نرخ لەسەر خودی فیشەکە جێگیر دەکرێت و دوای ئەوە ناگۆڕدرێت",
     code: "کۆدی فیش", copied: "کۆپی کرا",
     unread: "خوێنەرەکە ئەم فیشەی نەخوێندەوە",
@@ -77,7 +77,7 @@ const COPY = {
     convention: "Rate convention", availableRate: "Rate available", noRate: "No rate has been set for this day yet",
     rateValue: "How many of this currency = 1 USD", rateReason: "Why this rate (at least 8 characters)",
     setRate: "Set a new version of the rate", finalReason: "Why it is being fixed (at least 8 characters)",
-    finalize: "Fix it and make it ready to send", mfa: "This step needs the administrator's second factor",
+    finalize: "Fix it and make it ready to send",
     frozen: "The rate is fixed onto the receipt itself and does not change afterwards",
     code: "Receipt code", copied: "Copied",
     unread: "The reader could not read this receipt",
@@ -118,7 +118,7 @@ const COPY = {
     convention: "قاعدة السعر", availableRate: "السعر المتاح", noRate: "لم يُحدَّد سعر لهذا اليوم بعد",
     rateValue: "كم وحدة من هذه العملة = ١ دولار", rateReason: "سبب هذا السعر (٨ أحرف على الأقل)",
     setRate: "تعيين نسخة جديدة من السعر", finalReason: "سبب التثبيت (٨ أحرف على الأقل)",
-    finalize: "ثبّته وجهّزه للإرسال", mfa: "هذه الخطوة تتطلب العامل الثاني للمشرف",
+    finalize: "ثبّته وجهّزه للإرسال",
     frozen: "يُثبَّت السعر على الإيصال نفسه ولا يتغير بعدها",
     code: "رمز الإيصال", copied: "نُسخ",
     unread: "تعذّر على النظام قراءة هذا الإيصال",
@@ -426,7 +426,6 @@ export function ReceiptReviewWorkspace({ client, lang = "ku", signedUrlFor = nul
                     <div className="rrw-valuation">
                       <div className="rrw-valuation-head">
                         <h3>{copy.valuation}</h3>
-                        <span>{copy.mfa}</span>
                       </div>
                       <div className="rrw-fields">
                         <Field label={copy.businessDate} value={detail.summary?.businessDate} />

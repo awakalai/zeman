@@ -290,7 +290,7 @@ export function reviewEquation(v) {
   };
 }
 
-/** Run one bounded, MFA-protected review decision; direct table updates are never used. */
+/** Run one bounded, role-protected review decision; direct table updates are never used. */
 export async function transitionDocument(client, { documentId, toState, reason, commandKey }) {
   const action = ({ accepted: "accept", validated: "accept", rejected: "reject", needs_manual_review: "reopen" })[toState];
   if (!action) throw zemanRule("بڕیاری پشکنین ناسراو نییە");

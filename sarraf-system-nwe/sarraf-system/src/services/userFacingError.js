@@ -159,11 +159,6 @@ const KNOWN = {
     en: "This receipt already has a reading; correct it instead",
     ar: "لهذا الإيصال قراءة بالفعل؛ صحّحها بدل استبدالها",
   },
-  "multi-factor authentication is required": {
-    ku: "ئەم هەنگاوە پێویستی بە پشتڕاستکردنەوەی دوو هەنگاوییە",
-    en: "This step requires two-factor authentication",
-    ar: "تتطلب هذه الخطوة مصادقة ثنائية",
-  },
   "only an administrator may review receipts": {
     ku: "تەنها ئەدمین دەتوانێت فیش پشکنین بکات",
     en: "Only an administrator may review receipts",

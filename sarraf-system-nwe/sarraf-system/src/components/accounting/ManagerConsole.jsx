@@ -5,9 +5,9 @@ import {
 } from "lucide-react";
 import {
   attentionReasons, closeSupport, currentSupport, healthProblems, loadAllAccounts,
-  loadAttention, loadHealth, loadSupportHistory, loadTenants, openBusiness, openSupport,
-  ownerEmailObjection, ownerNameObjection, setTenantActive, supportReasonObjection,
-  tenantIdObjection, tenantNameObjection,
+  loadAttention, loadHealth, loadSupportHistory, loadTenants, openSupport,
+  ownerNameObjection, ownerPasswordObjection, ownerPhoneObjection, provisionBusiness,
+  setTenantActive, supportReasonObjection, tenantNameObjection,
 } from "../../services/managerConsole.js";
 import { rankName, rankOf } from "../../services/adminRanks.js";
 import "./debt-center.css";
@@ -32,15 +32,14 @@ const COPY = {
     },
     refresh: "نوێکردنەوە", loading: "بارکردن…", failed: "بار نەبوو", working: "جێبەجێکردن…",
     notManager: "ئەم بەشە تەنها بۆ ماناجەرە",
-    name: "ناو", id: "ناسنامە", accounts: "ئەکاونت", admins: "ئەدمین",
+    name: "ناو", accounts: "ئەکاونت", admins: "ئەدمین",
     transactions: "مامەڵە", receipts: "فیش", lastActivity: "دوایین کار", state: "دۆخ",
     active: "چالاک", suspended: "ڕاگیراو",
     suspend: "ڕاگرتن", resume: "چالاککردنەوە", reason: "هۆکار",
     create: "سەرخێڵی نوێ", note: "تێبینی", add: "زیادکردن",
-    role: "ڕۆڵ", tenant: "سەرخێڵ", login: "چوونەژوورەوە", phone: "ژمارە",
+    role: "ڕۆڵ", tenant: "سەرخێڵ", phone: "ژمارەی مۆبایل",
     noTenant: "بێ سەرخێڵ", deleted: "ناچالاک",
     healthy: "هیچ کێشەیەک نییە", problems: "کێشەکان",
-    idHint: "پیتی ئینگلیزیی بچووک، ژمارە و داش — بۆ نموونە zeman-erbil",
     never: "هەرگیز",
     support: "پشتگیری",
     supportLead: "پێش کارکردن لەسەر سەرخێڵێک، بیکەرەوە و هۆکارەکە بنووسە. خاوەنی سەرخێڵەکە هەموو ئەمانە دەبینێت",
@@ -49,7 +48,8 @@ const COPY = {
     opened: "کرایەوە", closed: "داخرا", stillOpen: "کراوەیە", byWhom: "لەلایەن",
     history: "مێژووی پشتگیری", noHistory: "هیچ پشتگیرییەک نەکراوەتەوە",
     needsYou: "چی پێویستی بە تۆیە", needsLead: "ئەمانە بەپێی گرنگی ڕیز کراون — سەرەوە ئەوەیە کە یەکەم جار سەیری بکە", needsNothing: "هیچ بازرگانییەک پێویستی بە تۆ نییە",
-    ownerName: "ناوی خاوەن", ownerEmail: "ئیمەیڵی خاوەن", ownerHint: "خاوەنەکە دوای بانگهێشتکردن لە Supabase یەکەم جار کە دەچێتە ژوورەوە دروست دەبێت",
+    ownerName: "ناوی خاوەن", ownerPhone: "ژمارەی مۆبایلی خاوەن",
+    ownerPassword: "وشەی نهێنیی کاتی", ownerHint: "بازرگانی و هەژماری خاوەن پێکەوە دروست دەبن؛ هیچ هەنگاوێکی دەرەکی پێویست نییە.",
   },
   en: {
     title: "Manager console",
@@ -60,15 +60,14 @@ const COPY = {
     },
     refresh: "Refresh", loading: "Loading…", failed: "Could not load", working: "Working…",
     notManager: "This section is for managers only",
-    name: "Name", id: "Id", accounts: "Accounts", admins: "Admins",
+    name: "Name", accounts: "Accounts", admins: "Admins",
     transactions: "Transactions", receipts: "Receipts", lastActivity: "Last activity", state: "State",
     active: "Active", suspended: "Suspended",
     suspend: "Suspend", resume: "Resume", reason: "Reason",
     create: "New business", note: "Note", add: "Add",
-    role: "Role", tenant: "Business", login: "Sign-in", phone: "Phone",
+    role: "Role", tenant: "Business", phone: "Phone",
     noTenant: "No business", deleted: "Deactivated",
     healthy: "Nothing wrong", problems: "Problems",
-    idHint: "Lower-case letters, digits and dashes — for example zeman-erbil",
     never: "Never",
     support: "Support",
     supportLead: "Open a business before acting on it, and say why. The owner of that business sees every one of these",
@@ -77,7 +76,8 @@ const COPY = {
     opened: "Opened", closed: "Closed", stillOpen: "Open", byWhom: "By",
     history: "Support history", noHistory: "No support context has been opened",
     needsYou: "What needs you", needsLead: "Ordered by what matters — the top one is where to look first", needsNothing: "No business needs you",
-    ownerName: "Owner's name", ownerEmail: "Owner's email", ownerHint: "The owner's account is made the first time they sign in, after you invite them in Supabase",
+    ownerName: "Owner's name", ownerPhone: "Owner's phone", ownerPassword: "Temporary password",
+    ownerHint: "The business and its working owner account are created together; no external step is required.",
   },
   ar: {
     title: "لوحة المدير",
@@ -88,15 +88,14 @@ const COPY = {
     },
     refresh: "تحديث", loading: "جارٍ التحميل…", failed: "تعذّر التحميل", working: "جارٍ التنفيذ…",
     notManager: "هذا القسم للمدير فقط",
-    name: "الاسم", id: "المعرّف", accounts: "الحسابات", admins: "مشرفون",
+    name: "الاسم", accounts: "الحسابات", admins: "مشرفون",
     transactions: "المعاملات", receipts: "الإيصالات", lastActivity: "آخر نشاط", state: "الحالة",
     active: "نشط", suspended: "موقوف",
     suspend: "إيقاف", resume: "استئناف", reason: "السبب",
     create: "عمل جديد", note: "ملاحظة", add: "إضافة",
-    role: "الدور", tenant: "العمل", login: "تسجيل الدخول", phone: "الهاتف",
+    role: "الدور", tenant: "العمل", phone: "الهاتف",
     noTenant: "بلا عمل", deleted: "معطّل",
     healthy: "لا يوجد خطأ", problems: "المشكلات",
-    idHint: "أحرف إنجليزية صغيرة وأرقام وشرطات — مثل zeman-erbil",
     never: "أبدًا",
     support: "الدعم",
     supportLead: "افتح العمل قبل التصرف فيه، واذكر السبب. صاحب العمل يرى كل واحدة من هذه",
@@ -105,13 +104,14 @@ const COPY = {
     opened: "فُتح", closed: "أُغلق", stillOpen: "مفتوح", byWhom: "بواسطة",
     history: "سجل الدعم", noHistory: "لم يُفتح أي دعم",
     needsYou: "ما يحتاج إليك", needsLead: "مرتّبة حسب الأهمية — الأولى هي التي تُنظر أولًا", needsNothing: "لا يوجد عمل يحتاج إليك",
-    ownerName: "اسم المالك", ownerEmail: "بريد المالك", ownerHint: "يُنشأ حساب المالك عند أول تسجيل دخول، بعد دعوته من Supabase",
+    ownerName: "اسم المالك", ownerPhone: "هاتف المالك", ownerPassword: "كلمة مرور مؤقتة",
+    ownerHint: "يُنشأ العمل وحساب مالكه الجاهز معًا، ولا توجد خطوة خارجية.",
   },
 };
 const localeKey = (lang) => (lang === "en" ? "en" : lang === "ar" ? "ar" : "ku");
 const day = (v) => (v ? String(v).slice(0, 10) : null);
 
-export function ManagerConsole({ client, lang = "ku", isManager = false, flash = () => {} }) {
+export function ManagerConsole({ client, lang = "ku", isManager = false, request, flash = () => {} }) {
   const copy = COPY[localeKey(lang)];
   const [tab, setTab] = useState("attention");
   const [state, setState] = useState("loading");
@@ -120,7 +120,7 @@ export function ManagerConsole({ client, lang = "ku", isManager = false, flash =
   const [health, setHealth] = useState(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
-  const [form, setForm] = useState({ id: "", name: "", note: "", ownerEmail: "", ownerName: "" });
+  const [form, setForm] = useState({ name: "", note: "", ownerName: "", ownerPhone: "", password: "" });
   const [openTenant, setOpenTenant] = useState(null);
   const [support, setSupport] = useState({ id: "", reason: "", minutes: 120 });
   const [history, setHistory] = useState([]);
@@ -155,24 +155,24 @@ export function ManagerConsole({ client, lang = "ku", isManager = false, flash =
   // not be signed into.
   const add = useCallback(async () => {
     const lang3 = localeKey(lang);
-    const objection = tenantIdObjection(form.id) || tenantNameObjection(form.name)
-      || ownerEmailObjection(form.ownerEmail, lang3) || ownerNameObjection(form.ownerName, lang3);
+    const objection = tenantNameObjection(form.name)
+      || ownerNameObjection(form.ownerName, lang3)
+      || ownerPhoneObjection(form.ownerPhone, lang3)
+      || ownerPasswordObjection(form.password, lang3);
     if (objection) { setError(objection); return; }
     setBusy("add"); setError("");
     try {
-      const made = await openBusiness(client, {
-        id: form.id, name: form.name, note: form.note,
-        ownerEmail: form.ownerEmail, ownerName: form.ownerName,
+      await provisionBusiness(request, {
+        name: form.name, note: form.note, ownerName: form.ownerName,
+        ownerPhone: form.ownerPhone, password: form.password, lang: lang3,
       });
-      setForm({ id: "", name: "", note: "", ownerEmail: "", ownerName: "" });
-      // What is left to do is said here rather than assumed: the owner has no login until
-      // somebody invites them, and nothing in this system can make one.
-      flash(made?.next || `${copy.add} ✓`, true);
+      setForm({ name: "", note: "", ownerName: "", ownerPhone: "", password: "" });
+      flash(`${copy.add} ✓`, true);
       await load();
     } catch (e) {
       setError(errorText(e).slice(0, 200));
     } finally { setBusy(""); }
-  }, [client, form, load, flash, copy.add, lang]);
+  }, [request, form, load, flash, copy.add, lang]);
 
   const toggle = useCallback(async (tenant) => {
     const reason = window.prompt(copy.reason);
@@ -289,7 +289,7 @@ export function ManagerConsole({ client, lang = "ku", isManager = false, flash =
           <div className="debt-table-wrap">
             <table className="debt-table">
               <thead><tr>
-                <th>{copy.name}</th><th>{copy.id}</th><th>{copy.accounts}</th>
+                <th>{copy.name}</th><th>{copy.accounts}</th>
                 <th>{copy.transactions}</th><th>{copy.receipts}</th>
                 <th>{copy.lastActivity}</th><th>{copy.state}</th><th />
               </tr></thead>
@@ -297,7 +297,6 @@ export function ManagerConsole({ client, lang = "ku", isManager = false, flash =
                 {(tenants?.tenants || []).map((t) => (
                   <tr key={t.id}>
                     <td>{t.name}</td>
-                    <td>{t.id}</td>
                     <td>{t.accounts} · {t.admins} {copy.admins}</td>
                     <td>{t.transactions}</td>
                     <td>{t.receipts}</td>
@@ -319,35 +318,37 @@ export function ManagerConsole({ client, lang = "ku", isManager = false, flash =
           </div>
 
           <h3 className="debt-subhead"><Building2 aria-hidden="true" /> {copy.create}</h3>
-          <div className="cashbox-form">
-            <label>{copy.id}
-              <input value={form.id} aria-label={copy.id} aria-describedby="tenant-id-hint"
-                     onChange={(e) => { setForm({ ...form, id: e.target.value }); setError(""); }} />
-            </label>
+          <p className="debt-note">{copy.ownerHint}</p>
+          <div className="cashbox-form manager-onboarding-form">
             <label>{copy.name}
               <input value={form.name} aria-label={copy.name}
+                     autoComplete="organization"
                      onChange={(e) => { setForm({ ...form, name: e.target.value }); setError(""); }} />
-            </label>
-            <label>{copy.note}
-              <input value={form.note} aria-label={copy.note}
-                     onChange={(e) => setForm({ ...form, note: e.target.value })} />
             </label>
             <label>{copy.ownerName}
               <input value={form.ownerName} aria-label={copy.ownerName}
+                     autoComplete="name"
                      onChange={(e) => { setForm({ ...form, ownerName: e.target.value }); setError(""); }} />
             </label>
-            <label>{copy.ownerEmail}
-              <input type="email" value={form.ownerEmail} aria-label={copy.ownerEmail}
-                     style={{ direction: "ltr" }} aria-describedby="owner-email-hint"
-                     onChange={(e) => { setForm({ ...form, ownerEmail: e.target.value }); setError(""); }} />
+            <label>{copy.ownerPhone}
+              <input type="tel" inputMode="tel" value={form.ownerPhone} aria-label={copy.ownerPhone}
+                     autoComplete="tel" dir="ltr" placeholder="0750 123 4567"
+                     onChange={(e) => { setForm({ ...form, ownerPhone: e.target.value }); setError(""); }} />
+            </label>
+            <label>{copy.ownerPassword}
+              <input type="password" value={form.password} aria-label={copy.ownerPassword}
+                     autoComplete="new-password" dir="ltr" placeholder="••••••••••••"
+                     onChange={(e) => { setForm({ ...form, password: e.target.value }); setError(""); }} />
+            </label>
+            <label className="cashbox-wide">{copy.note}
+              <input value={form.note} aria-label={copy.note}
+                     onChange={(e) => setForm({ ...form, note: e.target.value })} />
             </label>
             <button type="button" className="debt-primary" disabled={busy === "add"} onClick={add}>
               {busy === "add" ? <><Loader2 aria-hidden="true" /> {copy.working}</>
                               : <><Plus aria-hidden="true" /> {copy.add}</>}
             </button>
           </div>
-          <p id="tenant-id-hint" className="debt-note">{copy.idHint}</p>
-          <p id="owner-email-hint" className="debt-note">{copy.ownerHint}</p>
         </>
       )}
 
@@ -356,7 +357,7 @@ export function ManagerConsole({ client, lang = "ku", isManager = false, flash =
           <table className="debt-table">
             <thead><tr>
               <th>{copy.name}</th><th>{copy.role}</th><th>{copy.tenant}</th>
-              <th>{copy.login}</th><th>{copy.phone}</th><th>{copy.state}</th>
+              <th>{copy.phone}</th><th>{copy.state}</th>
             </tr></thead>
             <tbody>
               {accounts.map((u) => (
@@ -364,7 +365,6 @@ export function ManagerConsole({ client, lang = "ku", isManager = false, flash =
                   <td>{u.name}</td>
                   <td>{u.role === "admin" ? rankName(rankOf({ ...u, adminLevel: u.admin_level }), lang) : u.role}</td>
                   <td>{u.tenant_name || copy.noTenant}</td>
-                  <td style={{ direction: "ltr", unicodeBidi: "embed" }}>{u.email || "—"}</td>
                   <td style={{ direction: "ltr", unicodeBidi: "embed" }}>{u.phone || "—"}</td>
                   <td>{u.deleted ? copy.deleted : copy.active}</td>
                 </tr>

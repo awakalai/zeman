@@ -89,9 +89,13 @@ export function passwordObjection(actor, target) {
   if (!target) return "کەسێک هەڵبژێرە";
   if (target.deleted) return "ئەکاونتەکە ناچالاکە";
   if (isManager(actor)) return null;
-  if (!isOwner(actor)) return "دەسەڵاتت نییە";
   const level = rankOf(target);
-  if (level === null || level === "operator") return null;
+  // Owner and employee can restore a customer, partner, investor or office login in their own
+  // business. Administrator passwords remain hierarchical so an employee cannot take over the
+  // owner account and an owner cannot take over the platform manager account.
+  if (level === null && actor?.role === "admin") return null;
+  if (isOwner(actor) && level === "operator") return null;
+  if (!isOwner(actor)) return "دەسەڵاتت نییە";
   return "گۆڕینی وشەی نهێنیی ئەم ئەکاونتە تەنها لەلایەن ماناجەرەوە دەکرێت";
 }
 

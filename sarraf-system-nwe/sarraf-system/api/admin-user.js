@@ -7,7 +7,7 @@ const ADMIN_WINDOW_SECONDS = Number(process.env.ADMIN_RATE_WINDOW || 60);
 
 // api/admin-user.js
 // Server-only Sarraf user administration.
-// Requires a valid Admin session at AAL2 (TOTP MFA) and a Supabase secret/service key.
+// Requires a valid active Admin session and a Supabase secret/service key.
 
 import { createClient } from "@supabase/supabase-js";
 
@@ -35,18 +35,6 @@ const makeClient = (url, key) =>
     },
   });
 
-const decodeJwtPayload = (token) => {
-  try {
-    const part = String(token || "").split(".")[1];
-    if (!part) return {};
-    const normalized = part.replace(/-/g, "+").replace(/_/g, "/");
-    const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
-    return JSON.parse(Buffer.from(padded, "base64").toString("utf8"));
-  } catch {
-    return {};
-  }
-};
-
 const normalizePhone = (value) => {
   const digits = String(value || "").replace(/\D/g, "");
   if (!digits) return "";
@@ -65,7 +53,7 @@ const auditId = () =>
   globalThis.crypto?.randomUUID?.() ||
   `audit-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
-async function requireAdminAal2(req, authClient, service) {
+async function requireAdminSession(req, authClient, service) {
   const authHeader = String(req?.headers?.authorization || req?.headers?.Authorization || "");
   const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
   if (!token) {
@@ -80,33 +68,6 @@ async function requireAdminAal2(req, authClient, service) {
     const e = new Error("invalid or expired session");
     e.status = 401;
     throw e;
-  }
-
-  // Two-factor is required of an administrator who has it, and cannot be required of one who
-  // does not: a session cannot reach aal2 without an enrolled factor, so demanding it from an
-  // account with none refuses every request forever. That is what stopped both the manager and
-  // the business owner from creating a single account — the same closed circle as needing an
-  // owner in order to make the first owner.
-  //
-  // So: enrolled and unchallenged is refused, and told to complete the challenge. Not enrolled
-  // is allowed, because aal1 is the highest that account can reach.
-  const claims = decodeJwtPayload(token);
-  if (String(claims?.aal || "aal1") !== "aal2") {
-    let enrolled = false;
-    try {
-      const { data: factors } = await service.auth.admin.mfa.listFactors({ userId: user.id });
-      enrolled = (factors?.factors || []).some((f) => f?.status === "verified");
-    } catch {
-      // The factor list could not be read. Treating that as "not enrolled" would let a
-      // transient failure downgrade a protected account, so it counts as enrolled.
-      enrolled = true;
-    }
-    if (enrolled) {
-      const e = new Error("multi-factor authentication required");
-      e.status = 403;
-      e.code = "mfa_required";
-      throw e;
-    }
   }
 
   const { data: profile, error: profileError } = await service
@@ -327,16 +288,14 @@ export default async function handler(req, res) {
 
   let actor;
   try {
-    actor = await requireAdminAal2(req, authClient, service);
+    actor = await requireAdminSession(req, authClient, service);
   } catch (e) {
     const status = Number(e?.status) || 403;
     return res.status(status).json({
       error:
         status === 401
           ? "کاتی چوونەژوورەوەت بەسەرچووە"
-          : e?.code === "mfa_required"
-            ? "پاراستنی دوو هەنگاوی پێویستە"
-            : e?.code === "no_profile"
+          : e?.code === "no_profile"
               ? "ئەم لۆگینە ئەکاونتێکی نییە لە سیستەمەکەدا"
               // Named as a server fault, because it is one. Telling somebody their account is
               // missing when the server could not look is blaming them for our own permissions.
@@ -350,6 +309,77 @@ export default async function handler(req, res) {
   try {
     const body = typeof req.body === "string" ? JSON.parse(req.body) : (req.body || {});
     const action = String(body.action || "").trim();
+
+    if (action === "create_business") {
+      if (!isManager(actor.profile)) {
+        return res.status(403).json({
+          error: "تەنها ماناجەر دەتوانێت بازرگانیی نوێ دروست بکات",
+          code: "manager_required",
+        });
+      }
+
+      const name = safeText(body.name, 120);
+      const ownerName = safeText(body.ownerName, 120);
+      const ownerPhone = normalizePhone(body.ownerPhone);
+      const password = String(body.password || "");
+      const note = safeText(body.note, 1000);
+      if (!name || !ownerName || ownerPhone.length < 10 || ownerPhone.length > 15) {
+        return res.status(400).json({
+          error: "ناوی بازرگانی، ناوی خاوەن و ژمارەی مۆبایلی دروست پێویستن",
+          code: "invalid_business_owner",
+        });
+      }
+
+      const verdict = judgePassword(password, { phone: ownerPhone, name: ownerName });
+      if (!verdict.ok) {
+        return res.status(400).json({ error: verdict.error, code: verdict.code });
+      }
+
+      const loginEmail = `${ownerPhone}@sarraf.local`;
+      const { data: created, error: createError } = await service.auth.admin.createUser({
+        email: loginEmail,
+        password,
+        email_confirm: true,
+        user_metadata: { name: ownerName, phone: ownerPhone },
+        app_metadata: { role: "admin", admin_level: "owner" },
+      });
+      if (createError || !created?.user?.id) {
+        throw createError || new Error("Owner login creation failed");
+      }
+
+      const authId = created.user.id;
+      const { data: business, error: businessError } = await service.rpc(
+        "sarraf_manager_create_business_owner",
+        {
+          p_actor_id: actor.profile.id,
+          p_business_name: name,
+          p_owner_name: ownerName,
+          p_owner_phone: ownerPhone,
+          p_owner_auth_id: authId,
+          p_note: note,
+        },
+      );
+      if (businessError) {
+        try { await service.auth.admin.deleteUser(authId); } catch {}
+        throw businessError;
+      }
+
+      // Authorization lives in app_users and is checked by RLS on every request. Keeping the
+      // same role in app_metadata makes the Auth record useful to an operator without trusting
+      // user-editable metadata, and the tenant is known only after the atomic database command.
+      const { error: metadataError } = await service.auth.admin.updateUserById(authId, {
+        app_metadata: {
+          role: "admin",
+          admin_level: "owner",
+          tenant_id: business?.id || null,
+        },
+      });
+      if (metadataError) {
+        console.error("owner-app-metadata", metadataError);
+      }
+
+      return res.status(200).json({ ok: true, business });
+    }
 
     if (action === "create") {
       const name = safeText(body.name, 120);
@@ -427,10 +457,10 @@ export default async function handler(req, res) {
         email,
         password,
         email_confirm: true,
-        // 'admin' was written here and in the profile below, and admin_level is checked
-        // against manager/owner/operator. Every administrator account creation was refused by
-        // the database with a constraint violation.
-        user_metadata: { name, role, phone, admin_level: adminLevel },
+        // Names and phone numbers are profile data. Authorization belongs in app_metadata and
+        // app_users, never in user-editable user_metadata.
+        user_metadata: { name, phone },
+        app_metadata: { role, admin_level: adminLevel, tenant_id: tenantId },
       });
       if (createError || !created?.user?.id) throw createError || new Error("Auth user creation failed");
 
@@ -484,7 +514,11 @@ export default async function handler(req, res) {
 
     if (action === "deactivate") {
       const userId = String(body.userId || "").trim();
+      const reason = safeText(body.reason, 500);
       if (!userId) return res.status(400).json({ error: "userId پێویستە" });
+      if (!reason || reason.length < 3) {
+        return res.status(400).json({ error: "هۆکاری ناچالاککردن حەتمییە", code: "reason_required" });
+      }
       if (userId === actor.profile.id) {
         return res.status(400).json({ error: "ناتوانیت ئەکاونتی خۆت لەم شوێنە ناچالاک بکەیت" });
       }
@@ -509,20 +543,30 @@ export default async function handler(req, res) {
         }
       }
 
-      const { data: changed, error: updateError } = await withinTenant(
-        service.from("app_users").update({ deleted: true }).eq("id", userId),
-        decision.tenantId,
-      ).select("id");
-      if (updateError) throw updateError;
-      // Nothing changed means the row moved out from under the check between reading and
-      // writing. That is a refusal, not a success with no effect.
-      if (!changed?.length) return res.status(409).json({ error: "ئەکاونتەکە گۆڕا لە کاتی کارەکەدا", code: "target_changed" });
-
-      await writeAudit(
-        service,
-        "ناچالاککردنی ئەکاونت",
-        `${target.name} (${target.role}) — by ${actor.profile.name || actor.profile.id}`
+      const { data: outcome, error: deactivateError } = await service.rpc(
+        "sarraf_deactivate_user_if_clear",
+        {
+          p_actor_id: actor.profile.id,
+          p_user_id: userId,
+          p_tenant_id: decision.tenantId,
+          p_reason: reason,
+        },
       );
+      if (deactivateError) throw deactivateError;
+      if (!outcome?.ok && outcome?.code === "outstanding_financial_position") {
+        const positions = Array.isArray(outcome.positions) ? outcome.positions : [];
+        const summary = positions.slice(0, 4).map((position) =>
+          `${position.amount} ${position.currency}`
+        ).join("، ");
+        return res.status(409).json({
+          error: `تا پاکبوونەوەی باڵانس و قەرز ئەکاونتەکە ناچالاک ناکرێت${summary ? `: ${summary}` : ""}`,
+          code: "outstanding_financial_position",
+          positions,
+        });
+      }
+      if (!outcome?.ok) {
+        return res.status(409).json({ error: "ئەکاونتەکە ناچالاک نەکرا", code: outcome?.code || "deactivation_refused" });
+      }
 
       return res.status(200).json({ ok: true });
     }
@@ -572,16 +616,8 @@ export default async function handler(req, res) {
       if (!userId) {
         return res.status(400).json({ error: "userId پێویستە", code: "user_id_required" });
       }
-      // The same judgement `create` applies. It used to be a bare `length < 8` here while the
-      // message said twelve — a screen told one rule while the server applied another, which
-      // reads to the person setting the password as the system being broken.
-      const verdict = judgePassword(password);
-      if (!verdict.ok) {
-        return res.status(400).json({ error: verdict.error, code: verdict.code });
-      }
-
       const decision = await authorizeTarget(service, actor, userId, {
-        columns: "id,name,role,admin_level,auth_id,deleted",
+        columns: "id,name,role,admin_level,auth_id,phone,deleted",
         requestedTenantId: body.tenantId,
       });
       if (!decision.ok) return res.status(decision.status).json(decision.body);
@@ -589,12 +625,20 @@ export default async function handler(req, res) {
       if (target.deleted) return res.status(400).json({ error: "ئەکاونتەکە ناچالاکە" });
       if (!target.auth_id) return res.status(400).json({ error: "ئەم ئەکاونتە لۆگینی نییە" });
 
-      // A manager may reset anyone. An owner may reset their own staff and ordinary users, but
-      // not another administrator of their own rank or above — otherwise an owner could take
-      // the system from a manager by changing their password.
+      // The same judgement `create` applies, including refusing the person's own public name or
+      // phone number as their secret. The target must be loaded first so those facts are known.
+      const verdict = judgePassword(password, { phone: target.phone, name: target.name });
+      if (!verdict.ok) {
+        return res.status(400).json({ error: verdict.error, code: verdict.code });
+      }
+
+      // Every administrator in a business may restore an ordinary customer/partner/investor/
+      // office login. Administrator accounts stay hierarchical so an employee cannot take the
+      // owner account and an owner cannot take the platform manager account.
       const targetLevel = target.role === "admin" ? (target.admin_level || "operator") : null;
       const allowed = isManager(actor.profile)
-        || (isOwner(actor.profile) && (targetLevel === null || targetLevel === "operator"));
+        || targetLevel === null
+        || (isOwner(actor.profile) && targetLevel === "operator");
       if (!allowed) {
         return res.status(403).json({
           error: "گۆڕینی وشەی نهێنیی ئەم ئەکاونتە تەنها لەلایەن ماناجەرەوە دەکرێت",

@@ -2,8 +2,8 @@
 
 > **Recovery status — 2026-09-08**
 >
-> The deployed `main` line and earlier verified work had diverged. Recovery now proceeds on
-> `codex/recovery-stabilization` from production commit `393f2b0`. The ordered source of truth is
+> The deployed `main` line and earlier verified work had diverged. Recovery proceeds in a fresh
+> branch from the latest verified production commit for every batch. The ordered source of truth is
 > [RECOVERY_BATCH_PLAN.md](./RECOVERY_BATCH_PLAN.md). Entries below are retained as historical
 > evidence and must not be read as proof that the entire product is complete.
 
@@ -59,10 +59,54 @@
 - The earlier `codex/zeman-rebuild` commits remain reachable and will be reconciled in later
   batches instead of being overwritten or blindly merged.
 
+## Recovery Batch 2 — account access and safe onboarding
+
+**Status:** Completed, installed on the live database, and ready for the production source release.
+
+### Completed
+
+- Replaced the manager's internal tenant-id/email/invitation workflow with one server request that
+  creates the business, a working owner login, the owner profile, operational default settings,
+  and the audit record together. A database failure removes the newly-created Auth user rather
+  than leaving a login without a business.
+- Standardized the user-facing login on normalized Iraqi phone number plus password while retaining
+  the old short internal alias only as a compatibility path for existing accounts.
+- Removed the second-factor gate in accordance with the chosen ZEMAN login policy. Authentication
+  remains in Supabase Auth and authorization still comes from the active `app_users` role and
+  tenant row on every protected route/command.
+- Added owner/staff password recovery for ordinary customer, partner, investor, and office accounts;
+  administrator resets remain rank-controlled and the password itself is never audited or returned.
+- Replaced direct account deactivation with one server-only database command. It refuses the change
+  while any per-currency account balance, customer available/reserved/pending funds, partner funds,
+  open debt, office holding, partner/customer holding, or investor capital remains. A reason is
+  mandatory and a successful deactivation and its audit row commit atomically.
+- Preserved the deployed Party 360 route while resolving the account-screen changes; no WAC,
+  journal, ledger, maker-checker, transaction, or posted financial behavior was changed.
+- Installed the three live migrations as `20260908201710_manager_creates_business_with_phone`,
+  `20260908201717_password_sessions_are_the_chosen_login`, and
+  `20260908201722_account_must_be_clear_before_deactivation`.
+
+### Evidence
+
+- Focused account/onboarding/deactivation tests: **49/49 passed**.
+- `npm test`: **941/941 passed**.
+- `npm run build`: passed.
+- Source, i18n, search, free-name, brand, share, and production-readiness gates: passed.
+- Real-browser role verification: **80/80 passed** across administrator, customer, partner, office,
+  investor, and administrator-mobile views; every tested role entered without an MFA screen.
+- All three migrations passed live-schema transaction/rollback validation before installation.
+- Live ACL inspection confirms business onboarding and clear-account deactivation are not executable
+  by `public`, `anon`, or `authenticated`; only the server-side `service_role` can execute them.
+- Supabase security advisors reported the existing project-wide warnings; neither new server-only
+  function appeared as an authenticated executable security-definer finding.
+- The local PostgreSQL accounting, tenant-isolation, and business-flow harnesses were unavailable in
+  this runner; equivalent migration parsing/unit tests, live-schema dry runs, and the real-browser
+  role gate passed. Those harnesses remain mandatory in CI.
+
 ### Next batch
 
-Recovery Batch 2: reconcile manager onboarding, phone/password login and recovery, and the
-clear-account guard before deactivation.
+Recovery Batch 3: enforce the receipt-upload contract — maximum 20 images, one declared platform,
+and one immutable upload group — without changing receipt accounting or conversion behavior.
 
 This file records work against the professional product and UX enhancement mandate. A batch is
 not called complete because its code exists; the status below names the evidence that was run.
