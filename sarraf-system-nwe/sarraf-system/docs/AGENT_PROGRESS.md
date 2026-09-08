@@ -9,8 +9,7 @@
 
 ## Recovery Batch 1 — deployed baseline stabilization
 
-**Status:** Implemented, locally verified, and installed on the live database. Production web
-publication is the only remaining release step for this batch.
+**Status:** Completed, merged, installed on the live database, and deployed to production.
 
 ### Completed
 
@@ -48,6 +47,11 @@ publication is the only remaining release step for this batch.
 - Supabase advisors were recorded. The three new authenticated security-definer warnings are
   intentional RPC exposure with body authorization; the older project-wide advisor backlog is
   reserved for Recovery Batch 13 rather than mixed into this stabilization batch.
+- GitHub PR #150 passed every required workflow job and was squash-merged to `main` as
+  `f878889`.
+- Vercel production deployment `dpl_4hM1mSUYfcAThtZdiqQa3TGYCU6C` reached `READY`; the
+  deployed `version.json` returned HTTP 200 and no error/fatal runtime logs were reported for
+  that deployment at release time.
 
 ### Preserved work
 
