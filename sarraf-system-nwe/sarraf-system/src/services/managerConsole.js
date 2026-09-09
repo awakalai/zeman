@@ -13,17 +13,7 @@
 const clean = (v) => String(v ?? "").normalize("NFKC").trim();
 const say = (phrase, lang) => phrase[lang === "en" ? "en" : lang === "ar" ? "ar" : "ku"];
 
-export const TENANT_ID_MIN = 3;
-
-/** A business's id is typed once and lives forever in every row it owns. */
-export function tenantIdObjection(id) {
-  const value = clean(id);
-  if (value.length < TENANT_ID_MIN) return `ناسنامەی سەرخێڵ لانیکەم ${TENANT_ID_MIN} پیت بێت`;
-  if (!/^[a-z0-9][a-z0-9-]*$/.test(value)) {
-    return "تەنها پیتی ئینگلیزیی بچووک، ژمارە و داش (-)";
-  }
-  return null;
-}
+const PASSWORD_MIN = 12;
 
 export function tenantNameObjection(name) {
   return clean(name).length < 2 ? "ناوی سەرخێڵ پێویستە" : null;
@@ -36,47 +26,60 @@ export async function loadTenants(client) {
   return data || { tenants: [], total_accounts: 0 };
 }
 
-/**
- * A new customer, in one act.
- *
- * createTenant made the business and stopped there: nobody could sign into it, and the manager's
- * next act was on a different screen. If they forgot, the business sat there looking created and
- * was unusable. This makes the business, its settings, and the person who will open it.
- *
- * No password is created or held anywhere. What is written is a row saying who a login will be;
- * the owner is invited through Supabase and becomes the owner the first time they arrive.
- */
-export async function openBusiness(client, { id, name, ownerEmail, ownerName, note = null }) {
-  const objection = tenantIdObjection(id) || tenantNameObjection(name)
-    || ownerEmailObjection(ownerEmail) || ownerNameObjection(ownerName);
-  if (objection) throw new Error(objection);
-  const { data, error } = await client.rpc("sarraf_manager_open_business", {
-    p_id: clean(id), p_name: clean(name),
-    p_owner_email: clean(ownerEmail).toLowerCase(), p_owner_name: clean(ownerName),
-    p_note: clean(note) || null,
-  });
-  if (error) throw error;
-  return data;
-}
-
-const NEEDS_AN_EMAIL = {
-  ku: "ئیمەیڵی خاوەنەکە پێویستە",
-  en: "The owner's email address is required",
-  ar: "البريد الإلكتروني للمالك مطلوب",
-};
 const NEEDS_AN_OWNER_NAME = {
   ku: "ناوی خاوەنەکە پێویستە",
   en: "The owner's name is required",
   ar: "اسم المالك مطلوب",
 };
 
-export function ownerEmailObjection(email, lang = "ku") {
-  const value = clean(email).toLowerCase();
-  return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(value) ? null : say(NEEDS_AN_EMAIL, lang);
-}
-
 export function ownerNameObjection(name, lang = "ku") {
   return clean(name).length < 2 ? say(NEEDS_AN_OWNER_NAME, lang) : null;
+}
+
+const NEEDS_AN_OWNER_PHONE = {
+  ku: "ژمارەی مۆبایلی خاوەنەکە دروست نییە",
+  en: "The owner's phone number is not valid",
+  ar: "رقم هاتف المالك غير صالح",
+};
+const NEEDS_AN_OWNER_PASSWORD = {
+  ku: `وشەی نهێنی لانیکەم ${PASSWORD_MIN} پیت بێت`,
+  en: `The password must be at least ${PASSWORD_MIN} characters`,
+  ar: `يجب ألا تقل كلمة المرور عن ${PASSWORD_MIN} حرفًا`,
+};
+
+export function ownerPhoneObjection(phone, lang = "ku") {
+  const digits = clean(phone).replace(/\D/g, "");
+  return digits.length >= 10 && digits.length <= 15 ? null : say(NEEDS_AN_OWNER_PHONE, lang);
+}
+
+export function ownerPasswordObjection(password, lang = "ku") {
+  return String(password ?? "").length >= PASSWORD_MIN ? null : say(NEEDS_AN_OWNER_PASSWORD, lang);
+}
+
+/**
+ * Open a business and its first working owner account in one server action.
+ *
+ * The manager chooses business facts only. Internal ids and the synthetic email used behind the
+ * phone login are generated on the server and never appear in this interface.
+ */
+export async function provisionBusiness(request, {
+  name, ownerName, ownerPhone, password, note = null, lang = "ku",
+}) {
+  const objection = tenantNameObjection(name)
+    || ownerNameObjection(ownerName, lang)
+    || ownerPhoneObjection(ownerPhone, lang)
+    || ownerPasswordObjection(password, lang);
+  if (objection) throw new Error(objection);
+  if (typeof request !== "function") throw new Error("بەستەری دروستکردنی ئەکاونت ئامادە نییە");
+
+  return request({
+    action: "create_business",
+    name: clean(name),
+    ownerName: clean(ownerName),
+    ownerPhone: clean(ownerPhone),
+    password: String(password),
+    note: clean(note) || null,
+  });
 }
 
 /**
@@ -257,7 +260,6 @@ export function attentionReasons(business, lang = "ku") {
   if (business?.active === false) out.push(pick(SUSPENDED));
   if (business?.quiet) out.push(pick(QUIET));
   if (business?.waiting_to_claim > 0) out.push(`${pick(WAITING_TO_CLAIM)} (${business.waiting_to_claim})`);
-  if (business?.without_mfa > 0) out.push(`${pick(WITHOUT_MFA)} (${business.without_mfa})`);
   if (business?.receipts_waiting > 0) out.push(`${pick(RECEIPTS_WAITING)} (${business.receipts_waiting})`);
   if (business?.entries_unposted > 0) out.push(`${pick(ENTRIES_UNPOSTED)} (${business.entries_unposted})`);
   return out;
@@ -282,11 +284,6 @@ const WAITING_TO_CLAIM = {
   ku: "بانگهێشت وەرنەگیراوە",
   en: "Invitation not accepted",
   ar: "الدعوة لم تُقبل",
-};
-const WITHOUT_MFA = {
-  ku: "ئەکاونتی پارێزراو بێ MFA",
-  en: "Protected account with no second factor",
-  ar: "حساب محمي بلا عامل ثانٍ",
 };
 const RECEIPTS_WAITING = {
   ku: "فیشی وەستاو",

@@ -116,6 +116,24 @@
   border-color: var(--ac); box-shadow: 0 0 0 3px rgba(var(--ac-gl), .16);
 }
 
+.manager-onboarding-form {
+  padding: clamp(14px, 3vw, 20px);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--surf-2);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.manager-onboarding-form .debt-primary {
+  min-height: 44px;
+  align-self: end;
+  justify-self: start;
+  padding-inline: 22px;
+}
+@media (max-width: 640px) {
+  .manager-onboarding-form { grid-template-columns: 1fr; }
+  .manager-onboarding-form .debt-primary { width: 100%; }
+}
+
 .cashbox-balance {
   display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
   padding: 12px 14px; border-radius: var(--r-sm);

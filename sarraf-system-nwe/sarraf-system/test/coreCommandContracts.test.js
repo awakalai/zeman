@@ -49,7 +49,7 @@ test("financial browser commands are guarded, idempotent security-definer functi
   assert.match(commands, /sarraf_assert_writes_open/);
   assert.match(commands, /sarraf_command_replay/);
   assert.match(commands, /pg_advisory_xact_lock/);
-  assert.match(commands, /MFA\/AAL2 is required/);
+  assert.match(commands, /administrator authorization is required/);
 });
 
 test("transaction accounting is derived by the server and posted economics are immutable", () => {

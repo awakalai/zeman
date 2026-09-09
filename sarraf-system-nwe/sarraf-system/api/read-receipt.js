@@ -615,18 +615,6 @@ const supabaseServerConfig = () => ({
 });
 
 
-function decodeJwtPayload(token) {
-  try {
-    const part = String(token || "").split(".")[1];
-    if (!part) return {};
-    const normalized = part.replace(/-/g, "+").replace(/_/g, "/");
-    const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
-    return JSON.parse(Buffer.from(padded, "base64").toString("utf8"));
-  } catch {
-    return {};
-  }
-}
-
 async function requireSarrafUser(req, allowedRoles = null) {
   const authHeader = String(req?.headers?.authorization || req?.headers?.Authorization || "");
   const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
@@ -681,16 +669,7 @@ async function requireSarrafUser(req, allowedRoles = null) {
     throw e;
   }
 
-  const claims = decodeJwtPayload(token);
-  const aal = String(claims?.aal || "aal1");
-  if ((profile.role === "admin" || profile.role === "office") && aal !== "aal2") {
-    const e = new Error("multi-factor authentication required");
-    e.status = 403;
-    e.code = "mfa_required";
-    throw e;
-  }
-
-  return { user, profile, token, aal };
+  return { user, profile, token };
 }
 
 /**
@@ -804,9 +783,7 @@ export default async function handler(req, res) {
     res.status(status).json({
       error: status === 401
         ? "کاتی چوونەژوورەوەت بەسەرچووە — دووبارە بچۆ ژوورەوە"
-        : authError?.code === "mfa_required"
-          ? "پاراستنی دوو هەنگاوی پێویستە — سەرەتا کۆدی Authenticator پشتڕاست بکەرەوە"
-          : "ڕێگەپێدان بۆ خوێندنەوەی فیش نییە",
+        : "ڕێگەپێدان بۆ خوێندنەوەی فیش نییە",
       code: authError?.code || null,
       retryable: false,
     });

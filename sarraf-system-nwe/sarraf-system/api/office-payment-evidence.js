@@ -34,13 +34,6 @@ function bearer(req) {
   return header.slice(7).trim();
 }
 
-function decodeClaims(token) {
-  try {
-    const value = token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
-    return JSON.parse(Buffer.from(value, "base64").toString("utf8"));
-  } catch { return {}; }
-}
-
 export function sniffEvidence(bytes) {
   if (bytes.length >= 5 && bytes.subarray(0, 5).toString("ascii") === "%PDF-") return "application/pdf";
   if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
@@ -103,9 +96,6 @@ export default async function handler(req, res) {
     const actor = actorResult.data;
     if (actorResult.error) throw failure(503, "actor_lookup_failed", "account lookup is unavailable", true);
     if (!actor?.id || actor.role !== "office") throw failure(403, "office_required", "office account required");
-    if (String(decodeClaims(token).aal || "aal1") !== "aal2") {
-      throw failure(403, "mfa_required", "multi-factor authentication is required");
-    }
     const ip = String(req.headers?.["x-forwarded-for"] || req.socket?.remoteAddress || "unknown").split(",")[0].trim();
     rateLimit(actor.id, ip);
 

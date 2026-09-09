@@ -1159,8 +1159,7 @@ export default function App() {
   const [session, setSession] = useState(undefined);
   const [data, setData] = useState(null);
   const [profile, setProfile] = useState(null);
-  const [accessState, setAccessState] = useState("checking"); // checking | mfa | ready | missing | error
-  const [accessEpoch, setAccessEpoch] = useState(0);
+  const [accessState, setAccessState] = useState("checking"); // checking | ready | missing | error
   const [accessError, setAccessError] = useState("");
   const [page, setPage] = useState("dash");
   // What the global search was pointing at when it sent us here — the batch a receipt belongs
@@ -1511,15 +1510,6 @@ export default function App() {
         if (cancelled) return;
         setProfile(gateProfile);
 
-        if (gateProfile.role === "admin" || gateProfile.role === "office") {
-          const { data: aal, error: aalError } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
-          if (aalError) throw aalError;
-          if (aal?.currentLevel !== "aal2") {
-            if (!cancelled) setAccessState("mfa");
-            return;
-          }
-        }
-
         if (cancelled) return;
         setAccessState("ready");
         await loadAll(gateProfile);
@@ -1534,7 +1524,7 @@ export default function App() {
 
     boot();
     return () => { cancelled = true; };
-  }, [session?.access_token, accessEpoch]);
+  }, [session?.access_token]);
 
   const LR = (e) => ({ id: e.id, type: e.type, owner: e.owner || null, investor_id: e.investorId || null, cur_id: e.curId, amount: e.amount, partner_id: e.partnerId || null, cash_account_id: e.cashAccountId || null, paid_from: e.paidFrom || null, tx_id: e.txId || null, note: e.note || null, date: e.date });
   const TR = (transaction) => {
@@ -2569,13 +2559,20 @@ export default function App() {
     flash("ئەکاونت درووست کرا ✓");
   });
 
-  const deleteUser = (u) => {
-    if (!window.confirm(`ناچالاککردنی ئەکاونتی «${u.name}»؟ مێژووی دارایی دەمێنێتەوە.`)) return;
-    run(async () => {
-      await adminUserRequest({ action: "deactivate", userId: u.id, tenantId: u.tenantId });
+  const deleteUser = (u, reason) => run(async () => {
+      if (!u?.id || String(reason || "").trim().length < 3) {
+        flash("هۆکاری ناچالاککردن حەتمییە", "error");
+        return false;
+      }
+      await adminUserRequest({
+        action: "deactivate",
+        userId: u.id,
+        tenantId: u.tenantId,
+        reason: String(reason).trim(),
+      });
       flash("ئەکاونت ناچالاک کرا ✓");
+      return true;
     });
-  };
 
   const setUserRate = (u, rate) => run(async () => {
     const n = Number(rate);
@@ -2585,6 +2582,21 @@ export default function App() {
     }
     await adminUserRequest({ action: "update_rate", userId: u.id, rate: n, tenantId: u.tenantId });
     flash("ڕێژە نوێ کرایەوە ✓");
+  });
+
+  const resetUserPassword = (u, password) => run(async () => {
+    if (!u?.id || String(password || "").length < 12) {
+      flash("وشەی نهێنیی نوێ لانیکەم ١٢ پیت بێت", "error");
+      return false;
+    }
+    await adminUserRequest({
+      action: "reset_password",
+      userId: u.id,
+      password: String(password),
+      tenantId: u.tenantId,
+    });
+    flash(`وشەی نهێنیی ${u.name} گۆڕدرا ✓`, "ok");
+    return true;
   });
 
   /* ── پارە دانان/دەرهێنان لە حسابی هەر کەسێک ── */
@@ -2894,7 +2906,7 @@ export default function App() {
       takenAt: now(),
       takenBy: profile?.id || null,
       warning:
-        "Supplementary JSON export only. Auth identities, MFA secrets, Storage object bytes, database functions/policies, and WAL/PITR state are not included.",
+        "Supplementary JSON export only. Auth credentials, Storage object bytes, database functions/policies, and WAL/PITR state are not included.",
     });
 
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
@@ -3005,7 +3017,6 @@ export default function App() {
   if (session === undefined) return <><Styles /><Splash t={tr("بارکردنی سیستەم…")} /></>;
   if (!session) return <><Styles /><Login /></>;
   if (accessState === "checking") return <><Styles /><Splash t={tr("پشکنینی پاراستنی ئەکاونت…")} signOut={signOut} /></>;
-  if (accessState === "mfa") return <><Styles /><MfaGate profile={profile} onReady={() => setAccessEpoch((x) => x + 1)} onSignOut={signOut} /></>;
   if (accessState === "error") return <><Styles /><Splash t={accessError || tr("هەڵە لە پشکنینی پاراستن")} signOut={signOut} /></>;
   if (accessState === "missing" || !profile) return <><Styles /><Splash t={tr("ئەکاونتەکەت بە سیستەمەکە نەبەستراوە — پەیوەندی بە ئەدمینەوە بکە.")} signOut={signOut} /></>;
   if (!data || !calc) return <><Styles /><Splash t={tr("بارکردنی داتا…")} signOut={signOut} /></>;
@@ -3541,7 +3552,7 @@ export default function App() {
               : <TxList {...shared} onEdit={setEditTx} onDel={delTx} settle={settle} unsettle={unsettle} />)}
             {page === "receipts" && <ReceiptsHub {...shared} batches={batches} batchLoadError={batchLoadError} reloadBatches={reloadBatches} flash={flash} profile={profile}
               searchFocus={searchFocus} onMakeTx={(b) => { setPendingBatch(b); setPage("newtx"); }} />}
-            {page === "people" && <PeopleHub {...shared} accountMove={accountMove} accountTransfer={accountTransfer} profile={profile} detailId={detailId} setDetailId={setDetailId} onSave={saveTx} transfer={transfer} officePay={officePay} officeSettle={officeSettle} settle={settle} createUser={createUser} deleteUser={deleteUser} setUserRate={setUserRate} flash={flash} />}
+            {page === "people" && <PeopleHub {...shared} accountMove={accountMove} accountTransfer={accountTransfer} profile={profile} detailId={detailId} setDetailId={setDetailId} onSave={saveTx} transfer={transfer} officePay={officePay} officeSettle={officeSettle} settle={settle} createUser={createUser} deleteUser={deleteUser} setUserRate={setUserRate} resetUserPassword={resetUserPassword} flash={flash} />}
             {page === "party-360" && <DeferredPanel><Party360 client={supabase} lang={lang} parties={(data?.users || []).filter((u) => !u.deleted && u.role !== "admin")} /></DeferredPanel>}
             {page === "report" && <Report {...shared} />}
             {/* The admin centre is one business's world. A manager belongs to no business, so
@@ -3625,7 +3636,7 @@ export default function App() {
               users={data?.users || []} profile={profile} flash={flash}
               request={adminUserRequest} onDone={loadAll} /></DeferredPanel>}
             {page === "manager-console" && <DeferredPanel><ManagerConsole client={supabase}
-              lang={lang} isManager={isSystemManager} flash={flash} /></DeferredPanel>}
+              lang={lang} isManager={isSystemManager} request={adminUserRequest} flash={flash} /></DeferredPanel>}
             {page === "manager-overview" && <DeferredPanel><ManagerOverview client={supabase}
               lang={lang} /></DeferredPanel>}
             {page === "cashbox" && <DeferredPanel><CashboxPanel client={supabase} lang={lang} flash={flash}
@@ -3797,164 +3808,12 @@ const bioLogin = async () => {
 };
 
 
-function MfaGate({ profile, onReady, onSignOut }) {
-  const [mode, setMode] = useState("loading"); // loading | challenge | enroll
-  const [factorId, setFactorId] = useState("");
-  const [qr, setQr] = useState("");
-  const [secret, setSecret] = useState("");
-  const [code, setCode] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
-
-  const verifiedFactors = (data) => {
-    const all = [
-      ...(Array.isArray(data?.totp) ? data.totp : []),
-      ...(Array.isArray(data?.phone) ? data.phone : []),
-      ...(Array.isArray(data?.all) ? data.all : []),
-    ];
-    const seen = new Set();
-    return all.filter((f) => {
-      if (!f?.id || f.status !== "verified" || seen.has(f.id)) return false;
-      seen.add(f.id);
-      return true;
-    });
-  };
-
-  const prepare = async () => {
-    setBusy(true);
-    setErr("");
-    try {
-      const { data: aal, error: aalError } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
-      if (aalError) throw aalError;
-      if (aal?.currentLevel === "aal2") {
-        onReady?.();
-        return;
-      }
-
-      const { data: factors, error: listError } = await supabase.auth.mfa.listFactors();
-      if (listError) throw listError;
-      const verified = verifiedFactors(factors);
-
-      if (verified.length) {
-        setFactorId(verified[0].id);
-        setMode("challenge");
-        return;
-      }
-
-      const { data: enrolled, error: enrollError } = await supabase.auth.mfa.enroll({
-        factorType: "totp",
-        friendlyName: `${BRAND.name} ${profile?.role || "staff"}`,
-      });
-      if (enrollError) throw enrollError;
-      if (!enrolled?.id || !enrolled?.totp?.qr_code) throw new Error("نەتوانرا 2FA ئامادە بکرێت");
-      setFactorId(enrolled.id);
-      setQr(enrolled.totp.qr_code);
-      setSecret(enrolled.totp.secret || "");
-      setMode("enroll");
-    } catch (e) {
-      console.error("MFA prepare", e);
-      setErr(errorTextOr(e, "هەڵە لە ئامادەکردنی پاراستنی دوو هەنگاوی"));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  useEffect(() => { prepare(); }, []);
-
-  const verify = async () => {
-    const clean = String(code || "").replace(/\D/g, "").slice(0, 6);
-    if (clean.length !== 6 || !factorId) {
-      setErr("کۆدی ٦ ژمارەیی Authenticator داخڵ بکە");
-      return;
-    }
-
-    setBusy(true);
-    setErr("");
-    try {
-      const { data: challenge, error: challengeError } = await supabase.auth.mfa.challenge({ factorId });
-      if (challengeError) throw challengeError;
-      const { error: verifyError } = await supabase.auth.mfa.verify({
-        factorId,
-        challengeId: challenge.id,
-        code: clean,
-      });
-      if (verifyError) throw verifyError;
-      await supabase.auth.refreshSession();
-      onReady?.();
-    } catch (e) {
-      console.error("MFA verify", e);
-      setErr("کۆدەکە دروست نییە یان کاتی بەسەرچووە — کۆدی نوێ بنووسە");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div dir={LANGS[_lang]?.dir || "rtl"} data-role={profile?.role || "admin"}
-      className="min-h-screen flex items-center justify-center p-6"
-      style={{ background: "var(--bg)", color: "var(--txt)" }}>
-      <div className="w-full max-w-[430px]">
-        <Card className="p-6 md:p-7">
-          <div className="w-14 h-14 rounded-2xl flex items-center justify-center mb-5"
-            style={{ background: "var(--pos-bg)", color: "var(--pos)" }}>
-            <ShieldCheck className="w-7 h-7" />
-          </div>
-
-          <h1 className="text-xl font-bold">{mode === "enroll" ? "چالاککردنی پاراستنی دوو هەنگاوی" : "پشتڕاستکردنەوەی پاراستن"}</h1>
-          <p className="text-sm mt-2 leading-6" style={{ color: "var(--txt-2)" }}>
-            بۆ ئەکاونتی {ROLE_KU[profile?.role] || profile?.role}، کۆدی Authenticator پێویستە پێش دەستگەیشتن بە داتای دارایی.
-          </p>
-
-          {mode === "loading" && (
-            <div className="py-8"><StatePanel type="loading" title="ئامادەکردنی پاراستن…" compact /></div>
-          )}
-
-          {mode === "enroll" && qr && (
-            <div className="mt-5 space-y-4">
-              <div className="rounded-2xl p-4 flex justify-center" style={{ background: "#fff", border: "1px solid var(--line)" }}>
-                <img src={qr} alt="Authenticator QR" className="w-52 h-52 max-w-full" />
-              </div>
-              <div className="text-xs leading-5" style={{ color: "var(--txt-2)" }}>
-                QR ـەکە بە Google Authenticator، Microsoft Authenticator یان 1Password scan بکە.
-                {secret && <div className="mt-2">ئەگەر scan نەکرا: <code dir="ltr" className="select-all">{secret}</code></div>}
-              </div>
-            </div>
-          )}
-
-          {(mode === "challenge" || mode === "enroll") && (
-            <div className="mt-5">
-              <Lbl>کۆدی ٦ ژمارەیی</Lbl>
-              <div className="relative">
-                <KeyRound className="w-4 h-4 absolute start-3 top-1/2 -translate-y-1/2" style={{ color: "var(--txt-3)" }} />
-                <input inputMode="numeric" autoComplete="one-time-code" dir="ltr" maxLength={6}
-                  value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
-                  onKeyDown={(e) => e.key === "Enter" && verify()}
-                  className="w-full ps-10 pe-4 py-3.5 rounded-xl text-center tracking-[.35em] text-lg outline-none"
-                  style={{ background: "var(--surf-2)", border: "1px solid var(--line)", color: "var(--txt)", ...num }} />
-              </div>
-              <Btn className="w-full mt-3" disabled={busy || code.length !== 6} onClick={verify}>
-                {busy ? "پشکنین…" : "پشتڕاستکردنەوە"}
-              </Btn>
-            </div>
-          )}
-
-          {err && (
-            <div className="mt-4 p-3 rounded-xl text-sm" style={{ background: "var(--neg-bg)", color: "var(--neg)", border: "1px solid color-mix(in srgb,var(--neg) 20%,transparent)" }}>
-              {err}
-            </div>
-          )}
-
-          <div className="mt-5 flex justify-between gap-2">
-            {err && <button onClick={prepare} disabled={busy} className="text-xs font-semibold" style={{ color: "var(--txt-2)" }}>دووبارە هەوڵدان</button>}
-            <button onClick={onSignOut} className="text-xs font-semibold ms-auto" style={{ color: "var(--txt-3)" }}>دەرچوون</button>
-          </div>
-        </Card>
-      </div>
-    </div>
-  );
-}
-
 function Login() {
+  const loginCopy = {
+    ku: { phone: "ژمارەی مۆبایل", required: "ژمارەی مۆبایل و وشەی نهێنی پێویستە" },
+    en: { phone: "Phone number", required: "Phone number and password are required" },
+    ar: { phone: "رقم الهاتف", required: "رقم الهاتف وكلمة المرور مطلوبان" },
+  }[_lang] || { phone: "ژمارەی مۆبایل", required: "ژمارەی مۆبایل و وشەی نهێنی پێویستە" };
   const [id, setId] = useState("");
   const [pw, setPw] = useState("");
   const [show, setShow] = useState(false);
@@ -3967,8 +3826,8 @@ function Login() {
     const t = String(v || "").trim();
     if (t.includes("@")) return [t.toLowerCase()];
 
-    // Owner/Admin may use a short username such as "sarkhel" or "admin".
-    // Regular users keep phone-based login.
+    // Existing internal accounts may still use their old short alias while their phone number is
+    // being attached. New accounts and every person-facing label use phone-number login only.
     if (/^[a-zA-Z][a-zA-Z0-9._-]{2,31}$/.test(t)) {
       return [`${t.toLowerCase()}@sarraf.local`];
     }
@@ -3998,7 +3857,7 @@ function Login() {
 
   const go = async (ov) => {
     const uid2 = ov?.id ?? id, pw2 = ov?.pw ?? pw;
-    if (!uid2 || !pw2) return setErr(tr("ناوی بەکارهێنەر/ژمارە/ئیمەیل و وشەی نهێنی پێویستە"));
+    if (!uid2 || !pw2) return setErr(loginCopy.required);
     setBusy(true); setErr("");
     const candidates = phoneIdentityCandidates(uid2);
     let lastError = null;
@@ -4045,9 +3904,9 @@ function Login() {
 
         <div className="space-y-3">
           <div>
-            <Lbl>{tr("ناوی بەکارهێنەر / ژمارە / ئیمەیل")}</Lbl>
+            <Lbl>{loginCopy.phone}</Lbl>
             <input dir="ltr" type="text" autoComplete="username" value={id} onChange={(e) => setId(e.target.value)}
-              placeholder="sarkhel / admin / 07701234567" onKeyDown={(e) => e.key === "Enter" && go()}
+              inputMode="tel" placeholder="0770 123 4567" onKeyDown={(e) => e.key === "Enter" && go()}
               className="w-full px-4 py-3.5 text-[15px] outline-none"
               style={{ ...fieldSty, fontFamily: "'IBM Plex Mono', monospace" }}
               onFocus={onFoc} onBlur={onBlr} />
@@ -10531,8 +10390,12 @@ function Office({ data, cur, usr, officePay, officeSettle, calc, accountMove, ac
 
 
 /* ══════════════════ بەڕێوەبردنی ئەکاونت ══════════════════ */
-function UsersAdmin({ data, cur, createUser, deleteUser, setUserRate, flash, isOwner }) {
+function UsersAdmin({ data, cur, createUser, deleteUser, setUserRate, resetUserPassword, flash, isOwner }) {
   const [f, setF] = useState({ name: "", role: "customer", rate: "", scope: [], phone: "", address: "", note: "", password: "" });
+  const [passwordTarget, setPasswordTarget] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [deactivateTarget, setDeactivateTarget] = useState("");
+  const [deactivateReason, setDeactivateReason] = useState("");
   const roles = isOwner ? ["customer", "partner", "investor", "office", "admin"] : ["customer", "partner", "investor", "office"];
   const list = data.users.filter((u) =>
     !u.deleted &&
@@ -10608,7 +10471,45 @@ function UsersAdmin({ data, cur, createUser, deleteUser, setUserRate, flash, isO
               <span className="text-xs">{tr("٪")}</span>
             </div>
           )}
-          <button onClick={() => deleteUser(u)} className="text-[var(--txt-3)] hover:text-[var(--neg)]"><Trash2 className="w-4 h-4" /></button>
+          <button type="button" onClick={() => {
+            setPasswordTarget(passwordTarget === u.id ? "" : u.id);
+            setNewPassword("");
+          }} aria-label={`گۆڕینی وشەی نهێنیی ${u.name}`}
+            className="text-[var(--txt-3)] hover:text-[var(--ac)]">
+            <KeyRound className="w-4 h-4" />
+          </button>
+          <button type="button" onClick={() => {
+            setDeactivateTarget(deactivateTarget === u.id ? "" : u.id);
+            setDeactivateReason("");
+          }} aria-label={`ناچالاککردنی ئەکاونتی ${u.name}`}
+            className="text-[var(--txt-3)] hover:text-[var(--neg)]"><Trash2 className="w-4 h-4" /></button>
+          {passwordTarget === u.id && (
+            <div className="basis-full grid gap-2 sm:grid-cols-[1fr_auto] pt-3 border-t border-[var(--line)]">
+              <Inp type="password" dir="ltr" autoComplete="new-password" value={newPassword}
+                aria-label={`وشەی نهێنیی نوێ بۆ ${u.name}`} placeholder="لانیکەم ١٢ پیت"
+                onChange={(e) => setNewPassword(e.target.value)} />
+              <Btn disabled={newPassword.length < 12} onClick={async () => {
+                const ok = await resetUserPassword(u, newPassword);
+                setNewPassword("");
+                if (ok !== false) setPasswordTarget("");
+              }}>دانانی وشەی نهێنی</Btn>
+            </div>
+          )}
+          {deactivateTarget === u.id && (
+            <div className="basis-full space-y-2 pt-3 border-t border-[var(--line)]">
+              <div className="text-sm font-semibold text-[var(--neg)]">ناچالاککردنی ئەکاونتی «{u.name}»</div>
+              <div className="text-xs text-[var(--txt-2)]">تەنها ئەگەر هەموو باڵانس و قەرزەکانی سفر بن ئەنجام دەدرێت. مێژووی دارایی ناسڕێتەوە.</div>
+              <Inp value={deactivateReason} onChange={(e) => setDeactivateReason(e.target.value)}
+                aria-label={`هۆکاری ناچالاککردنی ${u.name}`} placeholder="هۆکار بنووسە — حەتمییە" />
+              <div className="flex gap-2 justify-end">
+                <Btn kind="ghost" onClick={() => { setDeactivateTarget(""); setDeactivateReason(""); }}>پاشگەزبوونەوە</Btn>
+                <Btn kind="danger" disabled={deactivateReason.trim().length < 3} onClick={async () => {
+                  const ok = await deleteUser(u, deactivateReason);
+                  if (ok !== false) { setDeactivateTarget(""); setDeactivateReason(""); }
+                }}>ناچالاککردن</Btn>
+              </div>
+            </div>
+          )}
         </Card>
       ))}
     </div>
@@ -11103,7 +11004,7 @@ function Backup({ data, calc, cur, lang = "ku", downloadBackup, flash, sumUsd, m
                 {maintBusy ? tr("جێبەجێکردن…") : frozen ? tr("کردنەوەی تۆمارکردنی دارایی") : tr("چالاککردنی ڕاگرتنی فریاکەوتن")}
               </Btn>
               <span className="text-[11px] self-center text-[var(--txt-3)]">
-                تەنها خاوەنی سیستەم · MFA/AAL2
+                تەنها خاوەنی سیستەم
               </span>
             </div>
           </div>
@@ -11184,7 +11085,7 @@ function Backup({ data, calc, cur, lang = "ku", downloadBackup, flash, sumUsd, m
             وێنەیەک کە لە هەمان database ـدا هەڵگیرێت disaster recovery نییە، بۆیە باکئەپە خۆکارە ناوخۆییە کۆنەکە ناچالاک کراوە.
           </p>
           <p>
-            export ـی JSON ـی خوارەوە تەنها کۆپییەکی زیادەی off-site ـە؛ Auth/MFA secret، فایلەکانی Storage،
+            export ـی JSON ـی خوارەوە تەنها کۆپییەکی زیادەی off-site ـە؛ زانیاریی نهێنیی Auth، فایلەکانی Storage،
             database functions/policies و WAL/PITR ـی تێدا نییە.
           </p>
         </div>

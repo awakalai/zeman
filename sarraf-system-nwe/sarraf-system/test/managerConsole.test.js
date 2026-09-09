@@ -2,36 +2,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
-  healthProblems, loadHealth, loadTenants, openBusiness, setTenantActive,
-  tenantIdObjection, tenantNameObjection,
+  healthProblems, loadHealth, loadTenants, setTenantActive, tenantNameObjection,
 } from "../src/services/managerConsole.js";
 
 const ok = { rpc: async () => ({ data: {}, error: null }) };
 
-test("a business id is checked before it is written into every row it will own", () => {
-  assert.equal(tenantIdObjection("zeman-erbil"), null);
-  assert.equal(tenantIdObjection("abc"), null);
-  assert.match(tenantIdObjection("ab"), /لانیکەم/);
-  assert.match(tenantIdObjection("Upper"), /پیتی ئینگلیزیی بچووک/);
-  assert.match(tenantIdObjection("has space"), /پیتی ئینگلیزیی بچووک/);
-  assert.match(tenantIdObjection("-leading"), /پیتی ئینگلیزیی بچووک/);
-});
-
 test("a business needs a name", () => {
   assert.equal(tenantNameObjection("سەرخێڵ"), null);
   assert.match(tenantNameObjection("ک"), /ناوی سەرخێڵ/);
-});
-
-test("an invalid business is refused before the server is asked", async () => {
-  // createTenant used to be the call here. It made a business and nobody who could sign into
-  // it, so the console now opens a business and its first owner in one act; this holds the same
-  // thing it always held — that an id which cannot be valid never reaches the server.
-  let called = false;
-  const client = { rpc: async () => { called = true; return { data: {}, error: null }; } };
-  await assert.rejects(() => openBusiness(client, {
-    id: "AB", name: "x", ownerEmail: "a@b.co", ownerName: "خاوەن",
-  }));
-  assert.equal(called, false, "the server was asked about a business that could not be valid");
 });
 
 test("suspending says why, and refuses to be silent about it", async () => {

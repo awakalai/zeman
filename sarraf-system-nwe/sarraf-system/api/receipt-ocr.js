@@ -40,15 +40,6 @@ function bearer(req) {
   return header.slice(7).trim();
 }
 
-function decodeClaims(token) {
-  try {
-    const value = token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
-    return JSON.parse(Buffer.from(value, "base64").toString("utf8"));
-  } catch {
-    return {};
-  }
-}
-
 export function sniffImage(bytes) {
   if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
   if (bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return "image/png";
@@ -128,10 +119,6 @@ async function requireActor(req, auth, service) {
     .maybeSingle();
   if (actorResult.error || !actorResult.data?.id) {
     throw failure(403, "account_not_linked", "account is not linked");
-  }
-  const claims = decodeClaims(token);
-  if (actorResult.data.role === "admin" && String(claims.aal || "aal1") !== "aal2") {
-    throw failure(403, "mfa_required", "multi-factor authentication is required");
   }
   return { actor: actorResult.data, token };
 }

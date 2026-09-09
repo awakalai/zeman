@@ -123,19 +123,15 @@ const ROLE_EXPECTATIONS = {
 };
 
 
-/**
- * An unsigned JWT carrying the assurance level. supabase-js reads `aal` by base64-decoding the
- * payload, so this is enough to exercise the administrator MFA gate in both directions without
- * standing up a real auth server.
- */
+/** An unsigned password-session JWT; every role must reach its scoped screen with this session. */
 const b64url = (obj) =>
   Buffer.from(JSON.stringify(obj)).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-const stubJwt = (userId, aal) => [
+const stubJwt = (userId) => [
   b64url({ alg: "HS256", typ: "JWT" }),
   b64url({
     sub: `auth-${userId}`, aud: "authenticated", role: "authenticated",
-    exp: Math.floor(Date.now() / 1000) + 3600, aal,
-    amr: aal === "aal2" ? [{ method: "password" }, { method: "totp" }] : [{ method: "password" }],
+    exp: Math.floor(Date.now() / 1000) + 3600, aal: "aal1",
+    amr: [{ method: "password" }],
   }),
   "stub-signature",
 ].join(".");
@@ -210,14 +206,7 @@ try {
 
   browser = await pw.chromium.launch({ executablePath });
 
-  // §12 requires a second factor for the roles that operate the business. Each of those is run
-  // twice: once without it, where the interface must stop at the gate, and once with it.
-  const MFA_REQUIRED = new Set(["admin", "office"]);
-  const runs = [];
-  for (const role of Object.keys(ROLE_EXPECTATIONS)) {
-    if (MFA_REQUIRED.has(role)) runs.push({ role, aal: "aal1", expectGate: true });
-    runs.push({ role, aal: MFA_REQUIRED.has(role) ? "aal2" : "aal1", expectGate: false });
-  }
+  const runs = Object.keys(ROLE_EXPECTATIONS).map((role) => ({ role }));
   // ── and once on a phone ──────────────────────────────────────────────────────────────────
   //
   // Every check above runs at 1280×900, and this business runs on phones. The six sections
@@ -226,12 +215,12 @@ try {
   // the fourth entry behind «زیاتر» — twenty screens in a single unlabelled scroll. That is
   // the drawer this overhaul deleted, still standing on the device that matters most, and no
   // gate could see it because no gate had ever been narrow.
-  runs.push({ role: "admin", aal: "aal2", expectGate: false, phone: true });
+  runs.push({ role: "admin", phone: true });
 
-  for (const { role, aal, expectGate, phone } of runs) {
+  for (const { role, phone } of runs) {
     const expect = ROLE_EXPECTATIONS[role];
     const me = USERS[role];
-    const label = phone ? `${role} on a phone` : expectGate ? `${role} without a second factor` : role;
+    const label = phone ? `${role} on a phone` : role;
     const ctx = await browser.newContext({ locale: "ckb",
       viewport: phone ? { width: 390, height: 844 } : { width: 1280, height: 900 } });
     const page = await ctx.newPage();
@@ -262,7 +251,7 @@ try {
 
       if (url.includes("/auth/v1/token")) {
         return json({
-          access_token: stubJwt(me.id, aal), token_type: "bearer", expires_in: 3600,
+          access_token: stubJwt(me.id), token_type: "bearer", expires_in: 3600,
           refresh_token: "stub-refresh",
           user: { id: `auth-${me.id}`, aud: "authenticated", role: "authenticated", email: `${role}@example.test` },
         });
@@ -270,9 +259,6 @@ try {
       if (url.includes("/auth/v1/user")) {
         return json({ id: `auth-${me.id}`, aud: "authenticated", role: "authenticated" });
       }
-      // The gate an administrator must pass. Supplied as a claim so the check itself can be
-      // exercised in both directions.
-      if (url.includes("/auth/v1/factors") || url.includes("/auth/v1/mfa")) return json([]);
       if (url.includes("/rpc/sarraf_self_profile")) {
         return json({ ...me, auth_id: `auth-${me.id}`, deleted: false, rate: 0, scope_curs: [], phone: "07500000000" });
       }
@@ -328,21 +314,10 @@ try {
     const mounted = await page.evaluate(() => document.querySelector("#root")?.children.length || 0);
     record(mounted > 0, `${label}: the application renders`, mounted > 0 ? "" : "#root is empty");
 
-    // Without a second factor an operator role must be stopped, and must not be shown the
-    // business behind the gate.
-    // The gate names itself; relying on the absence of business text would pass for any
-    // screen that merely failed to load.
+    // The chosen login is phone + password. No role is allowed to fall into the removed
+    // Authenticator enrollment/challenge flow.
     const gated = /پشتڕاستکردنەوەی پاراستن|Authenticator|قۆدی|2FA|MFA/i.test(body);
-    if (expectGate) {
-      record(gated, `${label}: is stopped at the second-factor gate`,
-        gated ? "" : "an operator role reached the system with one factor");
-      record(!body.includes("بەستنی ڕۆژ") && !body.includes("پاراستنی داتا"),
-        `${label}: sees nothing behind the gate`);
-      const realGated = crashes.filter((e) => !/supabaseUrl|Failed to load resource|net::ERR/i.test(e));
-      record(realGated.length === 0, `${label}: no uncaught error`, realGated.slice(0, 2).join(" | "));
-      await ctx.close();
-      continue;
-    }
+    record(!gated, `${label}: does not ask for a second factor`, gated ? "the removed security gate is still visible" : "");
 
     // An absence check only means something once the role is actually inside. A run that never
     // got past sign-in would otherwise pass every one of them for the wrong reason.
@@ -489,7 +464,7 @@ try {
     // they had never been. The admin centre still leads to seven of them, and for a person who
     // arrived that way the link is exactly right — so it must depend on the route taken, and
     // both routes are walked here.
-    if (role === "admin" && !expectGate) {
+    if (role === "admin") {
       const BACK = "گەڕانەوە بۆ ناوەندی بەڕێوەبردن";
       const openFromSidebar = async (label) => {
         try { await page.getByText(label, { exact: true }).first().click({ timeout: 4000 }); }

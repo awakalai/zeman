@@ -67,8 +67,9 @@ test("an owner may reset their own staff and ordinary users, and nobody above", 
   assert.match(passwordObjection(owner, { ...owner, id: "o2" }), /تەنها لەلایەن ماناجەرەوە/);
 });
 
-test("staff may reset nobody", () => {
-  assert.match(passwordObjection(operator, customer), /دەسەڵاتت نییە/);
+test("staff may restore an ordinary user's login but never an administrator account", () => {
+  assert.equal(passwordObjection(operator, customer), null);
+  assert.match(passwordObjection(operator, owner), /دەسەڵاتت نییە/);
 });
 
 test("a deactivated account has no password worth setting", () => {
