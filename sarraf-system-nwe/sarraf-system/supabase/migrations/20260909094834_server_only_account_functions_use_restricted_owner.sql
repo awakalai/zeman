@@ -1,3 +1,6 @@
+-- Corrective forward migration: the two server-only account commands use the restricted
+-- sarraf_definer role, which cannot bypass tenant row-level security.
+--
 -- A manager opens a business and gives its first owner a working phone/password login in one act.
 --
 -- The old onboarding form asked for an internal tenant id and an email address, then instructed
@@ -129,5 +132,15 @@ begin
   end if;
 end
 $grant$;
+
+
+grant create on schema public to sarraf_definer;
+alter function public.sarraf_deactivate_user_if_clear(text,text,text,text)
+  owner to sarraf_definer;
+revoke create on schema public from sarraf_definer;
+revoke all on function public.sarraf_deactivate_user_if_clear(text,text,text,text)
+  from public, anon, authenticated;
+grant execute on function public.sarraf_deactivate_user_if_clear(text,text,text,text)
+  to service_role;
 
 commit;

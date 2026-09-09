@@ -19,6 +19,7 @@ test("deactivation is one database command that refuses every outstanding money 
   assert.match(sql, /update public\.app_users[\s\S]*set deleted = true/);
   assert.match(sql, /insert into public\.audit/);
   assert.match(sql, /grant execute[\s\S]*to service_role/);
+  assert.match(sql, /alter function public\.sarraf_deactivate_user_if_clear[\s\S]*owner to sarraf_definer/);
   assert.doesNotMatch(sql, /grant execute[\s\S]*to authenticated/);
 });
 

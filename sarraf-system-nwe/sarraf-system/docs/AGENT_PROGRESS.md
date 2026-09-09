@@ -82,9 +82,12 @@
   mandatory and a successful deactivation and its audit row commit atomically.
 - Preserved the deployed Party 360 route while resolving the account-screen changes; no WAC,
   journal, ledger, maker-checker, transaction, or posted financial behavior was changed.
-- Installed the three live migrations as `20260908201710_manager_creates_business_with_phone`,
+- Installed the account migrations as `20260908201710_manager_creates_business_with_phone`,
   `20260908201717_password_sessions_are_the_chosen_login`, and
-  `20260908201722_account_must_be_clear_before_deactivation`.
+  `20260908201722_account_must_be_clear_before_deactivation`. CI then identified that the two new
+  server-only commands still had PostgreSQL's row-level-security-bypassing owner; the corrective
+  migration `20260909094834_server_only_account_functions_use_restricted_owner` moved both to the
+  established restricted `sarraf_definer` role before merge.
 
 ### Evidence
 
@@ -95,8 +98,9 @@
 - Real-browser role verification: **80/80 passed** across administrator, customer, partner, office,
   investor, and administrator-mobile views; every tested role entered without an MFA screen.
 - All three migrations passed live-schema transaction/rollback validation before installation.
-- Live ACL inspection confirms business onboarding and clear-account deactivation are not executable
-  by `public`, `anon`, or `authenticated`; only the server-side `service_role` can execute them.
+- Live ACL inspection confirms business onboarding and clear-account deactivation are owned by
+  `sarraf_definer` and are not executable by `public`, `anon`, or `authenticated`; only the
+  server-side `service_role` can execute them.
 - Supabase security advisors reported the existing project-wide warnings; neither new server-only
   function appeared as an authenticated executable security-definer finding.
 - The local PostgreSQL accounting, tenant-isolation, and business-flow harnesses were unavailable in

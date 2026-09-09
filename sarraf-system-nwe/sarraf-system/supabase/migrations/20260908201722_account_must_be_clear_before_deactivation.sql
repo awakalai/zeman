@@ -130,6 +130,11 @@ begin
 end;
 $$;
 
+grant create on schema public to sarraf_definer;
+alter function public.sarraf_deactivate_user_if_clear(text,text,text,text)
+  owner to sarraf_definer;
+revoke create on schema public from sarraf_definer;
+
 revoke all on function public.sarraf_deactivate_user_if_clear(text,text,text,text) from public, anon, authenticated;
 grant execute on function public.sarraf_deactivate_user_if_clear(text,text,text,text) to service_role;
 

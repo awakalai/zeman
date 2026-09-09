@@ -81,6 +81,8 @@ test("business onboarding is server-only and rolls back the Auth user if the dat
   assert.doesNotMatch(api, /user_metadata: \{ name, role, phone, admin_level/);
   assert.match(migration, /revoke all on function public\.sarraf_manager_create_business_owner[\s\S]*authenticated/);
   assert.match(migration, /grant execute on function public\.sarraf_manager_create_business_owner[\s\S]*service_role/);
+  assert.match(migration, /alter function public\.sarraf_manager_create_business_owner[\s\S]*owner to sarraf_definer/);
+  assert.doesNotMatch(migration, /from auth\.users/);
   assert.match(migration, /insert into public\.control_settings\(singleton, tenant_id, updated_by\)/);
   assert.match(migration, /insert into public\.receipt_control_policy\(singleton, tenant_id, updated_by\)/);
   assert.doesNotMatch(migration, /from public\.control_settings c/);
