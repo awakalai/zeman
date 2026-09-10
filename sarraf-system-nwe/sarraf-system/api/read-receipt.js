@@ -6,6 +6,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { callGoogleVision } from "./_google-vision-receipt.js";
 import { limitSubject, refuseIfOverLimit } from "./_rate-limit.js";
+import { runOcrProviders } from "./_ocr-provider-policy.js";
 
 // One image a second, sustained, is far more than a person reading receipts off a phone and far
 // less than a script working through a stolen session.
@@ -76,7 +77,7 @@ async function attestReading({ url, key, nonce, profileId, imageSha256, fields, 
 }
 
 const MAX_BASE64_CHARS = 3_500_000;
-const RETRYABLE = new Set([502, 503, 504]);
+const RETRYABLE = new Set([408, 425, 429, 500, 502, 503, 504]);
 
 const RECEIPT_SCHEMA = {
   type: "object",
@@ -126,13 +127,22 @@ const RECEIPT_SCHEMA = {
       },
       required: ["amount", "fee", "orderAmount", "currency", "paymentMethod", "transactionStatus", "sender", "receiver", "refNo", "merchantOrderNo", "txDate", "txTime", "platform"]
     },
+    integrity: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        tamperSuspected: { type: "boolean" },
+        reasons: { type: "array", items: { type: "string" }, maxItems: 5 }
+      },
+      required: ["tamperSuspected", "reasons"]
+    },
     note: { type: ["string", "null"] }
   },
   required: [
     "ok", "amount", "fee", "feeOriginal", "feeDiscount", "netAmount", "orderAmount",
     "currency", "paymentMethod", "cardLast4", "transactionStatus", "recipientNote", "merchantName", "platformEvidence",
     "sender", "receiver", "refNo", "merchantOrderNo", "txTime", "txDate",
-    "bank", "platform", "kind", "confidence", "fieldConfidence", "note"
+    "bank", "platform", "kind", "confidence", "fieldConfidence", "integrity", "note"
   ]
 };
 
@@ -158,7 +168,7 @@ GENERAL ACCURACY RULES:
 15. platform MUST be canonical when confidently identifiable: Alipay, WeChat, FIB, FastPay, ZainCash, NassWallet, QiCard, Bank. Do not classify by language, amount, or color alone.
 16. platformEvidence = a SHORT list of visible labels/brand clues that justify platform classification, max ~120 chars. If evidence is weak, platform must be null and platform confidence low.
 17. If the image is not a payment/transfer receipt, set ok=false.
-18. If the image may be edited/tampered, mention that in note and reduce confidence.
+18. integrity.tamperSuspected is true ONLY when visible evidence suggests editing, compositing, inconsistent fonts/edges, or altered figures. List short visible reasons. Do not mark ordinary compression, blur, cropping, or a screenshot as tampering.
 19. confidence is overall confidence. fieldConfidence is separate confidence for each extracted field.
 20. Preserve decimal cents/fen exactly as shown. Example: 1,262.78 must remain 1262.78, never 1263.
 
@@ -186,8 +196,6 @@ WECHAT PAY RULES — use only when the visible receipt matches WeChat Pay:
 35. merchantOrderNo must be null unless a separate merchant-order field is explicitly visible.
 
 Return only data matching the JSON schema.`;
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const retryAfterSecondsFrom = (response, json) => {
   const header = Number(response?.headers?.get?.("retry-after"));
@@ -303,6 +311,12 @@ function normalizeResult(parsed) {
 
   let confidence = clamp01(parsed?.confidence, ok ? 0.5 : 0.2);
   let note = cleanText(parsed?.note);
+  const integrity = {
+    tamperSuspected: parsed?.integrity?.tamperSuspected === true,
+    reasons: Array.isArray(parsed?.integrity?.reasons)
+      ? parsed.integrity.reasons.map(cleanText).filter(Boolean).slice(0, 5)
+      : [],
+  };
   let validation = null;
 
   // Deterministic WeChat accounting validation from the tested layout:
@@ -361,6 +375,7 @@ function normalizeResult(parsed) {
     confidence,
     fieldConfidence,
     validation,
+    integrity,
     note,
   };
 }
@@ -723,45 +738,7 @@ export async function readReceiptImage(image, mediaType = "image/jpeg", { maxBas
   addProvider("google-vision", visionKey, callGoogleVision);
   addProvider("claude", aKey, callClaude);
 
-  const attempts = [];
-  let result = null;
-  let lastError = null;
-  for (let index = 0; index < providers.length; index += 1) {
-    const provider = providers[index];
-    try {
-      result = await provider.fn(provider.key, image, normalizedMediaType, currentDate);
-      result.meta = {
-        ...(result.meta || {}),
-        fallbackFrom: attempts.map((attempt) => attempt.provider),
-      };
-      break;
-    } catch (error) {
-      lastError = error;
-      attempts.push({
-        provider: provider.name,
-        status: Number(error?.status) || null,
-        message: String(error?.message || error).slice(0, 220),
-      });
-      const status = Number(error?.status);
-      const fallbackable = status === 429 || status === 404 || status === 422 || status === 500
-        || RETRYABLE.has(status)
-        || /rate limit|quota|timed out|temporar|service unavailable|model.*not found/i.test(String(error?.message || ""));
-      if (!fallbackable) throw error;
-      if (index === providers.length - 1 && RETRYABLE.has(status)) {
-        await sleep(500);
-        result = await provider.fn(provider.key, image, normalizedMediaType, currentDate);
-        result.meta = { ...(result.meta || {}), fallbackFrom: attempts.map((attempt) => attempt.provider) };
-        break;
-      }
-    }
-  }
-  if (!result) {
-    if (lastError) {
-      lastError.attempts = attempts;
-      throw lastError;
-    }
-    throw new Error("OCR providers failed");
-  }
+  const result = await runOcrProviders(providers, [image, normalizedMediaType, currentDate]);
   return { ...result.data, _meta: result.meta, ocrVersion: 6 };
 }
 
@@ -846,50 +823,7 @@ export default async function handler(req, res) {
 
     if (!providers.length) throw new Error("No OCR provider is configured");
 
-    const attempts = [];
-    let result = null;
-    let lastError = null;
-
-    for (let i = 0; i < providers.length; i++) {
-      const p = providers[i];
-      try {
-        result = await p.fn(p.key, image, mediaType, currentDate);
-        result.meta = {
-          ...(result.meta || {}),
-          fallbackFrom: attempts.length ? attempts.map((x) => x.provider) : [],
-        };
-        break;
-      } catch (e) {
-        lastError = e;
-        attempts.push({
-          provider: p.name,
-          status: Number(e?.status) || null,
-          message: String(e?.message || e).slice(0, 220),
-        });
-
-        const status = Number(e?.status);
-        const fallbackable = status === 429 || status === 404 || status === 422 || status === 500 || RETRYABLE.has(status) ||
-          /rate limit|quota|timed out|temporar|service unavailable|model.*not found/i.test(String(e?.message || ""));
-
-        if (!fallbackable) throw e;
-
-        // If there is no second provider configured, retry transient upstream errors once.
-        if (i === providers.length - 1 && RETRYABLE.has(status)) {
-          await sleep(500);
-          result = await p.fn(p.key, image, mediaType, currentDate);
-          result.meta = { ...(result.meta || {}), fallbackFrom: attempts.map((x) => x.provider) };
-          break;
-        }
-      }
-    }
-
-    if (!result) {
-      if (lastError) {
-        lastError.attempts = attempts;
-        throw lastError;
-      }
-      throw new Error("OCR providers failed");
-    }
+    const result = await runOcrProviders(providers, [image, mediaType, currentDate]);
 
     // §2: the figures come from the evidence. What was read here is recorded server-side against
     // the image it was read from, so that anything altered on the way to the ingestion command is

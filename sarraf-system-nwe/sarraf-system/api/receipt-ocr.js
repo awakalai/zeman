@@ -71,7 +71,7 @@ function checkRateLimit(key) {
   }
 }
 
-export function extractionPayload(result) {
+export function extractionPayload(result, { declaredPlatform = null } = {}) {
   const number = (value) => Number.isFinite(Number(value)) ? String(Math.abs(Number(value))) : null;
   const gross = Number(result?.amount);
   const order = Number(result?.orderAmount);
@@ -79,6 +79,7 @@ export function extractionPayload(result) {
   const exactAddedOnTop = Number.isFinite(gross) && Number.isFinite(order) && Number.isFinite(fee)
     && Math.abs(Math.round(gross * 100) - Math.round((order + fee) * 100)) <= 1;
   return {
+    ok: result?.ok !== false,
     grossAmount: number(result?.amount),
     orderAmount: number(result?.orderAmount),
     feeAmount: number(result?.fee),
@@ -103,6 +104,9 @@ export function extractionPayload(result) {
     platform: result?.platform || null,
     platformEvidence: result?.platformEvidence || null,
     validation: result?.validation || null,
+    integrity: result?.integrity && typeof result.integrity === "object"
+      ? result.integrity : { tamperSuspected: false, reasons: [] },
+    declaredPlatform: declaredPlatform || null,
     ocrVersion: String(result?.ocrVersion || 6),
   };
 }
@@ -155,7 +159,7 @@ export default async function handler(req, res) {
     checkRateLimit(`${actor.id}:${ip}`);
 
     const documentResult = await service.from("receipt_documents")
-      .select("id,uploader_id,state,storage_path,mime_type,image_sha256,tenant_id")
+      .select("id,uploader_id,state,batch_id,storage_path,mime_type,image_sha256,tenant_id")
       .eq("id", body.documentId)
       .maybeSingle();
     const document = documentResult.data;
@@ -167,6 +171,16 @@ export default async function handler(req, res) {
     if (!sameTenant(actor, document)) throw notFound("receipt");
     if (document.uploader_id !== actor.id && actor.role !== "admin") {
       throw failure(403, "receipt_not_owned", "receipt is outside this assignment");
+    }
+    let declaredPlatform = null;
+    if (document.batch_id) {
+      const batchResult = await service.from("receipt_batches")
+        .select("platform,tenant_id")
+        .eq("id", document.batch_id)
+        .maybeSingle();
+      if (batchResult.error) throw failure(503, "receipt_batch_lookup_failed", "receipt batch lookup is unavailable", true);
+      if (batchResult.data && !sameTenant(actor, batchResult.data)) throw notFound("receipt batch");
+      declaredPlatform = batchResult.data?.platform || null;
     }
     if (!["uploading", "upload_failed_retryable", "uploaded", "ocr_pending", "ocr_failed_retryable"].includes(document.state)) {
       // Status probe after a lost response is safe and never runs OCR twice.
@@ -198,7 +212,10 @@ export default async function handler(req, res) {
         p_byte_size: bytes.length,
         p_mime_type: mediaType,
         p_ok: false,
-        p_extraction: { error: String(ocrError?.code || ocrError?.message || "ocr_failed").slice(0, 80) },
+        p_extraction: {
+          error: String(ocrError?.code || ocrError?.message || "ocr_failed").slice(0, 80),
+          attempts: Array.isArray(ocrError?.attempts) ? ocrError.attempts.slice(0, 8) : [],
+        },
         p_provider: provider,
         p_model: null,
         p_latency_ms: Date.now() - started,
@@ -214,7 +231,7 @@ export default async function handler(req, res) {
       });
     }
 
-    const payload = extractionPayload(result);
+    const payload = extractionPayload(result, { declaredPlatform });
     const record = await service.rpc("sarraf_receipt_record_server_extraction", {
       p_document_id: document.id,
       p_image_sha256: sha256,
