@@ -424,6 +424,10 @@ try {
     inputCount > 0 ? "" : "no file input is on the customer's screen");
 
   if (inputCount > 0) {
+    // One platform is now declared for the immutable upload group before any bytes are chosen.
+    // The journey's OCR fixture is Alipay, so exercise the same explicit choice a customer makes.
+    const alipay = page.getByRole("button", { name: "Alipay", exact: true }).first();
+    if (await alipay.count().catch(() => 0)) await alipay.click();
     await fileInputs.first().setInputFiles({ name: "receipt.jpg", mimeType: "image/jpeg", buffer: jpeg });
     // Claim, store, read: three round trips to a real database and a real command each.
     await page.waitForTimeout(12000);

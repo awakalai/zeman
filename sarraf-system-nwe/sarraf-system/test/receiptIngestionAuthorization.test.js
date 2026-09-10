@@ -21,8 +21,8 @@ const supabaseStub = ({ rpcError }) => ({
 
 const command = { batchId: "b".repeat(20), idempotencyKey: `receipt-ingest:${"b".repeat(20)}` };
 const rows = [{ id: "receipt-0001", blob: new Uint8Array([1]) }];
-const makeBatch = () => ({ id: command.batchId, direction: "in", currency: "CNY" });
-const makeReceipt = (row, path) => ({ id: row.id, batch_id: command.batchId, image_path: path, amount: 10, fee: 0, net_amount: 10, currency: "CNY", status: "ok" });
+const makeBatch = () => ({ id: command.batchId, direction: "in", currency: "CNY", platform: "wechat" });
+const makeReceipt = (row, path) => ({ id: row.id, batch_id: command.batchId, image_path: path, amount: 10, fee: 0, net_amount: 10, currency: "CNY", platform: "wechat", status: "ok" });
 
 test("the ingestion-service authorization refusal is recognised, and not confused with a missing RPC", () => {
   assert.equal(requiresIngestionServiceAuthorization(authorizationError()), true);

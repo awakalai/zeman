@@ -1,3 +1,5 @@
+import { RECEIPT_UPLOAD_LIMIT, validateReceiptUploadCommand } from "./receiptUploadContract.js";
+
 const safeMessage = (stage) => ({
   storage: "وێنەکە هەڵنەگیرا — Image upload failed.",
   finalize: "فیشەکان تۆمار نەکران — Receipt ingestion failed.",
@@ -82,6 +84,12 @@ export async function ingestReceiptBatch({ supabase, command, rows, makeBatch, m
   };
 
   try {
+    const batch = makeBatch();
+    // Refuse a malformed group before uploading a single byte. The same contract is checked
+    // again by the server route and the database command; this first gate saves bandwidth.
+    if (!Array.isArray(rows) || rows.length < 1 || rows.length > RECEIPT_UPLOAD_LIMIT || batch?.id !== command?.batchId) {
+      throw new ReceiptIngestionError("finalize", new Error("invalid receipt upload group"));
+    }
     const receipts = [];
     for (const row of rows) {
       let path = row.stagedPath || null;
@@ -100,8 +108,8 @@ export async function ingestReceiptBatch({ supabase, command, rows, makeBatch, m
       receipts.push(makeReceipt(row, path));
     }
 
+    validateReceiptUploadCommand({ batch, receipts, expectedBatchId: command.batchId });
     rpcAttempted = true;
-    const batch = makeBatch();
     const { data: rpcData, error: rpcError } = await supabase.rpc("sarraf_ingest_receipt_batch", {
       p_batch: batch, p_receipts: receipts, p_command_key: command.idempotencyKey,
     });
