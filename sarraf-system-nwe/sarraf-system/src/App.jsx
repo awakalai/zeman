@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { supabase } from "./lib/supabase";
 import { createReceiptIngestionCommand, ingestReceiptBatch } from "./services/receiptIngestion";
+import { RECEIPT_UPLOAD_LIMIT, RECEIPT_UPLOAD_PLATFORMS, receiptUploadPlatformLabel, validateReceiptUploadSelection } from "./services/receiptUploadContract";
 import { forgetSend, outcomeText, pendingSend, rememberSend, resolveSendOutcome, settleFailedSend, stageText } from "./services/receiptSendState";
 import { arithmeticObjection, receiptNetFrom, sendableSet, validateReceiptArithmetic } from "./services/receiptValidation";
 import { BuildStamp, UpdateBanner } from "./components/system/UpdateBanner";
@@ -6749,6 +6750,7 @@ function ReceiptUploader({ customerId, customerName, partnerId, uploaderId, dire
   const galleryInputRef = useRef(null);
   const shareInputRef = useRef(null);
   const receiptCommandRef = useRef(null);
+  const [declaredPlatform, setDeclaredPlatform] = useState("");
   const maxAge = 7;
   const shareImportStarted = useRef(false);
 
@@ -6844,7 +6846,10 @@ function ReceiptUploader({ customerId, customerName, partnerId, uploaderId, dire
     const netV = d?.netAmount != null && Number.isFinite(Number(d.netAmount))
       ? Math.abs(Number(d.netAmount))
       : (orderAmountV != null ? orderAmountV : Math.max(0, amountV - feeV));
-    const plat = detectPlatform(`${d?.platform || ""} ${d?.bank || ""} ${d?.platformEvidence || ""}`) || d?.platform || null;
+    const detectedPlat = detectPlatform(`${d?.platform || ""} ${d?.bank || ""} ${d?.platformEvidence || ""}`) || d?.platform || null;
+    // The uploader declares one platform for the whole immutable group before selecting images.
+    // OCR may still preserve what it saw in raw evidence, but it cannot silently split the group.
+    const plat = receiptUploadPlatformLabel(declaredPlatform) || detectedPlat;
     const rn = normRef(d?.refNo);
     const merchantRn = normRef(d?.merchantOrderNo);
     const fc = d?.fieldConfidence && typeof d.fieldConfidence === "object" ? d.fieldConfidence : {};
@@ -7066,9 +7071,24 @@ function ReceiptUploader({ customerId, customerName, partnerId, uploaderId, dire
     // It is gone rather than corrected, because the rule it was reaching for is wrong anyway.
     // A customer-seller's receipt is what the transaction is made from; asking for a transaction
     // before accepting the receipt inverts the flow the whole feature exists to replace.
-    const list = Array.from(files || []).filter((f) => f.type?.startsWith("image/"));
-    if (!list.length) return flash("تەنها وێنە هەڵبژێرە");
     if (working) return;
+    let selection;
+    try {
+      selection = validateReceiptUploadSelection({
+        files,
+        platform: declaredPlatform,
+        hasActiveGroup: rowsRef.current.length > 0 || !!receiptCommandRef.current,
+      });
+    } catch (error) {
+      const message = {
+        platform_required: l10n("سەرەتا پلاتفۆڕمی فیشەکان هەڵبژێرە", "Choose the receipt platform first", "اختر منصة الإيصالات أولاً"),
+        upload_group_locked: l10n("ئەم کۆمەڵەیە داخراوە؛ سەرەتا ناردنەکە تەواو بکە", "This group is locked; finish this upload first", "هذه المجموعة مقفلة؛ أكمل هذا الرفع أولاً"),
+        images_required: l10n("تەنها وێنە هەڵبژێرە", "Choose image files only", "اختر ملفات الصور فقط"),
+        receipt_limit: l10n(`لە یەک ناردندا زۆرترین ${RECEIPT_UPLOAD_LIMIT} فیش هەڵبژێرە`, `Choose at most ${RECEIPT_UPLOAD_LIMIT} receipts per upload`, `اختر بحد أقصى ${RECEIPT_UPLOAD_LIMIT} إيصالاً لكل رفع`),
+      }[error?.code] || l10n("ناردنی فیشەکان سەرکەوتوو نەبوو", "Receipt upload failed", "فشل رفع الإيصالات");
+      return flash(message);
+    }
+    const list = selection.files;
 
     setIntakeSource(source);
     setWorking(true);
@@ -7184,7 +7204,7 @@ function ReceiptUploader({ customerId, customerName, partnerId, uploaderId, dire
 
   useEffect(() => {
     const handoffId = new URLSearchParams(window.location.search).get("receiptShare");
-    if (!handoffId || handoffId === "invalid" || shareImportStarted.current || working) {
+    if (!handoffId || handoffId === "invalid" || shareImportStarted.current || working || !declaredPlatform) {
       if (handoffId === "invalid" && !shareImportStarted.current) { shareImportStarted.current = true; flash(sharedReceiptMessage("invalid")); }
       return;
     }
@@ -7210,7 +7230,7 @@ function ReceiptUploader({ customerId, customerName, partnerId, uploaderId, dire
         flash("نەتوانرا وێنە هاوبەشکراوەکان بکرێنەوە؛ تکایە دووبارە هەوڵ بدەوە.");
       }
     })();
-  }, [uploaderId, customerId, partnerId]);
+  }, [uploaderId, customerId, partnerId, declaredPlatform]);
 
   const retryRow = async (id) => {
     const r = rowsRef.current.find((x) => x.id === id);
@@ -7535,13 +7555,14 @@ function ReceiptUploader({ customerId, customerName, partnerId, uploaderId, dire
         makeBatch: () => ({
           id: command.batchId, customer_id: customerId || null, customer_name: customerName || null,
           partner_id: partnerId || null, direction: dir, currency: batchCurrency,
+          platform: declaredPlatform,
           total_gross: a.g, total_fee: a.f, total_net: a.n, dup_n: dupN,
           rejected_n: bad.length, source: intakeSource,
         }),
         makeReceipt: (r, path) => ({
           id: r.id, batch_id: command.batchId, customer_id: customerId || null, customer_name: customerName || null,
           direction: dir, amount: r.amount, fee: r.fee || 0, fee_original: r.feeOriginal ?? null,
-          fee_discount: r.feeDiscount || 0, platform: r.platform || null, net_amount: r.net ?? null,
+          fee_discount: r.feeDiscount || 0, platform: declaredPlatform, net_amount: r.net ?? null,
           currency: r.currency, sender: r.sender || null, receiver: r.receiver || null, ref_no: r.refNo || null,
           tx_time: r.txTime || null, tx_date: r.txDate || null, bank: r.bank || null, note: r.note || null,
           image_hash: r.hash, image_path: path, status: r.status === "dup" ? "rejected" : r.status, counted: r.counted !== false,
@@ -7586,7 +7607,7 @@ function ReceiptUploader({ customerId, customerName, partnerId, uploaderId, dire
       forgetSend();
       commitRows([]); receiptCommandRef.current = null; setEditingId(null); setInspectorId(null);
       setSelectedRows([]); setReviewTab("all"); setReviewSearch(""); setReviewPlatform("all");
-      setIntakeSource("app"); onDone?.();
+      setIntakeSource("app"); setDeclaredPlatform(""); onDone?.();
     } catch (error) {
       console.error("receipt ingestion failed", { stage: error.stage, code: error.code, requestId: error.requestId, outcomeUnknown: error.outcomeUnknown });
       // The write is atomic, so the batch either exists or it does not. Ask, rather than
@@ -7597,7 +7618,7 @@ function ReceiptUploader({ customerId, customerName, partnerId, uploaderId, dire
         flash(settled.text);
         commitRows([]); receiptCommandRef.current = null; setEditingId(null); setInspectorId(null);
         setSelectedRows([]); setReviewTab("all"); setReviewSearch(""); setReviewPlatform("all");
-        setIntakeSource("app"); onDone?.();
+        setIntakeSource("app"); setDeclaredPlatform(""); onDone?.();
         return;
       }
       const message = error.requestId
@@ -7652,6 +7673,28 @@ function ReceiptUploader({ customerId, customerName, partnerId, uploaderId, dire
     <div className="space-y-4">
       {!simple && <DeferredPanel compact><ReceiptLifecycle stage={lifecycleStage} lang={_lang} /></DeferredPanel>}
 
+      <Card className="p-4">
+        <Lbl>{tr("بەپێی پلاتفۆرم")}</Lbl>
+        <div className="grid grid-cols-2 gap-2">
+          {RECEIPT_UPLOAD_PLATFORMS.map((item) => (
+            <button key={item.value} type="button"
+              disabled={working || rows.length > 0}
+              onClick={() => setDeclaredPlatform(item.value)}
+              className="min-h-11 rounded-xl text-[13px] font-bold transition disabled:cursor-not-allowed"
+              style={declaredPlatform === item.value
+                ? { background: "var(--ac)", color: "var(--ac-ink)", border: "1px solid var(--ac)" }
+                : { background: "var(--surf-2)", color: "var(--txt-2)", border: "1px solid var(--line)", opacity: rows.length ? .62 : 1 }}>
+              {item.label}
+            </button>
+          ))}
+        </div>
+        <p className="mt-2 text-[11px] leading-relaxed" style={{ color: "var(--txt-3)" }}>
+          {rows.length
+            ? `${receiptUploadPlatformLabel(declaredPlatform)} — پلاتفۆڕمی ئەم کۆمەڵەیە ناگۆڕدرێت.`
+            : `یەک پلاتفۆڕم بۆ هەموو وێنەکان دیاری بکە؛ زۆرترین ${RECEIPT_UPLOAD_LIMIT} فیش.`}
+        </p>
+      </Card>
+
       {!mayChooseDirection && role === "customer" && (
         <Card className="p-4">
           <Lbl>{tr("جۆری فیشەکان")}</Lbl>
@@ -7666,24 +7709,24 @@ function ReceiptUploader({ customerId, customerName, partnerId, uploaderId, dire
           <Lbl>{tr("جۆری فیشەکان")}</Lbl>
           <div className="flex gap-2">
             {[["in", tr("پارە هاتووە (کڕین)")], ["out", tr("پارە نێردراوە (فرۆشتن)")]].map(([k, t]) => (
-              <button key={k} onClick={() => setDir(k)}
-                className={`flex-1 py-2.5 rounded-[var(--r-sm)] text-sm font-semibold transition tap ${dir === k ? (k === "in" ? "bg-[var(--pos)] text-white" : "bg-rose-700 text-white") : "bg-[var(--line)] text-[var(--txt-2)]"}`}>{t}</button>
+              <button key={k} onClick={() => setDir(k)} disabled={working || rows.length > 0}
+                className={`flex-1 py-2.5 rounded-[var(--r-sm)] text-sm font-semibold transition tap disabled:opacity-60 ${dir === k ? (k === "in" ? "bg-[var(--pos)] text-white" : "bg-rose-700 text-white") : "bg-[var(--line)] text-[var(--txt-2)]"}`}>{t}</button>
             ))}
           </div>
         </Card>
       )}
 
       <Card className="p-5 space-y-4">
-        <input ref={cameraInputRef} type="file" accept="image/*" capture="environment" className="hidden" disabled={working}
+        <input ref={cameraInputRef} type="file" accept="image/*" capture="environment" className="hidden" disabled={working || !declaredPlatform || rows.length > 0}
           onChange={(e) => { onFiles(e.target.files, "camera"); e.target.value = ""; }} />
-        <input ref={galleryInputRef} type="file" accept="image/*" multiple className="hidden" disabled={working}
+        <input ref={galleryInputRef} type="file" accept="image/*" multiple className="hidden" disabled={working || !declaredPlatform || rows.length > 0}
           onChange={(e) => { onFiles(e.target.files, "gallery"); e.target.value = ""; }} />
-        <input ref={shareInputRef} type="file" accept="image/*" multiple className="hidden" disabled={working}
+        <input ref={shareInputRef} type="file" accept="image/*" multiple className="hidden" disabled={working || !declaredPlatform || rows.length > 0}
           onChange={(e) => { onFiles(e.target.files, "share"); e.target.value = ""; }} />
 
         {simple ? (
           <div className="space-y-2.5">
-            <button type="button" disabled={working} onClick={() => galleryInputRef.current?.click()}
+            <button type="button" disabled={working || !declaredPlatform || rows.length > 0} onClick={() => galleryInputRef.current?.click()}
               className="w-full min-h-[76px] px-5 py-4 rounded-2xl flex items-center gap-3 text-start disabled:opacity-50"
               style={{ background: "linear-gradient(135deg,var(--ac),var(--pos))", color: "#fff", boxShadow: "0 10px 24px -12px rgba(var(--ac-gl),.7)" }}>
               {working ? <RotateCcw className="w-6 h-6 animate-spin shrink-0" /> : <Upload className="w-6 h-6 shrink-0" />}
@@ -7692,7 +7735,7 @@ function ReceiptUploader({ customerId, customerName, partnerId, uploaderId, dire
                 <span className="block text-[11px] mt-1 opacity-90">وێنەیەک یان چەند وێنە هەڵبژێرە</span>
               </span>
             </button>
-            <button type="button" disabled={working} onClick={() => cameraInputRef.current?.click()}
+            <button type="button" disabled={working || !declaredPlatform || rows.length > 0} onClick={() => cameraInputRef.current?.click()}
               className="w-full min-h-11 px-4 rounded-xl flex items-center justify-center gap-2 text-[12px] font-semibold disabled:opacity-50"
               style={{ background: "var(--surf-2)", color: "var(--txt-2)", border: "1px solid var(--line)" }}>
               <Camera className="w-4 h-4" /> وێنەگرتن بە کامێرا
@@ -7701,21 +7744,21 @@ function ReceiptUploader({ customerId, customerName, partnerId, uploaderId, dire
           </div>
         ) : <>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-          <button type="button" disabled={working} onClick={() => cameraInputRef.current?.click()}
+          <button type="button" disabled={working || !declaredPlatform || rows.length > 0} onClick={() => cameraInputRef.current?.click()}
             className="p-4 rounded-2xl text-start disabled:opacity-50 transition hover:-translate-y-0.5"
             style={{ background: "color-mix(in srgb, var(--ac) 8%, var(--surf))", border: "1px solid color-mix(in srgb, var(--ac) 20%, var(--line))" }}>
             <Camera className="w-5 h-5 mb-2" style={{ color: "var(--ac)" }} />
             <div className="text-[12px] font-bold text-[var(--txt)]">کامێرا</div>
             <div className="text-[10px] text-[var(--txt-3)] mt-1">وێنەی فیشەکە ئێستا بگرە</div>
           </button>
-          <button type="button" disabled={working} onClick={() => galleryInputRef.current?.click()}
+          <button type="button" disabled={working || !declaredPlatform || rows.length > 0} onClick={() => galleryInputRef.current?.click()}
             className="p-4 rounded-2xl text-start disabled:opacity-50 transition hover:-translate-y-0.5"
             style={{ background: "var(--surf-2)", border: "1px solid var(--line)" }}>
             <Upload className="w-5 h-5 mb-2" style={{ color: "var(--pos)" }} />
             <div className="text-[12px] font-bold text-[var(--txt)]">گەلەری / فایلەکان</div>
             <div className="text-[10px] text-[var(--txt-3)] mt-1">یەک یان چەند فیش هەڵبژێرە</div>
           </button>
-          <button type="button" disabled={working} onClick={() => shareInputRef.current?.click()}
+          <button type="button" disabled={working || !declaredPlatform || rows.length > 0} onClick={() => shareInputRef.current?.click()}
             className="p-4 rounded-2xl text-start disabled:opacity-50 transition hover:-translate-y-0.5"
             style={{ background: "color-mix(in srgb, var(--pos) 7%, var(--surf))", border: "1px solid color-mix(in srgb, var(--pos) 18%, var(--line))" }}>
             <MessageCircle className="w-5 h-5 mb-2" style={{ color: "var(--pos)" }} />

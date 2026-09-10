@@ -10,12 +10,13 @@ const receipt = (overrides = {}) => ({
   amount: 100,
   fee: 2,
   currency: "CNY",
+  platform: "alipay",
   status: "ok",
   image_path: `ingest/${batchId}/receipt-1.jpg`,
   ...overrides,
 });
 const command = (overrides = {}) => ({
-  p_batch: { id: batchId, direction: "in", currency: "CNY" },
+  p_batch: { id: batchId, direction: "in", currency: "CNY", platform: "alipay" },
   p_receipts: [receipt()],
   p_command_key: `receipt-ingest:${batchId}`,
   ...overrides,

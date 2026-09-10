@@ -11,6 +11,7 @@ const INGEST_WINDOW_SECONDS = Number(process.env.INGEST_RATE_WINDOW || 60);
 import { randomBytes } from "node:crypto";
 import { ACTOR_COLUMNS, isTenantless, sameTenant } from "./_tenant.js";
 import { createClient } from "@supabase/supabase-js";
+import { RECEIPT_UPLOAD_LIMIT, normalizeReceiptUploadPlatform } from "../src/services/receiptUploadContract.js";
 
 const serverConfig = () => ({
   url: process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "",
@@ -57,11 +58,13 @@ function validateCommand(body) {
   const receipts = body?.p_receipts;
   const commandKey = text(body?.p_command_key, 180);
   const batchId = text(batch?.id, 140);
+  const declaredPlatform = normalizeReceiptUploadPlatform(batch?.platform);
   if (!batch || typeof batch !== "object" || !Array.isArray(receipts)) throw httpError(400, "invalid_command", "invalid receipt command");
   if (!/^receipt-ingest:[A-Za-z0-9-]{16,128}$/.test(commandKey || "") || !/^[A-Za-z0-9-]{16,128}$/.test(batchId || "")) {
     throw httpError(400, "invalid_identity", "invalid receipt identity");
   }
-  if (receipts.length < 1 || receipts.length > 25) throw httpError(400, "invalid_count", "invalid receipt count");
+  if (receipts.length < 1 || receipts.length > RECEIPT_UPLOAD_LIMIT) throw httpError(400, "invalid_count", "invalid receipt count");
+  if (!declaredPlatform) throw httpError(400, "platform_required", "receipt batch platform is required");
   if (!["in", "out", "buy", "sell"].includes(batch.direction) || !/^[A-Z]{3,8}$/.test(String(batch.currency || ""))) {
     throw httpError(400, "invalid_batch", "invalid receipt batch");
   }
@@ -73,16 +76,18 @@ function validateCommand(body) {
     const fee = finite(receipt?.fee) ?? 0;
     const currency = String(receipt?.currency || "").trim().toUpperCase();
     const imagePath = text(receipt?.image_path, 360);
+    const receiptPlatform = normalizeReceiptUploadPlatform(receipt?.platform);
     if (!/^[A-Za-z0-9-]{6,128}$/.test(id || "") || seen.has(id)) throw httpError(400, "invalid_receipt", "invalid receipt row");
     seen.add(id);
     if (receipt?.batch_id !== batchId || imagePath !== `ingest/${batchId}/${id}.jpg`) throw httpError(400, "invalid_path", "invalid receipt image path");
     if (!(amount > 0 && amount <= 1_000_000_000_000) || fee < 0 || fee > amount) throw httpError(400, "invalid_amount", "invalid receipt amount");
     if (!/^[A-Z]{3,8}$/.test(currency) || currency !== batch.currency) throw httpError(400, "mixed_currency", "send each currency as a separate receipt batch");
+    if (receiptPlatform !== declaredPlatform) throw httpError(400, "mixed_platform", "all receipts must use the declared platform");
     if (!["ok", "suspect", "error", "rejected"].includes(String(receipt?.status || ""))) throw httpError(400, "invalid_status", "invalid receipt status");
-    return { ...receipt, id, amount, fee, net_amount: amount - fee, currency, image_path: imagePath };
+    return { ...receipt, id, amount, fee, net_amount: amount - fee, currency, platform: declaredPlatform, image_path: imagePath };
   });
 
-  return { batch: { ...batch, id: batchId }, receipts: normalized, commandKey };
+  return { batch: { ...batch, id: batchId, platform: declaredPlatform }, receipts: normalized, commandKey };
 }
 
 async function requireActor(req, authClient, service) {
@@ -201,6 +206,7 @@ async function legacyCommit(service, actor, batch, receipts, context) {
     rejected_n: rejected,
     uploaded_by: actor.id,
     source: text(batch.source, 30) || "app",
+    platform: batch.platform,
     // The column defaults to sarraf_tenant(), which reads auth.uid(). This path writes with the
     // service key, where there is no auth.uid() — so the default yields null and the row would
     // belong to no business at all: invisible to its own owner and hidden by every restrictive
@@ -217,7 +223,7 @@ async function legacyCommit(service, actor, batch, receipts, context) {
     fee: row.fee,
     fee_original: finite(row.fee_original),
     fee_discount: Math.max(0, finite(row.fee_discount) ?? 0),
-    platform: text(row.platform, 60),
+    platform: batch.platform,
     net_amount: finite(row.net_amount),
     currency: row.currency,
     sender: text(row.sender, 160),
@@ -242,7 +248,7 @@ async function legacyCommit(service, actor, batch, receipts, context) {
   }));
 
   if (!existing.data?.id) {
-    await insertCompat(service, "receipt_batches", batchRow, ["source", "rejected_n", "dup_n", "uploaded_by", "partner_id", "customer_name", "tenant_id"]);
+    await insertCompat(service, "receipt_batches", batchRow, ["source", "rejected_n", "dup_n", "uploaded_by", "partner_id", "customer_name", "platform", "tenant_id"]);
   }
 
   // The compatibility path is intentionally resumable rather than compensating with DELETE.

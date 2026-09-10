@@ -61,7 +61,8 @@
 
 ## Recovery Batch 2 — account access and safe onboarding
 
-**Status:** Completed, installed on the live database, and ready for the production source release.
+**Status:** Completed, merged to production `main` as `da85610`, installed on the live database,
+and deployed.
 
 ### Completed
 
@@ -107,10 +108,53 @@
   this runner; equivalent migration parsing/unit tests, live-schema dry runs, and the real-browser
   role gate passed. Those harnesses remain mandatory in CI.
 
+## Recovery Batch 3 — receipt upload contract
+
+**Status:** Implemented, installed and verified on the live database, and ready for CI and the
+production source release.
+
+### Completed
+
+- Limited one upload to 20 image receipts at the interface, shared client contract, server API,
+  and atomic database command.
+- Required the uploader to declare Alipay or WeChat before choosing files. One platform is then
+  canonical for every receipt in that upload and cannot be changed after the group begins.
+- Prevented a second file selection from being appended to an active group. The group identity and
+  every receipt membership are validated before storage, at the server route, and in PostgreSQL.
+- Added live constraints and triggers that preserve historical readable rows while preventing a
+  receipt from moving between groups, a group from exceeding 20 intake items, or a receipt platform
+  from differing from its batch.
+- Preserved receipt accounting and transaction conversion behavior; no ledger, journal, WAC,
+  maker-checker, balance, debt, or posted transaction logic was changed.
+
+### Evidence
+
+- Receipt upload contract and migration tests: **12/12 passed** within the focused suite.
+- `npm test`: **953/953 passed**.
+- Real-browser role verification: **80/80 passed** across administrator, customer, partner, office,
+  investor, and administrator-mobile views; every tested view rendered without an uncaught error.
+- `npm run verify:i18n`: passed; the interface translation ratchet improved by one line.
+- `npm run verify:names`: passed across 117 files.
+- `npm run verify:source`: passed across 411 tracked files, 137 migrations, and 4 service-key routes.
+- `npm run build`: passed.
+- The migration passed a live-schema transaction/rollback dry run, then was installed as
+  `20260910005622_enforce_receipt_upload_contract`.
+- Live inspection confirms the platform column, both validated constraints, the patched atomic
+  ingestion command, all five contract triggers, and no direct execution privilege on the new
+  trigger helpers for `public`, `anon`, or `authenticated`.
+- Supabase security and performance advisors were recorded. They contain the established
+  project-wide backlog; the new trigger helpers are not exposed as authenticated RPCs.
+
+### Known limitation
+
+- The local PostgreSQL receipt and journey harnesses were unavailable because PostgreSQL 16 is not
+  installed in this runner. Their CI jobs remain mandatory before merge.
+
 ### Next batch
 
-Recovery Batch 3: enforce the receipt-upload contract — maximum 20 images, one declared platform,
-and one immutable upload group — without changing receipt accounting or conversion behavior.
+Recovery Batch 4: make receipt reading resilient with provider fallback, bounded retry, confidence
+policy, duplicate/manipulation handling, and owner review/archive queues. Do not change accounting
+or transaction conversion behavior while doing so.
 
 This file records work against the professional product and UX enhancement mandate. A batch is
 not called complete because its code exists; the status below names the evidence that was run.

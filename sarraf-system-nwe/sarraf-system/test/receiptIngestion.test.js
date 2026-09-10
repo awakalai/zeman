@@ -4,7 +4,13 @@ import { ingestReceiptBatch, receiptObjectPath, ReceiptIngestionError } from "..
 
 const command = { batchId: "12345678-1234-1234-1234-123456789abc", idempotencyKey: "receipt-ingest:12345678-1234-1234-1234-123456789abc" };
 const row = { id: "receipt-1", blob: new Blob(["image"]), amount: 10, currency: "USD" };
-const args = (supabase) => ({ supabase, command, rows: [row], makeBatch: () => ({ id: command.batchId }), makeReceipt: (r, path) => ({ id: r.id, image_path: path }) });
+const args = (supabase) => ({
+  supabase,
+  command,
+  rows: [row],
+  makeBatch: () => ({ id: command.batchId, platform: "alipay" }),
+  makeReceipt: (r, path) => ({ id: r.id, batch_id: command.batchId, image_path: path, platform: "alipay" }),
+});
 
 function mock({ uploadError = null, rpcError = null, probe = null, removeError = null } = {}) {
   const calls = { uploads: [], removes: [], rpc: 0 };
