@@ -26,6 +26,7 @@ test("the canonical OCR route accepts only a document id and reads the protected
   assert.match(source, /createHash\("sha256"\)/);
   assert.match(source, /sniffImage\(bytes\)/);
   assert.match(source, /sarraf_receipt_record_server_extraction/);
+  assert.match(source, /finalState\.data\.state/);
   assert.doesNotMatch(source, /p_flow|p_customer_id|p_partner_id|p_expected_currency/);
 });
 

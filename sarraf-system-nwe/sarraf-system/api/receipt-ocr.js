@@ -245,9 +245,15 @@ export default async function handler(req, res) {
       p_request_id: requestId,
     });
     if (record.error) throw failure(503, "ocr_record_failed", "receipt OCR outcome could not be recorded", true, false);
+    // The database's reading-policy trigger may make the server function's proposed state more
+    // conservative (review/archive). Read the committed verdict instead of echoing the proposal.
+    const finalState = await service.from("receipt_documents").select("state").eq("id", document.id).maybeSingle();
+    if (finalState.error || !finalState.data?.state) {
+      throw failure(503, "ocr_state_lookup_failed", "receipt OCR verdict could not be confirmed", true, false);
+    }
     return res.status(200).json({
       documentId: document.id,
-      state: record.data?.state,
+      state: finalState.data.state,
       extraction: payload,
       retryable: false,
       outcomeKnown: true,

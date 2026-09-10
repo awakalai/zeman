@@ -25,6 +25,9 @@ begin
   select * into v_read from public.receipt_extractions
    where document_id = new.id and is_original order by version limit 1;
   if not found then return new; end if;
+  -- Manual fixtures and historical human readings keep their established review semantics.
+  -- This automatic policy is for the canonical server-attested OCR path only.
+  if not v_read.server_recorded or v_read.request_id is null then return new; end if;
 
   v_declared := lower(nullif(btrim(v_read.raw->>'declaredPlatform'),''));
   v_integrity := coalesce((v_read.raw #>> '{integrity,tamperSuspected}')::boolean, false);
@@ -152,8 +155,8 @@ begin
     rule_code='owner_restored', rule_reason=left(btrim(p_reason),700)
    where id=p_document_id;
   v_result := jsonb_build_object('document_id',p_document_id,'state','needs_manual_review','replayed',false);
-  insert into public.receipt_command_log(actor_id,command_key,document_id,action,result)
-  values(v_actor.id,p_command_key,p_document_id,'restore_archive',v_result);
+  insert into public.receipt_command_log(actor_id,command_key,operation,result)
+  values(v_actor.id,p_command_key,'restore_archive',v_result);
   return v_result;
 end;
 $$;

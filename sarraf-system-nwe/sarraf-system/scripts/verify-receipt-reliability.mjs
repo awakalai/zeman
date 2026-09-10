@@ -230,37 +230,41 @@ try {
     batch("rb-policy-ready");
     psql(`update public.receipt_batches set platform='alipay' where id='rb-policy-ready'`);
     document("rd-policy-ready", "rb-policy-ready", { state: "uploading" });
-    const out = serverRead("rd-policy-ready", "a".repeat(64), goodReading(), "policy-ready");
-    if (out.state !== "validated") throw new Error(`high-confidence reading became ${out.state}`);
+    serverRead("rd-policy-ready", "a".repeat(64), goodReading(), "policy-ready");
+    const state = one(`select state from public.receipt_documents where id='rd-policy-ready'`);
+    if (state !== "validated") throw new Error(`high-confidence reading became ${state}`);
   });
 
   check("a reading below the automatic-ready threshold waits for a person", () => {
     batch("rb-policy-low");
     psql(`update public.receipt_batches set platform='alipay' where id='rb-policy-low'`);
     document("rd-policy-low", "rb-policy-low", { state: "uploading" });
-    const out = serverRead("rd-policy-low", "b".repeat(64), goodReading({ confidence: "0.87" }), "policy-low");
-    if (out.state !== "needs_manual_review") throw new Error(`low-confidence reading became ${out.state}`);
+    serverRead("rd-policy-low", "b".repeat(64), goodReading({ confidence: "0.87" }), "policy-low");
+    const state = one(`select state from public.receipt_documents where id='rd-policy-low'`);
+    if (state !== "needs_manual_review") throw new Error(`low-confidence reading became ${state}`);
   });
 
   check("OCR evidence that contradicts the upload platform waits for a person", () => {
     batch("rb-policy-platform");
     psql(`update public.receipt_batches set platform='wechat' where id='rb-policy-platform'`);
     document("rd-policy-platform", "rb-policy-platform", { state: "uploading" });
-    const out = serverRead("rd-policy-platform", "c".repeat(64),
+    serverRead("rd-policy-platform", "c".repeat(64),
       goodReading({ declaredPlatform: "wechat" }), "policy-platform");
-    if (out.state !== "needs_manual_review") throw new Error(`platform mismatch became ${out.state}`);
+    const state = one(`select state from public.receipt_documents where id='rd-policy-platform'`);
+    if (state !== "needs_manual_review") throw new Error(`platform mismatch became ${state}`);
   });
 
   check("visible manipulation evidence is automatically archived and counted as nothing", () => {
     batch("rb-policy-tamper");
     psql(`update public.receipt_batches set platform='alipay' where id='rb-policy-tamper'`);
     document("rd-policy-tamper", "rb-policy-tamper", { state: "uploading" });
-    const out = serverRead("rd-policy-tamper", "e".repeat(64), goodReading({
+    serverRead("rd-policy-tamper", "e".repeat(64), goodReading({
       integrity: { tamperSuspected: true, reasons: ["inconsistent amount edges"] },
     }), "policy-tamper");
+    const state = one(`select state from public.receipt_documents where id='rd-policy-tamper'`);
     const counted = one(`select counted from public.receipt_documents where id='rd-policy-tamper'`);
-    if (out.state !== "tamper_suspected" || counted !== "false") {
-      throw new Error(`tamper result was ${out.state}, counted=${counted}`);
+    if (state !== "tamper_suspected" || counted !== "false") {
+      throw new Error(`tamper result was ${state}, counted=${counted}`);
     }
   });
 
