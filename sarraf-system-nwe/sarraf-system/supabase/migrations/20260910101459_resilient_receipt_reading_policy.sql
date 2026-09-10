@@ -27,7 +27,8 @@ begin
   if not found then return new; end if;
   -- Manual fixtures and historical human readings keep their established review semantics.
   -- This automatic policy is for the canonical server-attested OCR path only.
-  if not v_read.server_recorded or v_read.request_id is null then return new; end if;
+  if not v_read.server_recorded or v_read.request_id is null
+     or not (v_read.raw ? 'declaredPlatform') then return new; end if;
 
   v_declared := lower(nullif(btrim(v_read.raw->>'declaredPlatform'),''));
   v_integrity := coalesce((v_read.raw #>> '{integrity,tamperSuspected}')::boolean, false);
