@@ -579,7 +579,7 @@ try {
     try {
       // Open the batch. The card is not a <button> — the buttons on that screen are the sender
       // chip and the four filters — so it is found by the line only a batch card carries.
-      const card = ownerPage.getByText(/\d+\s*فیش\s*·/).first();
+      const card = ownerPage.getByText(/^\d+\s*فیش$/).first();
       if (await card.count().catch(() => 0)) {
         await card.click({ timeout: 5000 }).catch(() => {});
         await ownerPage.waitForTimeout(4000);
