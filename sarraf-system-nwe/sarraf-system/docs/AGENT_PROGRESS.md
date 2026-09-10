@@ -110,8 +110,7 @@ and deployed.
 
 ## Recovery Batch 3 — receipt upload contract
 
-**Status:** Implemented, installed and verified on the live database, and ready for CI and the
-production source release.
+**Status:** Completed, merged, installed on the live database, and deployed to production.
 
 ### Completed
 
@@ -144,11 +143,17 @@ production source release.
   trigger helpers for `public`, `anon`, or `authenticated`.
 - Supabase security and performance advisors were recorded. They contain the established
   project-wide backlog; the new trigger helpers are not exposed as authenticated RPCs.
+- GitHub PR #153 passed all 17 workflow jobs, including the strict PostgreSQL receipt journey,
+  receipt-loss, accounting, tenant-isolation, business-flow, role-browser, and shipped-bundle
+  gates; it was squash-merged to `main` as `7a6b373`.
+- Vercel production deployment `dpl_6A4QXjWFSNPEUmndRKVfhStze9UF` reached `READY`, serves
+  `https://zeman.vercel.app` and `version.json` with HTTP 200, and reported no runtime error/fatal
+  logs at release time.
 
 ### Known limitation
 
 - The local PostgreSQL receipt and journey harnesses were unavailable because PostgreSQL 16 is not
-  installed in this runner. Their CI jobs remain mandatory before merge.
+  installed in this runner; both strict harnesses passed in CI before merge.
 
 ### Next batch
 
