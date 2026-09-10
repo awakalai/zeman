@@ -1,5 +1,5 @@
 {
-  "total": 872,
+  "total": 871,
   "counts": {
     "src/App.jsx": 643,
     "src/brand/brand.js": 1,
@@ -16,7 +16,7 @@
     "src/services/dayClose.js": 2,
     "src/services/debtRegister.js": 29,
     "src/services/flashTone.js": 1,
-    "src/services/managerConsole.js": 9,
+    "src/services/managerConsole.js": 8,
     "src/services/partnerBatches.js": 6,
     "src/services/receiptDisplay.js": 3,
     "src/services/receiptForwarding.js": 23,

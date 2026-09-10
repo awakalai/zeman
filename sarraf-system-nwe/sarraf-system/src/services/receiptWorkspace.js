@@ -9,6 +9,9 @@
 
 import { zemanRule } from "./userFacingError.js";
 
+const RECEIPT_REQUIRED = "فیش هەڵنەبژێردراوە";
+const CORRECTION_REASON_REQUIRED = "هۆکاری ڕاستکردنەوە دەبێت لانیکەم ٨ پیت بێت";
+
 const upper = (v) => String(v ?? "").trim().toUpperCase();
 const num = (v) => {
   if (v == null || v === "") return null;
@@ -26,13 +29,15 @@ export const finalizeCommandKey = (documentId) =>
 
 export const RECEIPT_REVIEW_STATES = [
   "needs_manual_review", "parsed", "validated", "submitted",
-  "duplicate", "currency_mismatch", "tamper_suspected", "accepted",
+  "currency_mismatch", "accepted",
   // The images that most need a person were the ones a person never saw. A reading that failed
   // for good leaves the document at ocr_failed_retryable, and that state was not on this list —
   // so it never appeared in the queue, and the only way anybody learned of it was the uploader
   // asking why nothing had happened.
   "ocr_failed_retryable",
 ];
+
+export const RECEIPT_ARCHIVE_STATES = Object.freeze(["duplicate", "tamper_suspected"]);
 
 export async function loadReviewQueue(client, { states = RECEIPT_REVIEW_STATES, limit = 100 } = {}) {
   const { data, error } = await client
@@ -43,6 +48,29 @@ export async function loadReviewQueue(client, { states = RECEIPT_REVIEW_STATES, 
     .limit(limit);
   if (error) throw error;
   return (data || []).map(mapDocument);
+}
+
+export async function loadReceiptArchive(client, { limit = 100 } = {}) {
+  return loadReviewQueue(client, { states: RECEIPT_ARCHIVE_STATES, limit });
+}
+
+export async function canRestoreReceiptArchive(client) {
+  const { data, error } = await client.rpc("sarraf_can_restore_archived_receipts");
+  if (error) throw error;
+  return data === true;
+}
+
+export async function restoreArchivedReceipt(client, { documentId, reason, commandKey }) {
+  const why = String(reason ?? "").normalize("NFKC").trim();
+  if (!documentId) throw zemanRule(RECEIPT_REQUIRED);
+  if (why.length < 8) throw zemanRule(CORRECTION_REASON_REQUIRED);
+  const { data, error } = await client.rpc("sarraf_restore_archived_receipt", {
+    p_document_id: documentId,
+    p_reason: why.slice(0, 700),
+    p_command_key: commandKey || reviewCommandKey("restore", documentId),
+  });
+  if (error) throw error;
+  return data;
 }
 
 const mapDocument = (d) => ({
@@ -210,7 +238,7 @@ export async function setReceiptDailyRate(client, {
 /** Freeze the latest rate for this receipt. The server derives its business date and currency. */
 export async function finalizeReceipt(client, { documentId, reason, commandKey }) {
   const why = String(reason ?? "").normalize("NFKC").trim();
-  if (!documentId) throw zemanRule("فیش هەڵنەبژێردراوە");
+  if (!documentId) throw zemanRule(RECEIPT_REQUIRED);
   if (why.length < 8) throw zemanRule("هۆکاری کۆتایی‌کردن دەبێت لانیکەم ٨ پیت بێت");
   const { data, error } = await client.rpc("sarraf_receipt_finalize_command", {
     p_document_id: documentId,
@@ -339,7 +367,7 @@ export async function enterReadingByHand(client, { documentId, reading, reason, 
  */
 export async function correctExtraction(client, { documentId, base, changes, reason, commandKey }) {
   const why = String(reason ?? "").normalize("NFKC").trim();
-  if (why.length < 8) throw zemanRule("هۆکاری ڕاستکردنەوە دەبێت لانیکەم ٨ پیت بێت");
+  if (why.length < 8) throw zemanRule(CORRECTION_REASON_REQUIRED);
   if (!base) throw zemanRule("وەشانی بنەڕەتی نەدۆزرایەوە");
   if (!changes || Object.keys(changes).length === 0) throw zemanRule("هیچ گۆڕانکارییەک نییە");
 

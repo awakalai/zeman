@@ -84,6 +84,20 @@ try {
       psql(`update public.receipt_documents set state='${f.state}' where id='${id}'`);
     }
   };
+  const serverRead = (id, sha, extraction, request = id) => JSON.parse(one(
+    `public.sarraf_receipt_record_server_extraction('${id}','${sha}',1024,'image/jpeg',true,
+      '${JSON.stringify(extraction).replaceAll("'", "''")}'::jsonb,'test-reader','test-model',12,
+      'request-${request}')`));
+  const goodReading = (extra = {}) => ({
+    ok: true, grossAmount: "100", orderAmount: "100", feeAmount: "0",
+    feeTreatment: "no_fee", netAmount: "100", currency: "CNY", refNo: "REF-100",
+    payee: "Visible payee", txDate: "2026-09-10", txTime: "10:20:30",
+    platform: "Alipay", declaredPlatform: "alipay", transactionStatus: "Payment successful",
+    confidence: "0.96", fieldConfidence: {
+      amount: 0.96, currency: 0.96, refNo: 0.96, merchantOrderNo: 0,
+      txDate: 0.96, platform: 0.96,
+    }, integrity: { tamperSuspected: false, reasons: [] }, ...extra,
+  });
 
   // ══ LOST ════════════════════════════════════════════════════════════════════
   //
@@ -210,6 +224,63 @@ try {
     // failed_terminal is reachable from here, which is what lets the batch finish without it.
     const reachable = one(`public.receipt_transition_allowed('upload_failed_retryable','failed_terminal')`);
     if (reachable !== "true") throw new Error(`a receipt that failed to upload cannot be closed off (${reachable})`);
+  });
+
+  check("only a high-confidence reading matching the declared platform becomes ready", () => {
+    batch("rb-policy-ready");
+    psql(`update public.receipt_batches set platform='alipay' where id='rb-policy-ready'`);
+    document("rd-policy-ready", "rb-policy-ready", { state: "uploading" });
+    serverRead("rd-policy-ready", "a".repeat(64), goodReading(), "policy-ready");
+    const state = one(`select state from public.receipt_documents where id='rd-policy-ready'`);
+    if (state !== "validated") throw new Error(`high-confidence reading became ${state}`);
+  });
+
+  check("a reading below the automatic-ready threshold waits for a person", () => {
+    batch("rb-policy-low");
+    psql(`update public.receipt_batches set platform='alipay' where id='rb-policy-low'`);
+    document("rd-policy-low", "rb-policy-low", { state: "uploading" });
+    serverRead("rd-policy-low", "b".repeat(64), goodReading({ confidence: "0.87" }), "policy-low");
+    const state = one(`select state from public.receipt_documents where id='rd-policy-low'`);
+    if (state !== "needs_manual_review") throw new Error(`low-confidence reading became ${state}`);
+  });
+
+  check("OCR evidence that contradicts the upload platform waits for a person", () => {
+    batch("rb-policy-platform");
+    psql(`update public.receipt_batches set platform='wechat' where id='rb-policy-platform'`);
+    document("rd-policy-platform", "rb-policy-platform", { state: "uploading" });
+    serverRead("rd-policy-platform", "c".repeat(64),
+      goodReading({ declaredPlatform: "wechat" }), "policy-platform");
+    const state = one(`select state from public.receipt_documents where id='rd-policy-platform'`);
+    if (state !== "needs_manual_review") throw new Error(`platform mismatch became ${state}`);
+  });
+
+  check("visible manipulation evidence is automatically archived and counted as nothing", () => {
+    batch("rb-policy-tamper");
+    psql(`update public.receipt_batches set platform='alipay' where id='rb-policy-tamper'`);
+    document("rd-policy-tamper", "rb-policy-tamper", { state: "uploading" });
+    serverRead("rd-policy-tamper", "e".repeat(64), goodReading({
+      integrity: { tamperSuspected: true, reasons: ["inconsistent amount edges"] },
+    }), "policy-tamper");
+    const state = one(`select state from public.receipt_documents where id='rd-policy-tamper'`);
+    const counted = one(`select counted from public.receipt_documents where id='rd-policy-tamper'`);
+    if (state !== "tamper_suspected" || counted !== "false") {
+      throw new Error(`tamper result was ${state}, counted=${counted}`);
+    }
+  });
+
+  check("only the owner can restore an automatically archived receipt", () => {
+    psql(`insert into public.app_users(id,name,role,admin_level,auth_id,tenant_id)
+          values ('rl-op','کارمەند','admin','operator','aa110000-0000-0000-0000-000000000005','t-sarkhel')`);
+    psql(`create or replace function auth.uid() returns uuid language sql stable
+          as $fn$ select 'aa110000-0000-0000-0000-000000000005'::uuid $fn$`);
+    let staffWasRefused = false;
+    try { psql(`select public.sarraf_restore_archived_receipt('rd-policy-tamper',
+      'کارمەند هەوڵی گەڕاندنەوە دەدات','restore:staff-refused')`); } catch { staffWasRefused = true; }
+    if (!staffWasRefused) throw new Error("an operator restored the automatic archive");
+    be("admin");
+    const out = JSON.parse(one(`public.sarraf_restore_archived_receipt('rd-policy-tamper',
+      'خاوەن پشکنینی دەستی دەکات','restore:owner-accepted')`));
+    if (out.state !== "needs_manual_review") throw new Error(`owner restore became ${out.state}`);
   });
 
   // A failed upload is the owner's own fear, stated plainly:

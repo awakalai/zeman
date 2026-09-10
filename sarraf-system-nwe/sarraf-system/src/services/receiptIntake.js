@@ -51,7 +51,7 @@ export class ReceiptIntakeError extends Error {
     this.status = Number(cause?.status) || null;
     this.requestId = cause?.requestId || null;
     this.reason = cause?.message || null;
-    this.retryable = Boolean(cause?.retryable || stage === "ocr");
+    this.retryable = Boolean(cause?.retryable);
     this.outcomeKnown = cause?.outcomeKnown !== false;
   }
 }
@@ -180,6 +180,7 @@ const extractionPreview = (value) => value && typeof value === "object" ? {
   platform: value.platform || null,
   platformEvidence: value.platformEvidence || null,
   validation: value.validation || null,
+  integrity: value.integrity || { tamperSuspected: false, reasons: [] },
   ocrVersion: value.ocrVersion || null,
 } : null;
 

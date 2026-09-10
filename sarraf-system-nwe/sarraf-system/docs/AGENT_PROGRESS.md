@@ -161,6 +161,47 @@ Recovery Batch 4: make receipt reading resilient with provider fallback, bounded
 policy, duplicate/manipulation handling, and owner review/archive queues. Do not change accounting
 or transaction conversion behavior while doing so.
 
+## Recovery Batch 4 — resilient receipt reading
+
+**Status:** Implementation and local verification complete; GitHub CI, live migration, and production
+deployment are pending.
+
+### Implemented
+
+- Centralized OCR provider failure policy and orchestration. Billing, permission, key, quota,
+  unavailable-model, rate-limit, timeout, and upstream failures fall through to the next configured
+  reader; invalid image input remains terminal. The last transient reader receives one bounded
+  retry, never an unbounded serverless wait.
+- Preserved sanitized provider-attempt evidence on successful fallback and final failure.
+- Added explicit manipulation evidence to the structured reader contract. Blur, crop, compression,
+  and an ordinary screenshot are expressly not manipulation signals.
+- Bound the stored extraction to the upload group's declared Alipay/WeChat platform.
+- Added a server-side automatic-ready policy: overall confidence must be at least 0.88 and critical
+  amount/currency/reference/date/platform confidence at least 0.80. Arithmetic or platform
+  disagreement goes to review; visible manipulation and hard same-image duplicates go to the
+  separate automatic archive and count as nothing.
+- Separated the review and automatic-archive screens. Only a business owner can restore an
+  automatically archived duplicate/manipulation item, with a mandatory reason and idempotent audit
+  command.
+- Extended the strict PostgreSQL receipt reliability journey with high/low confidence, platform
+  mismatch, manipulation archive, and owner-only restore cases.
+
+### Local evidence
+
+- Focused OCR/intake/review tests: **50/50 passed**.
+- `npm test`: **960/960 passed**.
+- `npm run verify:source`, `npm run verify:i18n`, `npm run verify:names`, and
+  `npm run verify:production`: passed.
+- `npm run build`: passed.
+- `git diff --check`: passed.
+- The local PostgreSQL 16 harness is unavailable in this runner; the strict receipt database
+  journey is therefore required to pass in GitHub CI before merge.
+
+### Preserved boundary
+
+- No accounting, journal, ledger, WAC, maker-checker, balance, debt, posted transaction, or receipt
+  conversion behavior was changed.
+
 This file records work against the professional product and UX enhancement mandate. A batch is
 not called complete because its code exists; the status below names the evidence that was run.
 

@@ -4,9 +4,9 @@ import {
   Loader2, Minus, RefreshCw, XCircle, ZoomIn,
 } from "lucide-react";
 import {
-  correctExtraction, diffVersions, enterReadingByHand, loadDocumentDetail, loadReplacementChain,
-  loadReviewQueue, finalizeReceipt, loadReceiptSummary, reviewEquation, reviewTotals,
-  setReceiptDailyRate, transitionDocument,
+  canRestoreReceiptArchive, correctExtraction, diffVersions, enterReadingByHand, loadDocumentDetail, loadReplacementChain,
+  loadReceiptArchive, loadReviewQueue, finalizeReceipt, loadReceiptSummary, restoreArchivedReceipt,
+  reviewEquation, reviewTotals, setReceiptDailyRate, transitionDocument,
 } from "../../services/receiptWorkspace";
 import "./receipt-review.css";
 import { errorText } from "../../services/userFacingError";
@@ -43,6 +43,8 @@ const COPY = {
     unreadNote: "دەتوانیت خۆت ئەوەی لەسەر وێنەکەیە بنووسیت. هەمان مەرجی خوێندنەوەی ئۆتۆماتیکی بەسەریدا دەسەپێت، و ناوی تۆ لەسەری تۆمار دەکرێت.",
     enter: "نووسینی خوێندنەوە بە دەست", enterReason: "هۆکاری نووسین بە دەست (لانیکەم ٨ پیت)",
     platform: "پلاتفۆرم", txDate: "بەرواری فیش", txTime: "کاتی فیش",
+    reviewTab: "پشکنین", archiveTab: "ئەرشیفی خۆکار", restore: "گەڕاندنەوە بۆ پشکنین",
+    restoreReason: "هۆکاری گەڕاندنەوە (لانیکەم ٨ پیت)", archiveEmpty: "هیچ فیشێکی خۆکار ئەرشیفکراو نییە",
     replacesTitle: "ئەم فیشە جێگرەوەیە",
     replacesBody: (code) => `لە جێگەی ${code} نێردراوە، کە پێشتر ڕەت کرابووەوە.`,
     replacesWhy: "هۆکاری ڕەتکردنەوەی پێشوو",
@@ -84,6 +86,8 @@ const COPY = {
     unreadNote: "You can write down what is on the image yourself. The same rules the automatic reading obeys apply to it, and your name is recorded on it.",
     enter: "Enter the reading by hand", enterReason: "Why it is entered by hand (at least 8 characters)",
     platform: "Platform", txDate: "Receipt date", txTime: "Receipt time",
+    reviewTab: "Review", archiveTab: "Automatic archive", restore: "Restore for review",
+    restoreReason: "Why it is restored (at least 8 characters)", archiveEmpty: "No automatically archived receipt",
     replacesTitle: "This receipt is a replacement",
     replacesBody: (code) => `Sent in place of ${code}, which was rejected.`,
     replacesWhy: "Why the earlier one was rejected",
@@ -125,6 +129,8 @@ const COPY = {
     unreadNote: "يمكنك كتابة ما في الصورة بنفسك. تنطبق عليها القواعد نفسها التي تخضع لها القراءة الآلية، ويُسجَّل اسمك عليها.",
     enter: "إدخال القراءة يدويًا", enterReason: "سبب الإدخال اليدوي (٨ أحرف على الأقل)",
     platform: "المنصة", txDate: "تاريخ الإيصال", txTime: "وقت الإيصال",
+    reviewTab: "المراجعة", archiveTab: "الأرشيف التلقائي", restore: "إعادة إلى المراجعة",
+    restoreReason: "سبب الإعادة (8 أحرف على الأقل)", archiveEmpty: "لا يوجد إيصال مؤرشف تلقائياً",
     replacesTitle: "هذا الإيصال بديل",
     replacesBody: (code) => `أُرسل بدل ${code} الذي رُفض.`,
     replacesWhy: "سبب رفض السابق",
@@ -150,6 +156,7 @@ function Field({ label, value, suffix }) {
 export function ReceiptReviewWorkspace({ client, lang = "ku", signedUrlFor = null, flash = () => {} }) {
   const copy = COPY[lang] || COPY.ku;
   const [queue, setQueue] = useState([]);
+  const [bucket, setBucket] = useState("review");
   const [index, setIndex] = useState(0);
   const [detail, setDetail] = useState(null);
   const [chain, setChain] = useState(null);
@@ -168,20 +175,29 @@ export function ReceiptReviewWorkspace({ client, lang = "ku", signedUrlFor = nul
   const [rateValue, setRateValue] = useState("");
   const [rateReason, setRateReason] = useState("");
   const [finalReason, setFinalReason] = useState("");
+  const [restoreReason, setRestoreReason] = useState("");
+  const [canRestore, setCanRestore] = useState(false);
   const flashRef = useRef(flash);
   flashRef.current = flash;
 
   const loadQueue = useCallback(async () => {
     setState("loading");
     try {
-      const rows = await loadReviewQueue(client);
+      const rows = bucket === "archive" ? await loadReceiptArchive(client) : await loadReviewQueue(client);
       setQueue(rows);
       setIndex((i) => Math.min(i, Math.max(0, rows.length - 1)));
       setState("ready");
     } catch (e) { console.error("review queue", e); flashRef.current(errorText(e)); setState("error"); }
-  }, [client]);
+  }, [bucket, client]);
 
   useEffect(() => { loadQueue(); }, [loadQueue]);
+  useEffect(() => {
+    let alive = true;
+    canRestoreReceiptArchive(client)
+      .then((allowed) => { if (alive) setCanRestore(allowed); })
+      .catch(() => { if (alive) setCanRestore(false); });
+    return () => { alive = false; };
+  }, [client]);
 
   const currentDoc = queue[index] || null;
 
@@ -189,7 +205,7 @@ export function ReceiptReviewWorkspace({ client, lang = "ku", signedUrlFor = nul
     let alive = true;
     setDetail(null); setChain(null); setImageUrl(null); setZoom(1); setEditing(null); setAcceptText(""); setRejectText("");
     setHandEntry(null); setHandReason("");
-    setRateValue(""); setRateReason(""); setFinalReason("");
+    setRateValue(""); setRateReason(""); setFinalReason(""); setRestoreReason("");
     if (!currentDoc) return;
     (async () => {
       try {
@@ -241,6 +257,8 @@ export function ReceiptReviewWorkspace({ client, lang = "ku", signedUrlFor = nul
     }), "✓");
   const reject = () => act(
     () => transitionDocument(client, { documentId: currentDoc.id, toState: "rejected", reason: rejectText }), "✓");
+  const restore = () => act(
+    () => restoreArchivedReceipt(client, { documentId: currentDoc.id, reason: restoreReason }), "✓");
   const HAND_FIELDS = ["grossAmount", "orderAmount", "feeAmount", "netAmount", "currency",
                        "refNo", "payee", "platform", "txDate", "txTime"];
   const saveHandEntry = () => act(async () => {
@@ -303,6 +321,13 @@ export function ReceiptReviewWorkspace({ client, lang = "ku", signedUrlFor = nul
         </button>
       </header>
 
+      <nav className="rrw-nav" aria-label={copy.queue}>
+        <button type="button" className={`rrw-btn ${bucket === "review" ? "is-pos" : ""}`}
+                onClick={() => setBucket("review")}>{copy.reviewTab}</button>
+        <button type="button" className={`rrw-btn ${bucket === "archive" ? "is-pos" : ""}`}
+                onClick={() => setBucket("archive")}>{copy.archiveTab}</button>
+      </nav>
+
       <div className="rrw-totals" role="status">
         <span><b>{totals.accepted}</b> {copy.accepted}</span>
         <span><b>{totals.pending}</b> {copy.pending}</span>
@@ -310,7 +335,7 @@ export function ReceiptReviewWorkspace({ client, lang = "ku", signedUrlFor = nul
         <span><b>{totals.duplicate}</b> {copy.duplicate}</span>
       </div>
 
-      {queue.length === 0 ? <p className="rrw-empty">{copy.empty}</p> : (
+      {queue.length === 0 ? <p className="rrw-empty">{bucket === "archive" ? copy.archiveEmpty : copy.empty}</p> : (
         <>
           <nav className="rrw-nav" aria-label={copy.queue}>
             <button type="button" className="rrw-btn" disabled={index === 0}
@@ -422,7 +447,18 @@ export function ReceiptReviewWorkspace({ client, lang = "ku", signedUrlFor = nul
 
                   <p className="rrw-note">{copy.immutable}</p>
 
-                  {isAccepted ? (
+                  {bucket === "archive" ? (
+                    <div className="rrw-reject">
+                      {canRestore ? <>
+                        <input placeholder={copy.restoreReason} value={restoreReason}
+                               onChange={(e) => setRestoreReason(e.target.value)} />
+                        <button type="button" className="rrw-btn is-pos"
+                                disabled={busy || restoreReason.trim().length < 8} onClick={restore}>
+                          <RefreshCw aria-hidden="true" /> {copy.restore}
+                        </button>
+                      </> : <p className="rrw-note">{currentDoc.ruleReason}</p>}
+                    </div>
+                  ) : isAccepted ? (
                     <div className="rrw-valuation">
                       <div className="rrw-valuation-head">
                         <h3>{copy.valuation}</h3>
@@ -547,14 +583,14 @@ export function ReceiptReviewWorkspace({ client, lang = "ku", signedUrlFor = nul
                     </div>
                   )}
 
-                  <div className="rrw-reject">
+                  {bucket !== "archive" && <div className="rrw-reject">
                     <input placeholder={copy.rejectReason} value={rejectText}
                            onChange={(e) => setRejectText(e.target.value)} />
                     <button type="button" className="rrw-btn is-neg"
                             disabled={busy || rejectText.trim().length < 8} onClick={reject}>
                       <XCircle aria-hidden="true" /> {copy.reject}
                     </button>
-                  </div>
+                  </div>}
 
                   {detail.history?.length > 0 && (
                     <div className="rrw-history">
