@@ -155,16 +155,9 @@ and deployed.
 - The local PostgreSQL receipt and journey harnesses were unavailable because PostgreSQL 16 is not
   installed in this runner; both strict harnesses passed in CI before merge.
 
-### Next batch
-
-Recovery Batch 4: make receipt reading resilient with provider fallback, bounded retry, confidence
-policy, duplicate/manipulation handling, and owner review/archive queues. Do not change accounting
-or transaction conversion behavior while doing so.
-
 ## Recovery Batch 4 — resilient receipt reading
 
-**Status:** Implementation and local verification complete; GitHub CI, live migration, and production
-deployment are pending.
+**Status:** Completed, merged, installed on the live database, and deployed to production.
 
 ### Implemented
 
@@ -195,12 +188,34 @@ deployment are pending.
 - `npm run build`: passed.
 - `git diff --check`: passed.
 - The local PostgreSQL 16 harness is unavailable in this runner; the strict receipt database
-  journey is therefore required to pass in GitHub CI before merge.
+  journey therefore ran in GitHub CI.
+
+### Release evidence
+
+- GitHub PR #155 passed all **17/17** required workflow jobs, including the strict PostgreSQL
+  receipt-loss/reliability journey, accounting contracts, business flows, tenant isolation,
+  receipt journey, per-role browser boundaries, shipped bundle, and dependency/source security.
+- PR #155 was squash-merged to `main` as `8a706b6`.
+- The live migration was installed as
+  `20260910104103_resilient_receipt_reading_policy`.
+- Live inspection confirms the policy trigger is enabled; the trigger helper is owned by the
+  restricted `sarraf_definer` role and is not executable by browser roles. The restore command is
+  browser-reachable only through its body-authorized RPC and requires `admin_level='owner'`.
+- The established Supabase advisor backlog remains. The new authenticated security-definer notice
+  is the intentional restore RPC; it performs tenant and owner authorization in its body.
+- Vercel production deployment `dpl_Djcx8QpXNCFcwyb4mAgDbEsP6wiL` is `READY`, serves the merged
+  commit through `https://zeman.vercel.app`, and returned HTTP 200 for the app and `version.json`.
+  No runtime error clusters were reported after release.
 
 ### Preserved boundary
 
 - No accounting, journal, ledger, WAC, maker-checker, balance, debt, posted transaction, or receipt
   conversion behavior was changed.
+
+### Next batch
+
+Recovery Batch 5: receipt selection and conversion into transactions, explicit one-route payment,
+and strict upload-group isolation. Do not begin it in the same agent session.
 
 This file records work against the professional product and UX enhancement mandate. A batch is
 not called complete because its code exists; the status below names the evidence that was run.
