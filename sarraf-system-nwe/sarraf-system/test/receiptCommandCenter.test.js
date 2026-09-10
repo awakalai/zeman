@@ -5,12 +5,12 @@ import { receiptWorkBucket, receiptWorkBuckets } from "../src/services/receiptCo
 test("receipt command center puts actionable batches in attention", () => {
   assert.equal(receiptWorkBucket({ receipt_stage: "needs_review" }), "attention");
   assert.equal(receiptWorkBucket({ receipt_stage: "reading" }), "attention");
-  assert.equal(receiptWorkBucket({ receipt_stage: "verified", rejected_n: 1 }), "attention");
+  assert.equal(receiptWorkBucket({ receipt_stage: "verified", rejected_n: 1 }), "ready");
 });
 
 test("receipt command center keeps ready and archived work distinct", () => {
-  assert.equal(receiptWorkBucket({ receipt_stage: "matched" }), "ready");
-  assert.equal(receiptWorkBucket({ receipt_stage: "finalized" }), "ready");
+  assert.equal(receiptWorkBucket({ receipt_stage: "matched" }), "archive");
+  assert.equal(receiptWorkBucket({ receipt_stage: "finalized" }), "archive");
   assert.equal(receiptWorkBucket({ receipt_stage: "archived" }), "archive");
 });
 
@@ -23,4 +23,11 @@ test("receipt command center preserves every batch exactly once", () => {
   assert.deepEqual(Object.fromEntries(Object.entries(buckets).map(([key, rows]) => [key, rows.map((row) => row.id)])), {
     ready: ["b"], attention: ["a"], archive: ["c"],
   });
+});
+
+ test("completed and refused batches stay archived despite rejected evidence", () => {
+  assert.equal(receiptWorkBucket({ receipt_stage: "matched", rejected_n: 2 }), "archive");
+  assert.equal(receiptWorkBucket({ receipt_stage: "rejected" }), "archive");
+  assert.equal(receiptWorkBucket({ tx_id: "tx-old" }), "archive");
+  assert.equal(receiptWorkBucket({ receipt_stage: "verified", tx_id: null, dup_n: 1 }), "ready");
 });

@@ -3470,7 +3470,7 @@ export default function App() {
       {!portalUser && <DeferredPanel compact><MarketPulse currencies={data.currencies} lang={lang} online={online} /></DeferredPanel>}
 
       {portalUser ? (
-        <main id="zeman-main-content" tabIndex={-1} className="px-4 pt-5 pb-28 md:px-8 md:pb-10 max-w-[920px] mx-auto"><Portal user={portalUser} {...shared} officePay={officePay} settle={settle} flash={flash} reloadBatches={reloadBatches} accountMove={accountMove} accountTransfer={accountTransfer} online={online} stale={stale} refreshing={refreshing} refreshedAt={refreshedAt} refresh={() => loadAll(profile)} /></main>
+        <main id="zeman-main-content" tabIndex={-1} className="px-4 pt-5 pb-[calc(7rem+env(safe-area-inset-bottom))] md:px-8 md:pb-10 max-w-[920px] mx-auto"><Portal user={portalUser} {...shared} officePay={officePay} settle={settle} flash={flash} reloadBatches={reloadBatches} accountMove={accountMove} accountTransfer={accountTransfer} online={online} stale={stale} refreshing={refreshing} refreshedAt={refreshedAt} refresh={() => loadAll(profile)} /></main>
       ) : (
         <div className="flex flex-col md:flex-row">
           {/* لیستی لاتەنیشت — تەنها لە شاشەی گەورە */}
@@ -3511,7 +3511,7 @@ export default function App() {
               </div>
             )}
           </nav>
-          <main id="zeman-main-content" tabIndex={-1} className="sarraf-main sarraf-desktop-content flex-1 px-4 pt-5 pb-28 md:px-8 md:pt-7 md:pb-10 max-w-[1600px] w-full mx-auto">
+          <main id="zeman-main-content" tabIndex={-1} className="sarraf-main sarraf-desktop-content flex-1 px-4 pt-5 pb-[calc(7rem+env(safe-area-inset-bottom))] md:px-8 md:pt-7 md:pb-10 max-w-[1600px] w-full mx-auto">
             {/* Through openPage for the same reason the navigation does: a dashboard card is a
               * fresh choice, not a step deeper into the admin centre.
               */}
@@ -8246,7 +8246,11 @@ function ReceiptsHub({ data, usr, batches, batchLoadError, reloadBatches, flash,
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <div className="font-semibold text-[var(--txt)]">{b.customer_name || (b.partner_id ? usr(b.partner_id).name : "—")}</div>
-                      <div className="text-xs text-[var(--txt-2)] mt-0.5" style={num}>{b.n} {tr("فیش")} · {new Date(b.created_at).toLocaleString("en-GB")}</div>
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-[var(--txt-2)] mt-1">
+                        <span><bdi style={num}>{b.n}</bdi> {tr("فیش")}</span>
+                        <time dateTime={b.created_at} dir="ltr" style={num}>{new Date(b.created_at).toLocaleDateString("en-GB")}</time>
+                        <time dateTime={b.created_at} dir="ltr" style={num}>{new Date(b.created_at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}</time>
+                      </div>
                       <div className="flex gap-1.5 mt-1.5 flex-wrap">
                         {b.source === "whatsapp" && (
                           <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-600 text-white flex items-center gap-1">
