@@ -361,3 +361,12 @@ proof remains pending production credentials.
   supported PDF business/export contract are absent from this repository.
 - No live migration, backup/PITR change, or offline financial command queue was added. Financial
   commands remain server-authoritative and offline-blocked.
+
+## Recovery Batch 5 — screenshot correction checkpoint
+
+Status: partial implementation; not deployed and not the completion of Batch 5.
+
+- Ready contains verified groups; matched/finalized/rejected groups are archived. Rejected evidence does not hide a verified group with remaining work.
+- Receipt cards isolate date, time, and count for RTL. Mobile main content includes bottom safe-area clearance.
+- Verification: 15 focused queue/Today tests passed; production build, free-name check, and git diff check passed.
+- Remaining: browser verification, production release, default receipt selection, explicit payment routes, and full conversion journey.

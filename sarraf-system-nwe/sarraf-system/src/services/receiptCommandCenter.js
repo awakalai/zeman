@@ -5,16 +5,16 @@
  * Keep this projection separate from the server lifecycle. The server remains the source of
  * truth for state transitions; this only decides where a batch belongs in the work queue.
  */
-const ATTENTION_STAGES = new Set(["received", "reading", "needs_review", "rejected"]);
-const READY_STAGES = new Set(["verified", "matched", "finalized"]);
-const ARCHIVE_STAGES = new Set(["archived"]);
+const ATTENTION_STAGES = new Set(["received", "reading", "needs_review"]);
+const READY_STAGES = new Set(["verified"]);
+const ARCHIVE_STAGES = new Set(["matched", "finalized", "archived", "rejected"]);
 
 export const RECEIPT_WORK_BUCKETS = Object.freeze(["ready", "attention", "archive"]);
 
 export function receiptWorkBucket(batch) {
   const stage = String(batch?.receipt_stage || (batch?.tx_id ? "matched" : batch?.status === "new" ? "needs_review" : "verified"));
   if (ARCHIVE_STAGES.has(stage)) return "archive";
-  if (ATTENTION_STAGES.has(stage) || Number(batch?.rejected_n) > 0 || Number(batch?.dup_n) > 0) return "attention";
+  if (ATTENTION_STAGES.has(stage)) return "attention";
   if (READY_STAGES.has(stage)) return "ready";
   return "attention";
 }
